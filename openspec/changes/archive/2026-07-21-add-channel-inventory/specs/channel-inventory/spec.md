@@ -47,6 +47,13 @@ the authorized account is subscribed to.
 - **AND** each record has discovery source `own_subscriptions` and status `candidate`
 - **AND** the number of inserted records is reported
 
+#### Scenario: Private dialogs are not imported
+- **GIVEN** the dialog list contains direct messages, legacy group chats, and
+  channels without a public username
+- **WHEN** the command runs
+- **THEN** none of them are inserted into the inventory
+- **AND** the number of skipped dialogs is reported, without their titles
+
 #### Scenario: Re-running preserves review work
 - **GIVEN** an inventory in which some channels have already been reviewed
 - **WHEN** the command runs again

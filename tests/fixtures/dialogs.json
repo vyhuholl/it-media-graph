@@ -24,6 +24,12 @@
     "title": "Example Legacy Group"
   },
   {
+    "type": "channel",
+    "id": 1000000005,
+    "username": "example_jobs",
+    "title": "Example Jobs"
+  },
+  {
     "type": "user",
     "id": 900000001,
     "username": "example_person",

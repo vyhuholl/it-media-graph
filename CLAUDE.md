@@ -46,6 +46,10 @@ uv run itgraph --help    # CLI entrypoint (typer)
 
 Test fixtures are synthetic or anonymized. There is no such thing as a "small real sample, just for a test".
 
+- The operator's own private dialogs, work chats and legacy group chats are out of scope. Only publicly addressable channels enter the inventory; history is fetched only for channels with status `seed` or `accepted`.
+- Nothing derived from the operator's own subscriptions is publishable. Exports select an explicit column list filtered to `status IN ('seed','accepted')`; never `SELECT *`, and never include `discovered_via`, `reject_reason`, `reject_note` or `kind_note`.
+
+
 ## Workflow
 - Standard / infrastructure tasks (collector, schema, API, bot): write an OpenSpec change proposal first, then implement.
 - Exploratory analytics (clustering, edge weights, engagement baselines): no spec. Iterate in `notebooks/`, promote to `src/` only once the approach is settled.

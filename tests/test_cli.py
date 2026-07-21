@@ -124,8 +124,8 @@ def test_dump_dialogs_reports_counts(inventory: None) -> None:
     second = runner.invoke(app, ["dump-dialogs"])
 
     assert first.exit_code == 0, first.output
-    assert "inserted 4, updated 0" in first.output
-    assert "inserted 0, updated 4" in second.output
+    assert "inserted 3, updated 0, skipped 3 private" in first.output
+    assert "inserted 0, updated 3, skipped 3 private" in second.output
 
 
 def test_an_unauthorized_session_exits_non_zero(
@@ -211,7 +211,7 @@ def test_channels_summarises_progress(inventory: None) -> None:
     result = runner.invoke(app, ["channels"])
 
     assert result.exit_code == 0, result.output
-    assert "candidate  3" in result.output
+    assert "candidate  2" in result.output
     assert "maybe      1" in result.output
     # A listing without a filter still shows every channel.
     assert "@example_notes" in result.output

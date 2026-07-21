@@ -94,7 +94,7 @@ def login(
 
 @app.command("dump-dialogs")
 def dump_dialogs() -> None:
-    """Import every channel and chat the account is subscribed to."""
+    """Import the public channels and groups the account is subscribed to."""
     from itgraph.db.session import Database
     from itgraph.tg.client import connected
     from itgraph.tg.dialogs import import_dialogs
@@ -110,7 +110,8 @@ def dump_dialogs() -> None:
         finally:
             await database.dispose()
         typer.echo(
-            f"inserted {counts.inserted}, updated {counts.updated}",
+            f"inserted {counts.inserted}, updated {counts.updated}, "
+            f"skipped {counts.skipped} private",
         )
 
     _run(run())

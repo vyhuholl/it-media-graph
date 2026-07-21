@@ -6,7 +6,6 @@ from typing import Any
 from fakes import FakeTelegramClient
 from sqlalchemy import select
 
-from itgraph.db.channels import UpsertCounts
 from itgraph.db.models import (
     Channel,
     ChannelKind,
@@ -15,7 +14,10 @@ from itgraph.db.models import (
     RejectReason,
 )
 from itgraph.db.session import Database
-from itgraph.tg.dialogs import import_dialogs
+from itgraph.tg.dialogs import ImportCounts, import_dialogs
+
+# A direct message, a legacy group chat, and a channel with no username.
+PRIVATE = {900000001, 1000000004, 1000000003}
 
 
 async def test_first_run_populates_the_inventory(
@@ -24,8 +26,7 @@ async def test_first_run_populates_the_inventory(
     async with database.session() as session:
         counts = await import_dialogs(telegram, session)
 
-    # Four channels and chats; the private conversation is not one.
-    assert counts == UpsertCounts(inserted=4, updated=0)
+    assert counts == ImportCounts(inserted=3, updated=0, skipped=3)
 
     async with database.session() as session:
         rows = (await session.scalars(select(Channel))).all()
@@ -33,8 +34,7 @@ async def test_first_run_populates_the_inventory(
     assert {row.tg_id for row in rows} == {
         1000000001,
         1000000002,
-        1000000003,
-        1000000004,
+        1000000005,
     }
     assert all(row.status is ChannelStatus.CANDIDATE for row in rows)
     assert all(row.reviewed_at is None for row in rows)
@@ -44,11 +44,23 @@ async def test_first_run_populates_the_inventory(
     by_id = {row.tg_id: row for row in rows}
     assert by_id[1000000001].username == "example_notes"
     assert by_id[1000000001].is_chat is False
-    # A supergroup and a legacy group are both chats.
+    # A public supergroup is a chat.
     assert by_id[1000000002].is_chat is True
-    assert by_id[1000000004].is_chat is True
-    # A channel without a username still gets a row.
-    assert by_id[1000000003].username is None
+
+
+async def test_private_dialogs_are_not_imported(
+    database: Database, telegram: FakeTelegramClient
+) -> None:
+    async with database.session() as session:
+        counts = await import_dialogs(telegram, session)
+
+    async with database.session() as session:
+        rows = (await session.scalars(select(Channel))).all()
+
+    assert counts.skipped == len(PRIVATE)
+    assert PRIVATE.isdisjoint({row.tg_id for row in rows})
+    # Nothing publicly unaddressable made it in.
+    assert all(row.username for row in rows)
 
 
 async def test_rerun_preserves_review_work(
@@ -78,7 +90,7 @@ async def test_rerun_preserves_review_work(
         )
 
     assert counts.inserted == 0
-    assert counts.updated == 4
+    assert counts.updated == 3
 
     async with database.session() as session:
         channel = await session.get(Channel, 1000000001)
@@ -103,13 +115,13 @@ async def test_unsubscribing_keeps_the_record(
     async with database.session() as session:
         await import_dialogs(telegram, session)
 
-    remaining = [r for r in dialog_records if r["id"] != 1000000003]
+    remaining = [r for r in dialog_records if r["id"] != 1000000005]
     async with database.session() as session:
         await import_dialogs(FakeTelegramClient(remaining), session)
-        gone = await session.get(Channel, 1000000003)
+        gone = await session.get(Channel, 1000000005)
 
     assert gone is not None
-    assert gone.title == "Example Private Digest"
+    assert gone.title == "Example Jobs"
 
 
 async def test_a_duplicated_dialog_is_written_once(
