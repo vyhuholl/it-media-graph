@@ -1,0 +1,43 @@
+repos:
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: detect-private-key
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.0
+    hooks:
+      - id: gitleaks
+
+  - repo: local
+    hooks:
+      - id: format
+        name: ruff-format
+        entry: make format
+        language: system
+        pass_filenames: false
+        types: [python]
+      - id: lint
+        name: ruff
+        entry: make lint
+        language: system
+        pass_filenames: false
+        types: [python]
+
+      - id: typecheck
+        name: mypy
+        entry: make typecheck
+        language: system
+        pass_filenames: false
+        types: [python]
+        stages: [pre-push]
+
+      - id: test
+        name: pytest
+        entry: make test
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
