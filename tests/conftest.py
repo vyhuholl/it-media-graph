@@ -4,8 +4,12 @@ No network: Telethon is mocked. Postgres is real, but always a throwaway
 database whose name ends in ``_test``.
 """
 
+import asyncio
+import json
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -24,11 +28,14 @@ from sqlalchemy.engine import URL, make_url  # noqa: E402
 from sqlalchemy.exc import SQLAlchemyError  # noqa: E402
 from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
 
+from fakes import FakeTelegramClient  # noqa: E402
+
 from itgraph.config import settings  # noqa: E402
-from itgraph.db import Database  # noqa: E402
 from itgraph.db.models import Base  # noqa: E402
+from itgraph.db.session import Database  # noqa: E402
 
 MAINTENANCE_DATABASE = "postgres"
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def test_database_url() -> URL:
@@ -47,31 +54,73 @@ def test_database_url() -> URL:
 
 
 @pytest.fixture
-async def database() -> AsyncIterator[Database]:
-    """A freshly created ``*_test`` database, dropped afterwards."""
+def database_url() -> Iterator[str]:
+    """A freshly created ``*_test`` database, dropped afterwards.
+
+    Setup runs its own ``asyncio.run`` rather than being an async
+    fixture: a CLI test drives the app through ``asyncio.run`` too, and
+    that cannot start while a fixture's loop is still running.
+    """
     url = test_database_url()
     name = url.database
     assert name is not None and name.endswith("_test")
+    admin_url = url.set(database=MAINTENANCE_DATABASE)
+    # FORCE, because a CLI test may have left a connection behind.
+    drop = text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
 
-    admin = create_async_engine(
-        url.set(database=MAINTENANCE_DATABASE),
-        isolation_level="AUTOCOMMIT",
-    )
+    async def create() -> None:
+        admin = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+        try:
+            async with admin.connect() as conn:
+                await conn.execute(drop)
+                await conn.execute(text(f'CREATE DATABASE "{name}"'))
+        finally:
+            await admin.dispose()
+
+        engine = create_async_engine(url)
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+        finally:
+            await engine.dispose()
+
+    async def teardown() -> None:
+        admin = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+        try:
+            async with admin.connect() as conn:
+                await conn.execute(drop)
+        finally:
+            await admin.dispose()
+
     try:
-        async with admin.connect() as conn:
-            await conn.execute(text(f'DROP DATABASE IF EXISTS "{name}"'))
-            await conn.execute(text(f'CREATE DATABASE "{name}"'))
+        asyncio.run(create())
     except (OSError, SQLAlchemyError) as exc:
-        await admin.dispose()
         pytest.skip(f"Postgres is not reachable: {exc}")
 
-    db = Database(url.render_as_string(hide_password=False))
-    async with db.engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    try:
+        yield url.render_as_string(hide_password=False)
+    finally:
+        asyncio.run(teardown())
+
+
+@pytest.fixture
+async def database(database_url: str) -> AsyncIterator[Database]:
+    """A ``Database`` on the throwaway test database."""
+    db = Database(database_url)
     try:
         yield db
     finally:
         await db.dispose()
-        async with admin.connect() as conn:
-            await conn.execute(text(f'DROP DATABASE IF EXISTS "{name}"'))
-        await admin.dispose()
+
+
+@pytest.fixture
+def dialog_records() -> list[dict[str, Any]]:
+    """Anonymized dialog list. No real channel appears here."""
+    with (FIXTURES / "dialogs.json").open(encoding="utf-8") as handle:
+        records: list[dict[str, Any]] = json.load(handle)
+    return records
+
+
+@pytest.fixture
+def telegram(dialog_records: list[dict[str, Any]]) -> FakeTelegramClient:
+    return FakeTelegramClient(dialog_records)

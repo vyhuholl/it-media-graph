@@ -1,0 +1,32 @@
+[
+  {
+    "type": "channel",
+    "id": 1000000001,
+    "username": "example_notes",
+    "title": "Example Notes"
+  },
+  {
+    "type": "megagroup",
+    "id": 1000000002,
+    "username": "example_notes_chat",
+    "title": "Example Notes - chat"
+  },
+  {
+    "type": "channel",
+    "id": 1000000003,
+    "username": null,
+    "title": "Example Private Digest"
+  },
+  {
+    "type": "group",
+    "id": 1000000004,
+    "username": null,
+    "title": "Example Legacy Group"
+  },
+  {
+    "type": "user",
+    "id": 900000001,
+    "username": "example_person",
+    "title": null
+  }
+]

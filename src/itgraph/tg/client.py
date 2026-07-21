@@ -42,8 +42,9 @@ async def connected() -> AsyncIterator[TelegramClient]:
     try:
         if not await client.is_user_authorized():
             raise NotAuthorizedError(
-                "No authorized session at "
-                f"{settings.telegram_session}; run `itgraph login` first."
+                f"No authorized session at {settings.telegram_session}; "
+                "run `itgraph login` once — see the Telegram authorization "
+                "section of README.md."
             )
         logger.debug("connected as an authorized user")
         yield client

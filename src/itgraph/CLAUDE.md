@@ -10,9 +10,11 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `config.py` | pydantic-settings; the single `settings` object |
 | `cli.py` | typer app — thin command wrappers only |
 | `tg/client.py` | Telethon client lifecycle; the only place a `TelegramClient` is built |
+| `tg/dialogs.py` | The account's own subscriptions → inventory rows |
 | `tg/` | MTProto collection: fetch and store raw payloads |
-| `db/__init__.py` | `Database`: engine + session factory |
+| `db/session.py` | `Database`: engine + session factory |
 | `db/models.py` | SQLAlchemy models, `Base` |
+| `db/channels.py` | The channel inventory: upsert, review, listing |
 | `db/migrations/` | Alembic revisions (async template) |
 
 ## Conventions

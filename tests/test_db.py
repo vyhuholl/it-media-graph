@@ -1,7 +1,7 @@
 import pytest
 from sqlalchemy import text
 
-from itgraph.db import Database
+from itgraph.db.session import Database
 
 
 async def test_session_runs_a_query(database: Database) -> None:
