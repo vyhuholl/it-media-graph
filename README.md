@@ -51,8 +51,10 @@ uv run itgraph login --qr
 ```bash
 uv run itgraph dump-dialogs   # импорт публичных подписок
 uv run itgraph channels       # сводка по статусам + весь список
-uv run itgraph mark <tg_id> --seed|--maybe|--reject ...
+uv run itgraph mark <tg_id|@username> --seed|--maybe|--reject ...
 ```
+
+Канал адресуется либо числовым `tg_id`, либо username — с `@` или без, регистр не важен. Если username по какой-то причине числится сразу за двумя каналами (старый владелец ещё не переимпортирован), команда откажется угадывать и попросит указать id.
 
 В инвентарь попадает только то, что публично адресуемо: каналы и супергруппы с username. Личные диалоги, старые групповые чаты (тип `Chat`) и каналы без username пропускаются — команда печатает только их количество, без названий. Приватная переписка в базу не попадает никогда.
 
@@ -67,8 +69,8 @@ uv run itgraph channels --status candidate
 # айтишный канал автора о себе — берём в сиды
 uv run itgraph mark 1234567890 --seed --kind personal
 
-# лента вакансий
-uv run itgraph mark 1234567891 --seed --kind vacancies
+# лента вакансий — то же самое по username
+uv run itgraph mark @example_jobs --seed --kind vacancies
 
 # не про айти — отклоняем, причина обязательна
 uv run itgraph mark 1234567892 --reject --reason crypto --note "торговые сигналы"

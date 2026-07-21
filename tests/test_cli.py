@@ -180,6 +180,28 @@ def test_mark_rejects_with_a_reason(inventory: None) -> None:
     assert "rejected" in result.output
 
 
+def test_mark_accepts_a_username(inventory: None) -> None:
+    runner.invoke(app, ["dump-dialogs"])
+
+    at = runner.invoke(app, ["mark", "@example_notes", "--seed"])
+    bare = runner.invoke(app, ["mark", "example_jobs", "--maybe"])
+    listing = runner.invoke(app, ["channels", "--status", "seed"])
+
+    assert at.exit_code == 0, at.output
+    assert bare.exit_code == 0, bare.output
+    assert str(KNOWN) in at.output
+    assert "@example_notes" in listing.output
+
+
+def test_mark_an_unknown_username_exits_non_zero(inventory: None) -> None:
+    runner.invoke(app, ["dump-dialogs"])
+
+    result = runner.invoke(app, ["mark", "@example_nobody", "--maybe"])
+
+    assert result.exit_code == 1
+    assert "no channel @example_nobody" in result.output
+
+
 def test_mark_needs_exactly_one_outcome(inventory: None) -> None:
     neither = runner.invoke(app, ["mark", str(KNOWN)])
     both = runner.invoke(app, ["mark", str(KNOWN), "--seed", "--maybe"])

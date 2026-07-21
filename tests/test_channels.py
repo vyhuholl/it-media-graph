@@ -5,9 +5,11 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from itgraph.db.channels import (
+    AmbiguousUsernameError,
     ChannelNotFoundError,
     DiscoveredChannel,
     count_by_status,
+    find_channel,
     list_channels,
     mark_channel,
     upsert_channels,
@@ -132,6 +134,69 @@ async def test_reviewing_an_unknown_channel_fails(database: Database) -> None:
     with pytest.raises(ChannelNotFoundError):
         async with database.session() as session:
             await mark_channel(session, UNKNOWN, status=ChannelStatus.SEED)
+
+
+async def test_reviewing_by_username(database: Database) -> None:
+    await seed_inventory(database)
+
+    async with database.session() as session:
+        channel = await mark_channel(
+            session, "example_0", status=ChannelStatus.SEED
+        )
+
+    assert channel.tg_id == KNOWN
+    assert channel.status is ChannelStatus.SEED
+
+
+async def test_a_username_matches_case_insensitively(
+    database: Database,
+) -> None:
+    await seed_inventory(database)
+
+    async with database.session() as session:
+        channel = await find_channel(session, "Example_0")
+
+    assert channel.tg_id == KNOWN
+
+
+async def test_an_unknown_username_fails(database: Database) -> None:
+    await seed_inventory(database)
+
+    with pytest.raises(ChannelNotFoundError, match="@example_nobody"):
+        async with database.session() as session:
+            await find_channel(session, "example_nobody")
+
+
+async def test_a_username_on_two_channels_is_refused(
+    database: Database,
+) -> None:
+    """A rename leaves the old username behind until the next import."""
+    await seed_inventory(database)
+    async with database.session() as session:
+        await upsert_channels(
+            session,
+            [
+                DiscoveredChannel(
+                    tg_id=UNKNOWN,
+                    username="example_0",
+                    title="Example, renamed",
+                    is_chat=False,
+                )
+            ],
+            discovered_via=DiscoverySource.MANUAL,
+        )
+
+    with pytest.raises(AmbiguousUsernameError):
+        async with database.session() as session:
+            await mark_channel(
+                session, "example_0", status=ChannelStatus.MAYBE
+            )
+
+    async with database.session() as session:
+        channel = await session.get(Channel, KNOWN)
+
+    assert channel is not None
+    assert channel.status is ChannelStatus.CANDIDATE
 
 
 async def test_a_rejection_can_be_taken_back(database: Database) -> None:

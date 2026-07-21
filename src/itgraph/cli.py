@@ -27,12 +27,12 @@ app = typer.Typer(
 
 def _run(body: Coroutine[Any, Any, None]) -> None:
     """Run a command body, turning an expected failure into exit 1."""
-    from itgraph.db.channels import ChannelNotFoundError
+    from itgraph.db.channels import ChannelLookupError
     from itgraph.tg.client import NotAuthorizedError
 
     try:
         asyncio.run(body)
-    except (ChannelNotFoundError, NotAuthorizedError) as exc:
+    except (ChannelLookupError, NotAuthorizedError) as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(1) from exc
 
@@ -117,10 +117,24 @@ def dump_dialogs() -> None:
     _run(run())
 
 
+def _channel_ref(value: str) -> int | str:
+    """Route the argument: a bare number is an id, the rest a username.
+
+    ``@`` is optional, so a username pasted from Telegram works either
+    way. A username can never be all digits, so nothing is ambiguous.
+    """
+    text = value.removeprefix("@")
+    return int(text) if text.lstrip("-").isdigit() else text
+
+
 @app.command()
 def mark(
-    tg_id: Annotated[
-        int, typer.Argument(help="Telegram id of the channel to review.")
+    channel_ref: Annotated[
+        str,
+        typer.Argument(
+            metavar="CHANNEL",
+            help="Telegram id or @username of the channel to review.",
+        ),
     ],
     seed: Annotated[
         bool, typer.Option("--seed", help="In scope: collect from it.")
@@ -170,7 +184,7 @@ def mark(
             async with database.session() as session:
                 channel = await mark_channel(
                     session,
-                    tg_id,
+                    _channel_ref(channel_ref),
                     status=status,
                     kind=kind,
                     reject_reason=reason,

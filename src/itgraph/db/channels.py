@@ -21,25 +21,59 @@ from itgraph.db.models import (
 )
 
 __all__ = [
+    "AmbiguousUsernameError",
+    "ChannelLookupError",
     "ChannelNotFoundError",
     "DiscoveredChannel",
     "UpsertCounts",
     "count_by_status",
+    "find_channel",
     "list_channels",
     "mark_channel",
     "upsert_channels",
 ]
 
+# A channel is addressed either by Telegram id or by username without
+# the leading ``@``.
+ChannelRef = int | str
 
-class ChannelNotFoundError(LookupError):
-    """No channel with the given Telegram id is in the inventory."""
 
-    def __init__(self, tg_id: int) -> None:
+def _spelled(ref: ChannelRef) -> str:
+    """A reference as the operator typed it, for an error message."""
+    return str(ref) if isinstance(ref, int) else f"@{ref}"
+
+
+class ChannelLookupError(LookupError):
+    """A reference did not resolve to exactly one channel."""
+
+
+class ChannelNotFoundError(ChannelLookupError):
+    """No channel with the given id or username is in the inventory."""
+
+    def __init__(self, ref: ChannelRef) -> None:
         super().__init__(
-            f"no channel {tg_id} in the inventory; "
+            f"no channel {_spelled(ref)} in the inventory; "
             "run `itgraph dump-dialogs` first"
         )
-        self.tg_id = tg_id
+        self.ref = ref
+
+
+class AmbiguousUsernameError(ChannelLookupError):
+    """Several channels carry the same username.
+
+    Usernames are unique in Telegram at any one moment, but the
+    inventory keeps a stale one until the next import: a channel that
+    renames leaves its old username behind for whoever takes it next.
+    """
+
+    def __init__(self, username: str, tg_ids: Sequence[int]) -> None:
+        listed = ", ".join(str(tg_id) for tg_id in tg_ids)
+        super().__init__(
+            f"@{username} matches {len(tg_ids)} channels ({listed}); "
+            "give the id instead"
+        )
+        self.username = username
+        self.tg_ids = tg_ids
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,9 +140,35 @@ async def upsert_channels(
     return UpsertCounts(inserted=inserted, updated=len(flags) - inserted)
 
 
+async def find_channel(session: AsyncSession, ref: ChannelRef) -> Channel:
+    """One channel by Telegram id, or by username without the ``@``.
+
+    Usernames are matched case-insensitively, the way Telegram itself
+    treats them. Raises ``ChannelNotFoundError`` when nothing matches
+    and ``AmbiguousUsernameError`` when more than one row does.
+    """
+    if isinstance(ref, int):
+        channel = await session.get(Channel, ref)
+        if channel is None:
+            raise ChannelNotFoundError(ref)
+        return channel
+
+    statement = (
+        select(Channel)
+        .where(func.lower(Channel.username) == ref.lower())
+        .order_by(Channel.tg_id)
+    )
+    matches = (await session.scalars(statement)).all()
+    if not matches:
+        raise ChannelNotFoundError(ref)
+    if len(matches) > 1:
+        raise AmbiguousUsernameError(ref, [row.tg_id for row in matches])
+    return matches[0]
+
+
 async def mark_channel(
     session: AsyncSession,
-    tg_id: int,
+    ref: ChannelRef,
     *,
     status: ChannelStatus,
     kind: ChannelKind | None = None,
@@ -117,18 +177,17 @@ async def mark_channel(
 ) -> Channel:
     """Record the review outcome for one channel.
 
-    Raises ``ChannelNotFoundError`` for an unknown id and ``ValueError``
-    if a rejection carries no reason — the same rule the database
-    enforces, reported before anything is written.
+    The channel is addressed by id or by username; see ``find_channel``
+    for how a reference fails to resolve. Raises ``ValueError`` if a
+    rejection carries no reason — the same rule the database enforces,
+    reported before anything is written.
     """
     if (status is ChannelStatus.REJECTED) != (reject_reason is not None):
         raise ValueError(
             "a rejection needs a reason, and only a rejection may have one"
         )
 
-    channel = await session.get(Channel, tg_id)
-    if channel is None:
-        raise ChannelNotFoundError(tg_id)
+    channel = await find_channel(session, ref)
 
     channel.status = status
     if kind is not None:
