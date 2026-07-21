@@ -1,70 +1,74 @@
-## Главный принцип
+# Project plan
 
-Разделить **сбор** и **анализ** намертво. Коллектор пишет сырые JSON'ы в raw-слой и больше ничего не делает; вся логика — переигрываемые трансформации поверх. Ты 100% будешь менять разбор (новые сущности, новые метрики), а перекачать историю Telegram второй раз — дорого и рискованно для аккаунта.
+## Core principle
 
-## Сбор (Telegram)
+Keep **collection** and **analysis** strictly separate. The collector writes raw JSON to the raw layer and does nothing else; all logic lives in re-runnable transformations on top. Parsing will change (new entities, new metrics), and re-fetching Telegram history is expensive and risky for the account.
 
-- **Только MTProto-юзербот** (Telethon). Bot API не даёт читать чужие каналы и историю. Отдельный номер/аккаунт, не основной — есть шанс словить бан.
-- Что тащить из `Message`:
-  - `fwd_from.from_id` — **это и есть граф репостов**, главный актив проекта. Один этот срез уже даёт результат.
-  - `entities`: `MessageEntityMention` (@channel), `MessageEntityTextUrl`/`Url` → `t.me/...` — граф упоминаний.
-  - `reactions.results`, `views`, `forwards` — метрики.
-  - `replies.channel_id` — id связанной группы обсуждений.
-- **Комментарии**: у канала есть linked chat; `GetDiscussionMessageRequest` + итерация по реплаям. По объёму это в 10–100 раз больше постов — выносить в отдельную фазу.
-- FloodWait обрабатывать как норму, а не как ошибку: экспоненциальный бэкофф, персистентный курсор `offset_id` на канал, чтобы докачка была резюмируемой.
+## Collection (Telegram)
 
-## Хранилище
+- **MTProto userbot only** (Telethon). The Bot API cannot read other people's channels or their history.
+- **Account strategy.** Dumping the operator's own subscriptions and early experiments run on the main account: reading your own dialog list is what every official client does on startup, so the risk is effectively zero, and an aged account carries high trust with anti-spam. Mass backfill runs on a second number, which first gets a couple of weeks of ordinary use from a phone — a fresh SIM pulling hundreds of channels from a VPS on day two is the most recognizable bot pattern there is.
+- **Never join channels.** Public channels are read by username (`get_entity` + `iter_messages`). Mass joining is the single strongest ban trigger. Run from a residential IP rather than a datacenter one, and set realistic `device_model` / `system_version` / `app_version` on the client.
+- What to extract from `Message`:
+  - `fwd_from.from_id` — **this is the repost graph**, the main asset of the project. This slice alone already produces a result.
+  - `entities`: `MessageEntityMention` (@channel), `MessageEntityTextUrl`/`Url` → `t.me/...` — the mention graph.
+  - `reactions.results`, `views`, `forwards` — metrics.
+  - `replies.channel_id` — id of the linked discussion group.
+- **Comments**: a channel has a linked chat; `GetDiscussionMessageRequest` plus iteration over replies. By volume this is 10–100× the posts — a separate phase.
+- Treat FloodWait as normal, not as an error: exponential backoff, a persistent per-channel `offset_id` cursor so a backfill is resumable.
 
-PostgreSQL, ничего экзотического. `raw_messages(channel_id, msg_id, payload jsonb, fetched_at)` + нормализованные таблицы `channels / messages / edges(src, dst, type, ts, weight)`. Отдельно **снапшоты** `message_metrics(msg_id, ts, views, forwards, reactions jsonb)` — без них не будет ни детекции всплесков, ни ретроспективы.
+## Storage
 
-Графовую БД не бери. На масштабе «единицы тысяч каналов» Postgres + выгрузка в `networkx`/`igraph` в памяти закрывает всё.
+PostgreSQL, nothing exotic. `raw_messages(channel_id, msg_id, payload jsonb, fetched_at)` plus normalized tables `channels / messages / edges(src, dst, type, ts, weight)`. Separately, **snapshots** `message_metrics(msg_id, ts, views, forwards, reactions jsonb)` — without them there is no spike detection and no retrospective analysis.
 
-## Расширение сид-сета — самое интересное
+No graph database. At the scale of a few thousand channels, Postgres plus an in-memory export to `networkx`/`igraph` covers everything.
 
-Три автоматических источника кандидатов:
+## Expanding the seed set — the interesting part
 
-1. **Снежный ком по форвардам.** Любой канал, встретившийся в `fwd_from`, — кандидат. Самый чистый сигнал: люди репостят своих.
-2. **`channels.getChannelRecommendations`** — Telegram сам отдаёт «похожие каналы». Это буквально готовый эмбеддинг тусовки, посчитанный на поведении миллионов юзеров. Недооценённый метод, обязательно используй.
-3. **Пересечение комментаторов** (позже, когда будут комменты): бипартитный граф user↔channel, проекция на channel↔channel. Обязательно взвешивать по TF-IDF, иначе всё утонет в людях, которые комментят везде.
+Three automatic sources of candidates:
 
-**Скоринг кандидата**: сколько *разных* сид-каналов на него сослались × авторитет ссылающихся (PageRank по текущему графу) × свежесть. Не просто «число упоминаний» — иначе один активный канал протащит весь свой шлак.
+1. **Snowball over forwards.** Any channel appearing in `fwd_from` is a candidate. The cleanest signal: people repost their own crowd.
+2. **`channels.getChannelRecommendations`** — Telegram itself returns "similar channels". This is effectively a ready-made embedding of the community, computed from the behaviour of millions of users. Underrated; use it.
+3. **Commenter overlap** (later, once comments exist): a bipartite user↔channel graph, projected onto channel↔channel. Must be TF-IDF weighted, otherwise it drowns in people who comment everywhere.
 
-**Где реально помогает ИИ** — не в решении, а в подготовке решения:
+**Candidate scoring**: how many *distinct* seed channels referenced it × the authority of the referrers (PageRank over the current graph) × recency. Not a plain mention count — otherwise one hyperactive channel drags in all its junk.
 
-- Собрать очередь кандидатов, отсортированную по скору. Для каждого — 2-3 строки саммари по последним 20 постам + примеры постов + кто на него сослался.
-- Ты жмёшь accept / reject / maybe **с указанием причины отказа** (не IT / реклама / мертвяк / не та тусовка).
-- Через 100–200 размеченных каналов у тебя есть датасет. Дальше — **не LLM, а эмбеддинги**: `multilingual-e5` или `rubert-tiny2` на конкатенации последних постов + логрег/catboost на твоей разметке. Это в разы дешевле, быстрее и точнее LLM-классификатора, потому что учится именно на *твоём* понимании «айтишной тусовки», а не на общем.
-- LLM оставь на то, где она незаменима: суммаризация для триажа, нормализация названий, разбор «о чём вообще этот канал».
+**Where AI genuinely helps** — not in the decision, but in preparing it:
 
-Триаж-очередь стоит сделать сразу как минимальный UI (FastAPI + htmx, полдня работы) — через CLI ты размечать не будешь, проверено.
+- Build a candidate queue sorted by score. For each: a 2–3 line summary of the last 20 posts, sample posts, and who referenced it.
+- Accept / reject / maybe, **with a reason for rejection** (not IT / ads / dead / wrong crowd).
+- After 100–200 labelled channels there is a dataset. From there — **embeddings, not an LLM**: `multilingual-e5` or `rubert-tiny2` over concatenated recent posts, plus logreg/catboost on those labels. Far cheaper, faster and more accurate than an LLM classifier, because it learns the *project's* definition of "the IT crowd" rather than a generic one.
+- Leave the LLM to what it is irreplaceable for: triage summaries, name normalization, working out what a channel is even about.
 
-## Кластеризация
+Build the triage queue as a minimal UI right away (FastAPI + htmx, half a day of work) — labelling through a CLI does not happen in practice.
 
-Взвешенный направленный граф каналов, вес ребра с экспоненциальным затуханием по времени. Leiden (`igraph`/`leidenalg`), не Louvain. Считать **две независимые кластеризации** — по форвардам и по комментаторам — и смотреть, где они расходятся: расхождения и есть содержательный результат (канал, который все репостят, но никто не обсуждает, — это другой тип узла).
+## Clustering
 
-Визуализация: сначала просто экспорт в GEXF и Gephi руками. Свою вьюху (sigma.js/cosmograph) — только когда поймёшь, что именно смотришь.
+A weighted directed channel graph, edge weights decaying exponentially over time. Leiden (`igraph`/`leidenalg`), not Louvain. Compute **two independent clusterings** — over forwards and over commenters — and look at where they diverge: the divergence is the substantive result (a channel everyone reposts but nobody discusses is a different kind of node).
 
-## Детекция сильной реакции
+Visualization: start with a plain GEXF export into Gephi by hand. A custom view (sigma.js/cosmograph) only once it is clear what is worth looking at.
 
-Абсолютные числа бесполезны — канал на 500к и канал на 3к несравнимы. Нужен **z-score относительно собственной истории канала на том же возрасте поста**: реакции/просмотры через N минут после публикации против медианы этого канала за последние 30 дней. Алерт при превышении порога.
+## Detecting strong reactions
 
-Требует поллинга свежих постов: каждые 15–30 минут первые 48 часов, дальше затухание. Простая очередь в Postgres + один воркер (`arq`) — NATS тут избыточен, при всём опыте с ним.
+Absolute numbers are useless — a 500k channel and a 3k channel are not comparable. What is needed is a **z-score against the channel's own history at the same post age**: reactions/views N minutes after publication versus that channel's median over the last 30 days. Alert above a threshold.
 
-Доставка алертов — твой собственный бот на aiogram, естественно.
+This requires polling recent posts: every 15–30 minutes for the first 48 hours, decaying afterwards. A simple Postgres-backed queue plus one worker (`arq`) — NATS would be overkill here.
 
-## План на 2-3 месяца
+Alert delivery: a dedicated aiogram bot.
 
-| Недели | Что | Артефакт |
+## Plan for 2–3 months
+
+| Weeks | What | Artifact |
 |---|---|---|
-| 1–2 | Коллектор + схема + бэкфилл истории 100 сид-каналов за 6–12 мес | Граф форвардов v0 |
-| 3–4 | Кандидаты + триаж-UI + классификатор | 300–500 каналов |
-| 5–6 | Кластеризация + визуализация | **Первый полезный результат** |
-| 7–8 | Комментарии (тяжёлая фаза) | Граф комментаторов |
-| 9–10 | Снапшоты метрик + бот-алертер | Работающие уведомления |
-| 11–12 | Буфер + YouTube Data API | — |
+| 1–2 | Collector + schema + backfill of 100 seed channels over 6–12 months | Forward graph v0 |
+| 3–4 | Candidates + triage UI + classifier | 300–500 channels |
+| 5–6 | Clustering + visualization | **First useful result** |
+| 7–8 | Comments (the heavy phase) | Commenter graph |
+| 9–10 | Metric snapshots + alert bot | Working notifications |
+| 11–12 | Buffer + YouTube Data API | — |
 
-Порядок платформ дальше: **YouTube → Threads → Instagram**, не наоборот. У YouTube нормальный официальный API. Instagram и Threads для стороннего анализа почти закрыты — там либо серые скрейперы с постоянной поломкой, либо ничего. Закладывай, что Instagram может просто не получиться в разумной трудоёмкости.
+Platform order after that: **YouTube → Threads → Instagram**, not the reverse. YouTube has a proper official API. Instagram and Threads are close to shut for third-party analysis — either grey scrapers that break constantly, or nothing. Assume Instagram may simply not be feasible at reasonable effort.
 
-## Юридический момент, коротко
+## Legal note, briefly
 
-ID и ники комментаторов — персональные данные (152-ФЗ, GDPR для зарубежного контура). Храни хеши, не публикуй агрегаты по конкретным людям, ограничься уровнем каналов. Плюс скрейпинг против ToS Telegram — риск бана аккаунта твой.
+Commenter IDs and handles are personal data (152-FZ, and GDPR for any non-Russian scope). Store hashes, do not publish aggregates about individuals, stay at the channel level. Also, scraping is against Telegram's ToS — the account ban risk is the operator's own.

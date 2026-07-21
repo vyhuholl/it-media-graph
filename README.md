@@ -1,2 +1,2 @@
-# it-media-graph
+# IT-media graph
 Аналитика айтишных телеграм-каналов.
