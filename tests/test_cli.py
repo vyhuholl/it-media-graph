@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 from itgraph import __version__
 from itgraph.cli import app
 from itgraph.db import session as db_session
+from itgraph.tg import auth as tg_auth
 from itgraph.tg import client as tg_client
 
 runner = CliRunner()
@@ -75,6 +76,47 @@ def test_login_authorizes_and_disconnects(
     assert "itgraph_bot" in result.output
     client.start.assert_awaited_once()
     client.disconnect.assert_awaited_once()
+
+
+def test_login_qr_never_asks_for_a_phone_number(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = MagicMock()
+    client.connect = AsyncMock()
+    client.is_user_authorized = AsyncMock(return_value=False)
+    client.start = AsyncMock()
+    client.get_me = AsyncMock(return_value=MagicMock(username="itgraph_bot"))
+    client.disconnect = AsyncMock()
+    monkeypatch.setattr(tg_client, "build_client", lambda: client)
+    authorize = AsyncMock()
+    monkeypatch.setattr(tg_auth, "authorize_qr", authorize)
+
+    result = runner.invoke(app, ["login", "--qr"])
+
+    assert result.exit_code == 0, result.output
+    assert "itgraph_bot" in result.output
+    authorize.assert_awaited_once()
+    # `start` is the phone-and-code path; --qr must not fall into it.
+    client.start.assert_not_awaited()
+    client.disconnect.assert_awaited_once()
+
+
+def test_login_qr_skips_an_already_authorized_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = MagicMock()
+    client.connect = AsyncMock()
+    client.is_user_authorized = AsyncMock(return_value=True)
+    client.get_me = AsyncMock(return_value=MagicMock(username="itgraph_bot"))
+    client.disconnect = AsyncMock()
+    monkeypatch.setattr(tg_client, "build_client", lambda: client)
+    authorize = AsyncMock()
+    monkeypatch.setattr(tg_auth, "authorize_qr", authorize)
+
+    result = runner.invoke(app, ["login", "--qr"])
+
+    assert result.exit_code == 0, result.output
+    authorize.assert_not_awaited()
 
 
 def test_dump_dialogs_reports_counts(inventory: None) -> None:

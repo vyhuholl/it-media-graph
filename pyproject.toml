@@ -8,6 +8,7 @@ dependencies = [
     "alembic>=1.18.5",
     "asyncpg>=0.31.0",
     "pydantic-settings>=2.14.2",
+    "qrcode>=8.2",
     "sqlalchemy[asyncio]>=2.0.51",
     "telethon>=1.44.0",
     "typer>=0.27.0",
@@ -52,8 +53,9 @@ python_version = "3.14"
 strict = true
 plugins = ["pydantic.mypy"]
 
-# Telethon ships no py.typed marker and no stubs exist. Scoped to that one
-# package — do not widen this to silence errors in our own code.
+# Neither Telethon nor qrcode ships a py.typed marker, and no stubs exist.
+# Scoped to those two packages — do not widen this to silence errors in our
+# own code.
 [[tool.mypy.overrides]]
-module = ["telethon.*"]
+module = ["qrcode.*", "telethon.*"]
 ignore_missing_imports = true

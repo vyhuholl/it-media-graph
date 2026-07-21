@@ -56,14 +56,34 @@ def version() -> None:
 
 
 @app.command()
-def login() -> None:
+def login(
+    qr: Annotated[
+        bool,
+        typer.Option(
+            "--qr",
+            help="Confirm by QR code on a signed-in device, not by code.",
+        ),
+    ] = False,
+) -> None:
     """Authorize the MTProto session (asks for phone number and code)."""
+    from getpass import getpass
+
+    from itgraph.tg.auth import authorize_qr
     from itgraph.tg.client import build_client
 
     async def run() -> None:
         client = build_client()
-        await client.start()
         try:
+            if qr:
+                await client.connect()
+                if not await client.is_user_authorized():
+                    await authorize_qr(
+                        client,
+                        show=typer.echo,
+                        ask_password=lambda: getpass("2FA password: "),
+                    )
+            else:
+                await client.start()
             me = await client.get_me()
             typer.echo(f"Authorized as {getattr(me, 'username', None) or me}")
         finally:
