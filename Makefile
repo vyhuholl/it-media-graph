@@ -2,7 +2,7 @@
 
 RUN_CMD := uv run
 
-lint: 
+lint:
 	$(RUN_CMD) ruff check --fix .
 	$(RUN_CMD) ruff format .
 

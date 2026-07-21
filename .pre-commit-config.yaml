@@ -14,18 +14,13 @@ repos:
 
   - repo: local
     hooks:
-      - id: format
-        name: ruff-format
-        entry: make format
-        language: system
-        pass_filenames: false
-        types: [python]
       - id: lint
         name: ruff
         entry: make lint
         language: system
         pass_filenames: false
         types: [python]
+        exclude: '(^|/)migrations/'
 
       - id: typecheck
         name: mypy
@@ -34,6 +29,7 @@ repos:
         pass_filenames: false
         types: [python]
         stages: [pre-push]
+        exclude: '(^|/)migrations/'
 
       - id: test
         name: pytest
@@ -41,3 +37,4 @@ repos:
         language: system
         pass_filenames: false
         stages: [pre-push]
+        exclude: '(^|/)migrations/'

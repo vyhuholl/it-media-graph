@@ -1,0 +1,33 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: itgraph-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-itgraph}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-itgraph}
+      POSTGRES_DB: ${POSTGRES_DB:-itgraph}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-itgraph} -d ${POSTGRES_DB:-itgraph}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    shm_size: 256mb
+    command:
+      - postgres
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - work_mem=64MB
+      - -c
+      - maintenance_work_mem=512MB
+      - -c
+      - max_wal_size=4GB
+
+volumes:
+  pgdata:

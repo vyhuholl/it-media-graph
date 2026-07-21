@@ -48,7 +48,11 @@ jobs:
           --health-retries 10
         ports: ["5432:5432"]
     env:
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/itgraph_test
+      # The engine is async — the driver has to be spelled out, or
+      # create_async_engine picks psycopg2 and fails.
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/itgraph_test
+      TELEGRAM_API_ID: "0"
+      TELEGRAM_API_HASH: ci-placeholder
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
