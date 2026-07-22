@@ -15,6 +15,7 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `db/session.py` | `Database`: engine + session factory |
 | `db/models.py` | SQLAlchemy models, `Base` |
 | `db/channels.py` | The channel inventory: upsert, review, listing |
+| `db/backup.py` | Dumps, the schedule that picks which, and the pruning |
 | `db/guard.py` | Refuses a destructive migration against a non-scratch database |
 | `db/migrations/` | Alembic revisions (async template) |
 

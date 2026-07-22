@@ -31,11 +31,49 @@ DATABASE_URL=postgresql+asyncpg://itgraph:itgraph@localhost:5433/itgraph_scratch
   uv run alembic downgrade base
 ```
 
-Если откат рабочей базы действительно нужен, сначала сделайте резервную копию, а затем разово выставьте `ITGRAPH_ALLOW_DESTRUCTIVE=1`:
+Если откат рабочей базы действительно нужен, сначала снимите копию (`make backup-full`), а затем разово выставьте `ITGRAPH_ALLOW_DESTRUCTIVE=1`.
+
+### Резервные копии
+
+Разметка каналов — это ручная работа, которую ничем не восстановить: канал можно перекачать заново, а решение «этот в скоуп, этот нет» нельзя. Поэтому копии снимаются двумя уровнями и **проверяются чтением** — файл, который не читается через `pg_restore`, копией не считается и не засчитывается.
+
+| уровень | что | как часто | сколько хранится |
+|---|---|---|---|
+| `daily/` | `channels` + `backfill_state` | раз в 20 часов | 30 копий |
+| `weekly/` | вся база, включая сырой слой | раз в неделю | 4 копии |
+
+Копии лежат в `~/itgraph-backups`, вне репозитория: дамп содержит ваши подписки. Имена в UTC с суффиксом `Z` — дамп, снятый в 13:08 по Москве, называется `...T100802Z`.
 
 ```bash
-docker compose exec -T postgres pg_dump -U itgraph -d itgraph --format=custom > backup.dump
+make backup            # снять то, что назрело
+make backup-full       # полный дамп прямо сейчас
+
+make backup-install    # поставить агент launchd (раз в 4 часа)
+make backup-status     # жив ли агент, с каким кодом завершился
+make backup-log        # что он делал
+make backup-uninstall  # снять агент; сами копии остаются
 ```
+
+Агент запускается каждые 4 часа, а не в фиксированный час: на ноутбуке фиксированный час — это «когда крышка закрыта». Что именно снимать, решается по возрасту файлов на диске, поэтому лишние запуски ничего не стоят, а пропущенные из-за сна навёрстываются на следующем.
+
+Кроме того, копия снимается автоматически перед каждым `alembic upgrade` на рабочей базе. Если копия не снялась, миграция не выполняется — обойти можно разовым `ITGRAPH_SKIP_BACKUP=1`.
+
+#### Восстановление
+
+Процедуру стоит прогнать хотя бы раз — непроверенное восстановление копией не является.
+
+```bash
+# развернуть копию в отдельную базу и посмотреть, что в ней
+docker compose exec -T postgres psql -U itgraph -d postgres \
+  -c 'CREATE DATABASE itgraph_restore_test'
+docker compose exec -T postgres bash -c \
+  'cat > /tmp/r.dump && pg_restore -U itgraph -d itgraph_restore_test --no-owner /tmp/r.dump' \
+  < ~/itgraph-backups/weekly/full-XXXXXXXXTXXXXXXZ.dump
+docker compose exec -T postgres psql -U itgraph -d itgraph_restore_test \
+  -c 'SELECT status, count(*) FROM channels GROUP BY status'
+```
+
+Восстанавливать поверх рабочей базы имеет смысл только когда уже понятно, что именно потеряно: `pg_restore --data-only --table=channels` дольёт строки, не трогая схему.
 
 ### Авторизация в Telegram
 

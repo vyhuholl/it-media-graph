@@ -17,12 +17,17 @@ from sqlalchemy.engine import make_url
 
 __all__ = [
     "ALLOW_DESTRUCTIVE",
+    "SKIP_BACKUP",
     "DestructiveMigrationError",
     "check_downgrade_allowed",
     "is_scratch_database",
 ]
 
 ALLOW_DESTRUCTIVE = "ITGRAPH_ALLOW_DESTRUCTIVE"
+
+# Lets an upgrade proceed without the dump that normally precedes it.
+# Named for what it costs, not for what it saves.
+SKIP_BACKUP = "ITGRAPH_SKIP_BACKUP"
 
 # The same suffix the test fixture requires. Kept identical on purpose:
 # two different definitions of "safe to wipe" is one too many.

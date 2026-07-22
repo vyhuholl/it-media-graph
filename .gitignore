@@ -5,6 +5,12 @@
 *.session
 *.session-journal
 
+# Database dumps: the operator's own subscriptions and review decisions.
+# They live outside the repository by default; this is here for the day
+# someone points ITGRAPH_BACKUP_DIR at it.
+*.dump
+itgraph-backups/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

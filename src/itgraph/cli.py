@@ -197,6 +197,49 @@ def mark(
     _run(run())
 
 
+@app.command()
+def backup(
+    full: Annotated[
+        bool,
+        typer.Option("--full", help="Whole database, raw layer included."),
+    ] = False,
+    inventory: Annotated[
+        bool,
+        typer.Option("--inventory", help="Only the hand-reviewed tables."),
+    ] = False,
+) -> None:
+    """Dump the database. With no options, takes whatever is due."""
+    from itgraph.db.backup import (
+        BackupError,
+        full_kind,
+        inventory_kind,
+        run_backup,
+    )
+
+    if full and inventory:
+        raise typer.BadParameter("give at most one of --full, --inventory")
+
+    kinds = None
+    if full:
+        kinds = [full_kind()]
+    elif inventory:
+        kinds = [inventory_kind()]
+
+    try:
+        taken = run_backup(kinds=kinds)
+    except BackupError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from exc
+
+    if not taken:
+        typer.echo("nothing due")
+    for item in taken:
+        typer.echo(
+            f"{item.kind:<10} {item.path} "
+            f"({item.size:,} bytes, {item.entries} entries)"
+        )
+
+
 def _row(channel: Channel) -> str:
     """One inventory line: id, username, title, status, kind."""
     username = f"@{channel.username}" if channel.username else "-"
