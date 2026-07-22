@@ -107,6 +107,14 @@ channel addressed by its Telegram id or by its username.
 - **WHEN** the given id or username is not in the inventory
 - **THEN** the command fails and nothing is written
 
+#### Scenario: Linked discussion chats are not reviewed independently
+- **GIVEN** a chat whose parent channel is recorded
+- **WHEN** the review queue is built
+- **THEN** the chat is excluded from it
+- **AND** no human decision about the chat is required
+- **AND** this exemption governs review only: whether the chat's contents are
+  collected is decided separately by each collecting capability
+
 ### Requirement: Records Are Never Deleted
 
 The system SHALL retain every discovered channel, including rejected ones, and MUST NOT delete channel records.
