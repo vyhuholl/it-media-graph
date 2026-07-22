@@ -26,6 +26,12 @@ def build_client() -> TelegramClient:
         device_model=settings.device_model,
         system_version=settings.system_version,
         app_version=settings.app_version,
+        # Waits under this Telethon sleeps through itself; longer ones
+        # reach the collector as `FloodWaitError`, which it also waits
+        # out. Both paths wait — there is no third path, because the
+        # alternative to waiting is the behaviour that gets accounts
+        # banned.
+        flood_sleep_threshold=settings.flood_sleep_threshold,
     )
 
 

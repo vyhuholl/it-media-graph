@@ -8,7 +8,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, func, literal_column, select
+from sqlalchemy import Boolean, func, literal_column, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +28,7 @@ __all__ = [
     "UpsertCounts",
     "count_by_status",
     "find_channel",
+    "link_discussion_chat",
     "list_channels",
     "mark_channel",
     "upsert_channels",
@@ -138,6 +139,32 @@ async def upsert_channels(
     ).all()
     inserted = sum(flags)
     return UpsertCounts(inserted=inserted, updated=len(flags) - inserted)
+
+
+async def link_discussion_chat(
+    session: AsyncSession, *, parent_tg_id: int, chat: DiscoveredChannel
+) -> None:
+    """Record a channel's discussion chat, in the two steps it takes.
+
+    ``upsert_channels`` refreshes only ``username`` and ``title`` on
+    conflict, so it cannot carry ``linked_to`` — passing the column to it
+    would be accepted and silently ignored. The chat row is therefore
+    created or refreshed first, and the link written separately.
+
+    A chat already imported from the operator's subscriptions keeps its
+    original ``discovered_via`` and ``first_seen_at``; only ``linked_to``
+    is written. Which is also why the link is not part of the upsert: a
+    chat can be discovered either way round, and neither discovery may
+    overwrite the other's record of where it came from.
+    """
+    await upsert_channels(
+        session, [chat], discovered_via=DiscoverySource.LINKED_CHAT
+    )
+    await session.execute(
+        update(Channel)
+        .where(Channel.tg_id == chat.tg_id)
+        .values(linked_to=parent_tg_id)
+    )
 
 
 async def find_channel(session: AsyncSession, ref: ChannelRef) -> Channel:

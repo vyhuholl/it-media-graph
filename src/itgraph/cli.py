@@ -7,12 +7,14 @@ bodies, so `itgraph --help` works on a machine with no `.env` yet.
 import asyncio
 import logging
 from collections.abc import Coroutine
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 import typer
 
 from itgraph import __version__
 from itgraph.db.models import (
+    BackfillState,
     Channel,
     ChannelKind,
     ChannelStatus,
@@ -198,6 +200,69 @@ def mark(
 
 
 @app.command()
+def backfill(
+    since: Annotated[
+        datetime | None,
+        typer.Option(
+            "--since",
+            formats=["%Y-%m-%d"],
+            help="Fetch history no older than this date (YYYY-MM-DD).",
+        ),
+    ] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", help="Process at most this many channels."),
+    ] = None,
+    delay: Annotated[
+        float | None,
+        typer.Option("--delay", help="Seconds between requests."),
+    ] = None,
+    batch_size: Annotated[
+        int | None,
+        typer.Option("--batch-size", help="Messages per request."),
+    ] = None,
+) -> None:
+    """Fetch channel history into the raw layer. Resumable, and slow.
+
+    A first run over the whole inventory is hours of requests. Start with
+    `--limit` on a few channels and watch what happens before letting it
+    loose on everything.
+    """
+    from itgraph.db.session import Database
+    from itgraph.tg.backfill import backfill_channels
+    from itgraph.tg.client import connected
+
+    if since is None:
+        raise typer.BadParameter(
+            "--since is required, e.g. --since 2026-01-01"
+        )
+    # Typer hands back a naive datetime; the column is timezone-aware and
+    # comparing the two raises rather than silently guessing an offset.
+    cutoff = since.replace(tzinfo=UTC)
+
+    async def run() -> None:
+        database = Database()
+        try:
+            async with (
+                connected() as client,
+                database.session() as session,
+            ):
+                summary = await backfill_channels(
+                    client,
+                    session,
+                    cutoff=cutoff,
+                    limit=limit,
+                    batch_size=batch_size,
+                    request_delay=delay,
+                )
+        finally:
+            await database.dispose()
+        typer.echo(summary.line())
+
+    _run(run())
+
+
+@app.command()
 def backup(
     full: Annotated[
         bool,
@@ -251,12 +316,31 @@ def _row(channel: Channel) -> str:
     )
 
 
+def _backfill_column(state: BackfillState | None) -> str:
+    """How far the collector got, in one column.
+
+    A run spans hours and several sittings, so the question "what is left
+    to do" has to be answerable without opening psql.
+    """
+    if state is None:
+        return "-"
+    if state.failure_kind is not None:
+        return f"{state.status.value}/{state.failure_kind.value}"
+    if state.status.value == "complete" and state.cutoff_at is not None:
+        return f"complete to {state.cutoff_at:%Y-%m-%d}"
+    return state.status.value
+
+
 @app.command()
 def channels(
     status: Annotated[
         ChannelStatus | None,
         typer.Option("--status", help="Show only this status."),
     ] = None,
+    backfill_state: Annotated[
+        bool,
+        typer.Option("--backfill", help="Show how far collection got."),
+    ] = False,
 ) -> None:
     """List the inventory, or summarise review progress."""
     from itgraph.db.channels import count_by_status, list_channels
@@ -272,7 +356,11 @@ def channels(
                         typer.echo(f"{name.value:<10} {total}")
                     typer.echo("")
                 for channel in await list_channels(session, status=status):
-                    typer.echo(_row(channel))
+                    line = _row(channel)
+                    if backfill_state:
+                        state = await session.get(BackfillState, channel.tg_id)
+                        line = f"{line:<100} {_backfill_column(state)}"
+                    typer.echo(line)
         finally:
             await database.dispose()
 

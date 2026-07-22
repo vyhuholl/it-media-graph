@@ -6,6 +6,7 @@ never one without the other.
 
 import enum
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     BigInteger,
@@ -18,14 +19,20 @@ from sqlalchemy import (
     false,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 __all__ = [
     "Base",
+    "BackfillState",
+    "BackfillStatus",
     "Channel",
     "ChannelKind",
     "ChannelStatus",
     "DiscoverySource",
+    "FailureKind",
+    "RawChannel",
+    "RawMessage",
     "RejectReason",
 ]
 
@@ -105,6 +112,32 @@ class DiscoverySource(enum.StrEnum):
     LINKED_CHAT = "linked_chat"
 
 
+class BackfillStatus(enum.StrEnum):
+    """How far a channel got in the last backfill run.
+
+    ``RUNNING`` left behind by a killed process is not a problem to
+    repair: resumption reads the cursor, not the status. It is what
+    distinguishes an interrupted channel from one never started.
+    """
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETE = "complete"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+
+
+class FailureKind(enum.StrEnum):
+    """Whether a later run should try this channel again.
+
+    ``PERMANENT`` — private, deleted, or the username no longer
+    resolves. ``TRANSIENT`` — network, timeout, unexpected server error.
+    """
+
+    PERMANENT = "permanent"
+    TRANSIENT = "transient"
+
+
 def _pg_enum(members: type[enum.Enum], name: str) -> Enum:
     """A Postgres enum storing member *values*, not member names."""
     return Enum(
@@ -174,8 +207,124 @@ class Channel(Base):
         ForeignKey("channels.tg_id", ondelete="SET NULL"), nullable=True
     )
 
+    # Denormalized from the newest message a backfill saw. A convenience
+    # for "is this channel still alive", not a source of truth: the
+    # authority is the payload in `raw_messages`.
+    last_post_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
     def __repr__(self) -> str:
         return (
             f"Channel(tg_id={self.tg_id}, username={self.username!r}, "
             f"status={self.status.value!r})"
+        )
+
+
+class RawMessage(Base):
+    """One message exactly as Telegram sent it.
+
+    Immutable by construction: the first fetch of a message id wins, and
+    nothing downstream may write here. Everything derived — forwards,
+    mentions, links, language — is computed from ``payload`` and must
+    stay re-runnable from it, because re-fetching history is the
+    expensive operation this table exists to avoid.
+    """
+
+    __tablename__ = "raw_messages"
+
+    channel_id: Mapped[int] = mapped_column(
+        ForeignKey("channels.tg_id", ondelete="CASCADE"),
+        primary_key=True,
+        autoincrement=False,
+    )
+    # Message ids are per-channel, so neither half identifies a row alone.
+    msg_id: Mapped[int] = mapped_column(
+        BigInteger, primary_key=True, autoincrement=False
+    )
+
+    # jsonb, not json: key order and whitespace are worth nothing here,
+    # and containment queries over several hundred thousand rows are.
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"RawMessage(channel_id={self.channel_id}, msg_id={self.msg_id})"
+        )
+
+
+class RawChannel(Base):
+    """The latest ``GetFullChannelRequest`` payload for one channel.
+
+    The freshest payload wins, unlike ``RawMessage``: a description and a
+    linked discussion chat change over time, and what a reader wants is
+    the current state. Keeping every version would be a time series, and
+    that is a separate table on a separate cadence.
+    """
+
+    __tablename__ = "raw_channels"
+
+    channel_id: Mapped[int] = mapped_column(
+        ForeignKey("channels.tg_id", ondelete="CASCADE"),
+        primary_key=True,
+        autoincrement=False,
+    )
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    def __repr__(self) -> str:
+        return f"RawChannel(channel_id={self.channel_id})"
+
+
+class BackfillState(Base):
+    """How far history collection got on one channel, and why it stopped.
+
+    ``oldest_fetched_id`` is what a resumed run reads; it advances in the
+    same transaction as the batch it describes, so it is never ahead of
+    the stored rows. ``newest_fetched_id`` is the high-water mark that
+    incremental collection will read — recorded now to avoid migrating a
+    per-channel table later.
+    """
+
+    __tablename__ = "backfill_state"
+
+    channel_id: Mapped[int] = mapped_column(
+        ForeignKey("channels.tg_id", ondelete="CASCADE"),
+        primary_key=True,
+        autoincrement=False,
+    )
+
+    oldest_fetched_id: Mapped[int | None] = mapped_column(BigInteger)
+    newest_fetched_id: Mapped[int | None] = mapped_column(BigInteger)
+
+    # The depth this channel is complete to. Stored rather than only
+    # applied, so re-running with an earlier cutoff resumes instead of
+    # silently deciding there is nothing left to do.
+    cutoff_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    status: Mapped[BackfillStatus] = mapped_column(
+        _pg_enum(BackfillStatus, "backfill_status"),
+        server_default=BackfillStatus.PENDING.value,
+    )
+    failure_kind: Mapped[FailureKind | None] = mapped_column(
+        _pg_enum(FailureKind, "failure_kind")
+    )
+    failure_detail: Mapped[str | None] = mapped_column(Text)
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"BackfillState(channel_id={self.channel_id}, "
+            f"status={self.status.value!r}, "
+            f"oldest_fetched_id={self.oldest_fetched_id})"
         )

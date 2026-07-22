@@ -1,15 +1,22 @@
 from collections.abc import AsyncIterator, Iterator
+from typing import Any
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fakes import FakeTelegramClient
+from fakes import (
+    FakeChannel,
+    FakeFullChannel,
+    FakeTelegramClient,
+    history,
+)
 from typer.testing import CliRunner
 
 from itgraph import __version__
 from itgraph.cli import app
 from itgraph.db import session as db_session
 from itgraph.tg import auth as tg_auth
+from itgraph.tg import backfill as tg_backfill
 from itgraph.tg import client as tg_client
 
 runner = CliRunner()
@@ -237,3 +244,79 @@ def test_channels_summarises_progress(inventory: None) -> None:
     assert "maybe      1" in result.output
     # A listing without a filter still shows every channel.
     assert "@example_notes" in result.output
+
+
+def collector_client(
+    dialog_records: list[dict[str, Any]], *, posts: int
+) -> FakeTelegramClient:
+    """A client that serves both the dialog list and some history.
+
+    The dialog records matter: the commands under test import the
+    inventory first, and a client without them leaves nothing to walk.
+    """
+    notes = FakeChannel(KNOWN, "example_notes", "Example Notes")
+    return FakeTelegramClient(
+        dialog_records,
+        entities={"example_notes": notes},
+        full_channels={KNOWN: FakeFullChannel(notes)},
+        histories={KNOWN: history(posts)},
+    )
+
+
+def no_sleeping(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def sleep(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(tg_backfill.asyncio, "sleep", sleep)
+
+
+def test_backfill_requires_a_cutoff(inventory: None) -> None:
+    """An unbounded walk is hours of requests; asking for it is deliberate."""
+    result = runner.invoke(app, ["backfill"])
+
+    assert result.exit_code != 0
+    assert "--since" in result.output
+
+
+def test_backfill_reports_what_it_did(
+    monkeypatch: pytest.MonkeyPatch,
+    inventory: None,
+    dialog_records: list[dict[str, Any]],
+) -> None:
+    telegram = collector_client(dialog_records, posts=3)
+    use_telegram(monkeypatch, telegram)
+    no_sleeping(monkeypatch)
+
+    runner.invoke(app, ["dump-dialogs"])
+    runner.invoke(app, ["mark", str(KNOWN), "--seed"])
+
+    result = runner.invoke(app, ["backfill", "--since", "2026-05-01"])
+
+    assert result.exit_code == 0, result.output
+    assert "completed 1" in result.output
+    assert "3 new messages" in result.output
+
+
+def test_backfill_rejects_a_malformed_date(inventory: None) -> None:
+    result = runner.invoke(app, ["backfill", "--since", "last tuesday"])
+
+    assert result.exit_code != 0
+
+
+def test_channels_can_show_backfill_state(
+    monkeypatch: pytest.MonkeyPatch,
+    inventory: None,
+    dialog_records: list[dict[str, Any]],
+) -> None:
+    """Progress across runs has to be readable without opening psql."""
+    use_telegram(monkeypatch, collector_client(dialog_records, posts=2))
+    no_sleeping(monkeypatch)
+
+    runner.invoke(app, ["dump-dialogs"])
+    runner.invoke(app, ["mark", str(KNOWN), "--seed"])
+    runner.invoke(app, ["backfill", "--since", "2026-05-01"])
+
+    result = runner.invoke(app, ["channels", "--backfill"])
+
+    assert result.exit_code == 0, result.output
+    assert "complete to 2026-05-01" in result.output

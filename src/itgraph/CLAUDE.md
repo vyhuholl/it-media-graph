@@ -11,10 +11,15 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `cli.py` | typer app — thin command wrappers only |
 | `tg/client.py` | Telethon client lifecycle; the only place a `TelegramClient` is built |
 | `tg/dialogs.py` | The account's own subscriptions → inventory rows |
+| `tg/payload.py` | Telethon objects → JSON-safe payloads; the only place that touches payload shape |
+| `tg/full_channel.py` | The per-channel metadata pass, and the linked chat it resolves |
+| `tg/backfill.py` | The history walk: pacing, resumption, FloodWait, failure classification |
 | `tg/` | MTProto collection: fetch and store raw payloads |
 | `db/session.py` | `Database`: engine + session factory |
 | `db/models.py` | SQLAlchemy models, `Base` |
 | `db/channels.py` | The channel inventory: upsert, review, listing |
+| `db/raw.py` | Writes into the raw layer; nothing here reads a payload |
+| `db/backfill.py` | Which channels to walk, how far each got, and why one stopped |
 | `db/backup.py` | Dumps, the schedule that picks which, and the pruning |
 | `db/guard.py` | Refuses a destructive migration against a non-scratch database |
 | `db/migrations/` | Alembic revisions (async template) |

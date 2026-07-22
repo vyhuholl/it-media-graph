@@ -38,6 +38,18 @@ class Settings(BaseSettings):
     system_version: str = "Windows 10"
     app_version: str = "5.3.1 x64"
 
+    # Telethon sleeps through a FloodWait shorter than this on its own;
+    # longer ones surface as an exception the collector waits out and
+    # logs. Neither path uses another session or account — that is what
+    # escalates a rate limit into a ban.
+    flood_sleep_threshold: int = 60
+
+    # Deliberately slow. History arrives 100 messages per request, so a
+    # first pass over 200 channels is a few thousand requests: hours at
+    # this pacing, which is the point. Raise it only with a reason.
+    backfill_request_delay: float = 2.0
+    backfill_batch_size: int = 100
+
     backup_dir: Path = DEFAULT_BACKUP_DIR
 
     # There is no pg_dump on the host — it runs inside the Postgres
