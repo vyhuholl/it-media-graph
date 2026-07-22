@@ -6,7 +6,9 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
+from alembic.util import CommandError
 from itgraph.config import settings
+from itgraph.db.guard import DestructiveMigrationError, check_downgrade_allowed
 from itgraph.db.models import Base
 
 # this is the Alembic Config object, which provides
@@ -87,6 +89,36 @@ def run_migrations_online() -> None:
 
     asyncio.run(run_async_migrations())
 
+
+def is_downgrade() -> bool:
+    """Whether Alembic was asked to move backwards.
+
+    The direction is the function ``alembic.command`` hands to the
+    environment, reachable only through the proxy's private handle on the
+    live ``EnvironmentContext`` — Alembic publishes no accessor for it.
+    That is a deliberate trade: this reads the actual direction rather
+    than pattern-matching a command line, and ``tests/test_guard.py``
+    drives a real ``alembic downgrade`` through it, so a future Alembic
+    moving this attribute fails the suite instead of leaving the barrier
+    quietly open.
+    """
+    proxy = getattr(context, "_proxy", None)
+    if proxy is None:  # pragma: no cover - no environment to guard
+        return False
+    fn = proxy.context_opts.get("fn")
+    return bool(getattr(fn, "__name__", "") == "downgrade")
+
+
+# Offline mode only prints SQL, which is how you inspect a downgrade
+# safely — that stays unguarded on purpose.
+if not context.is_offline_mode() and is_downgrade():
+    try:
+        check_downgrade_allowed(str(settings.database_url))
+    except DestructiveMigrationError as exc:
+        # Alembic renders CommandError as a plain message; letting the
+        # original escape buries the instructions under a traceback of
+        # its own internals.
+        raise CommandError(str(exc)) from exc
 
 if context.is_offline_mode():
     run_migrations_offline()

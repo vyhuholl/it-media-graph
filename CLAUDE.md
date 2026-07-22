@@ -26,6 +26,7 @@ uv run itgraph --help    # CLI entrypoint (typer)
 - **The raw layer is immutable.** The collector writes raw payloads to `raw_messages` and does nothing else. All parsing, enrichment and metrics derive from it and must be re-runnable from scratch. Never move parsing logic into the collector — re-fetching history is expensive and risks the account.
 - **Postgres only.** No graph database. Graph work loads edges into `igraph`/`networkx` in memory.
 - **Schema changes only through an Alembic migration.** Never edit tables directly.
+- **A migration is verified on a scratch database, never on the working one.** `alembic downgrade` drops tables, and the URL comes from the environment, so the safe command and the destructive one are keystroke-identical. `db/guard.py` refuses a downgrade unless the database name ends in `_test` — point `DATABASE_URL` at a scratch database, or use `alembic downgrade --sql` to read what it would do. The `ITGRAPH_ALLOW_DESTRUCTIVE=1` override exists for deliberate use after a backup; reaching for it to make an error go away is the mistake it is named after.
 
 ## Telegram collection rules
 - Handle `FloodWaitError` with honest backoff. Never work around a limit by switching sessions or accounts — that is what escalates to a ban.
@@ -47,7 +48,7 @@ uv run itgraph --help    # CLI entrypoint (typer)
 Test fixtures are synthetic or anonymized. There is no such thing as a "small real sample, just for a test".
 
 - The operator's own private dialogs, work chats and legacy group chats are out of scope. Only publicly addressable channels enter the inventory; history is fetched only for channels with status `seed` or `accepted`.
-- Nothing derived from the operator's own subscriptions is publishable. Exports select an explicit column list filtered to `status IN ('seed','accepted')`; never `SELECT *`, and never include `discovered_via`, `reject_reason`, `reject_note` or `kind_note`.
+- Nothing derived from the operator's own subscriptions is publishable. Exports select an explicit column list filtered to `status = 'seed'`; never `SELECT *`, and never include `discovered_via`, `reject_reason`, `reject_note` or `kind_note`.
 
 
 ## Workflow

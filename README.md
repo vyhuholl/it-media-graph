@@ -20,6 +20,23 @@ docker compose up -d          # Postgres на порту 5433
 uv run alembic upgrade head   # накатить схему
 ```
 
+Откатить схему на рабочей базе нельзя: `alembic downgrade` удаляет таблицы вместе с разметкой каналов, а URL берётся из окружения — то есть безопасная и разрушительная команды набираются одинаково. Поэтому откат разрешён только на одноразовой базе, чьё имя оканчивается на `_test`:
+
+```bash
+# посмотреть, что откат сделал бы, ничего не трогая
+uv run alembic downgrade --sql head:base
+
+# проверить миграцию на одноразовой базе
+DATABASE_URL=postgresql+asyncpg://itgraph:itgraph@localhost:5433/itgraph_scratch_test \
+  uv run alembic downgrade base
+```
+
+Если откат рабочей базы действительно нужен, сначала сделайте резервную копию, а затем разово выставьте `ITGRAPH_ALLOW_DESTRUCTIVE=1`:
+
+```bash
+docker compose exec -T postgres pg_dump -U itgraph -d itgraph --format=custom > backup.dump
+```
+
 ### Авторизация в Telegram
 
 Разовая операция. Сбор данных идёт через MTProto от лица обычного аккаунта, а не бота: Bot API не умеет читать историю каналов.
