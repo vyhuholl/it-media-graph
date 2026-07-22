@@ -80,6 +80,7 @@ def upgrade() -> None:
                 "vacancies",
                 "media",
                 "community",
+                "event",
                 name="channel_kind",
             ),
             nullable=True,
@@ -93,6 +94,7 @@ def upgrade() -> None:
                 "recommendation",
                 "mention",
                 "manual",
+                "linked_chat",
                 name="discovery_source",
             ),
             nullable=False,
@@ -109,6 +111,18 @@ def upgrade() -> None:
             name=op.f("ck_channels_rejected_has_reason"),
         ),
         sa.PrimaryKeyConstraint("tg_id", name=op.f("pk_channels")),
+    )
+
+    op.add_column(
+        "channels", sa.Column("linked_to", sa.BigInteger(), nullable=True)
+    )
+    op.create_foreign_key(
+        "fk_channels_linked_to_channels",
+        "channels",
+        "channels",
+        ["linked_to"],
+        ["tg_id"],
+        ondelete="SET NULL",
     )
 
 

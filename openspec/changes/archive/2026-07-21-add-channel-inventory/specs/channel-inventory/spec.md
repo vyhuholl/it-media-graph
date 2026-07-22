@@ -103,6 +103,12 @@ The system SHALL retain every discovered channel, including rejected ones, and M
 - **WHEN** the inventory is queried without a status filter
 - **THEN** rejected channels are included in the result
 
+#### Scenario: Linked discussion chats are not reviewed independently
+- **GIVEN** a chat whose parent channel is recorded
+- **WHEN** the review queue is built
+- **THEN** the chat is excluded from it
+- **AND** its scope follows the status of its parent channel
+
 ### Requirement: Inventory Listing
 
 The system SHALL provide `itgraph channels`, showing the inventory so review

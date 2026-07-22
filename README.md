@@ -81,7 +81,7 @@ uv run itgraph mark 1234567893 --maybe
 uv run itgraph channels        # сколько осталось неразмеченных
 ```
 
-Значения `--kind`: `personal`, `aggregator`, `company`, `vacancies`, `media`, `community`. Это то, чем канал **является**, а не то, о чём он пишет.
+Значения `--kind`: `personal`, `aggregator`, `company`, `vacancies`, `media`, `community`, `event`. Это то, чем канал **является**, а не то, о чём он пишет.
 
 Значения `--reason`: `not_it`, `adjacent`, `crypto`, `infobiz`, `ads`, `content_farm`, `other_scene`. К любой причине можно добавить `--note` свободным текстом.
 

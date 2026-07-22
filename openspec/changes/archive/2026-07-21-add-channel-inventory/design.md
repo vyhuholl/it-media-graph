@@ -29,11 +29,11 @@ Values cover only what is already known to recur. Everything else goes into a no
 ```sql
 CREATE TYPE channel_status    AS ENUM ('candidate', 'seed', 'maybe', 'rejected');
 CREATE TYPE channel_kind      AS ENUM ('personal', 'aggregator', 'company',
-                                       'vacancies', 'media', 'community');
+                                       'vacancies', 'media', 'community', `event`);
 CREATE TYPE reject_reason     AS ENUM ('not_it', 'adjacent', 'crypto', 'infobiz',
                                        'ads', 'content_farm', 'other_scene');
 CREATE TYPE discovery_source  AS ENUM ('own_subscriptions', 'forward',
-                                       'recommendation', 'mention', 'manual');
+                                       'recommendation', 'mention', 'manual', 'linked_chat');
 
 CREATE TABLE channels (
     tg_id           bigint PRIMARY KEY,
@@ -96,6 +96,7 @@ Telethon is async, so the data layer is too: SQLAlchemy async with `asyncpg`. Al
 - Rejected channels must not resurface in the triage queue when rediscovered by forwards. Nothing to enforce yet — belongs to the change that introduces automatic candidates.
 - `lang` and `lang_ratio` columns: no messages exist yet to detect language from.
 - Participant counts, activity and other facts derivable without manual review.
+- `linked_to` is added now but stays empty: resolving it needs a per-channel `GetFullChannelRequest`, which belongs to the change that already visits every channel. Until then, linked discussion chats imported from the dialog list sit as unreviewed candidates.
 
 ## Testing
 

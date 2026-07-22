@@ -12,6 +12,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     Enum,
+    ForeignKey,
     MetaData,
     Text,
     false,
@@ -70,6 +71,7 @@ class ChannelKind(enum.StrEnum):
     VACANCIES = "vacancies"
     MEDIA = "media"
     COMMUNITY = "community"
+    EVENT = "event"
 
 
 class RejectReason(enum.StrEnum):
@@ -100,6 +102,7 @@ class DiscoverySource(enum.StrEnum):
     RECOMMENDATION = "recommendation"
     MENTION = "mention"
     MANUAL = "manual"
+    LINKED_CHAT = "linked_chat"
 
 
 def _pg_enum(members: type[enum.Enum], name: str) -> Enum:
@@ -165,6 +168,10 @@ class Channel(Base):
     # never a combination of empty label columns.
     reviewed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
+    )
+
+    linked_to: Mapped[int | None] = mapped_column(
+        ForeignKey("channels.tg_id", ondelete="SET NULL"), nullable=True
     )
 
     def __repr__(self) -> str:
