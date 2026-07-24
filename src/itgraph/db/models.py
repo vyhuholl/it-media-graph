@@ -14,6 +14,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     MetaData,
     Text,
@@ -377,11 +378,24 @@ class Edge(Base):
     rows and never stored here — that is the analysis this table feeds,
     not part of it.
 
-    The natural key is ``(src, msg_id, kind, dst)``: one message can
-    forward from a channel and also mention it, and both are real, but the
-    same message mentioning the same channel twice is one edge. Rows are
-    inserted with ``ON CONFLICT DO NOTHING``, so re-deriving over
-    unchanged raw data writes nothing.
+    Where the payload names the referenced *post* — a forward's original
+    message id, a ``t.me/name/123`` link — it is carried too, alongside
+    the referenced post's own publication date. The interval between the
+    two dates (how fast the post travelled) is a subtraction over two
+    columns and is deliberately not stored: it would be the first derived
+    measure to live in the observation table.
+
+    The natural key is ``(src, msg_id, kind, dst, dst_msg_id)``: one
+    message can forward from a channel and also mention it, and two links
+    to different posts of the same channel are two references, but the
+    same message referencing the same post the same way twice is one edge.
+    ``dst_msg_id`` is nullable — a plain mention or a forward that names no
+    original post has nothing to put there — so the constraint declares
+    ``NULLS NOT DISTINCT``: without it Postgres would treat two such edges
+    as distinct and every re-run would insert the mention again, since
+    ``ON CONFLICT DO NOTHING`` never fires on a conflict Postgres does not
+    consider one. Rows are inserted with ``ON CONFLICT DO NOTHING``, so
+    re-deriving over unchanged raw data writes nothing.
 
     Only channel ids appear here. User ids from ``fwd_from`` and signed
     posts are dropped at the derivation boundary and stay in the raw
@@ -396,7 +410,19 @@ class Edge(Base):
             "msg_id",
             "kind",
             "dst_channel_id",
-            name="observed_reference",
+            "dst_msg_id",
+            name="uq_edges_reference",
+            postgresql_nulls_not_distinct=True,
+        ),
+        # Every post-level question filters on the referenced post — which
+        # channel, which message. A composite index serves that pair; its
+        # leftmost prefix also covers `dst_channel_id` alone, so it is
+        # explicitly named to sit alongside the single-column index the
+        # foreign key already needs rather than collide with it.
+        Index(
+            "ix_edges_dst_channel_id_dst_msg_id",
+            "dst_channel_id",
+            "dst_msg_id",
         ),
     )
 
@@ -416,6 +442,22 @@ class Edge(Base):
     published_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), index=True
     )
+
+    # The referenced post, where the payload names one: its per-channel id
+    # and its original publication date. Both nullable — a plain mention
+    # and a forward naming no original post leave them empty.
+    dst_msg_id: Mapped[int | None] = mapped_column(BigInteger)
+    dst_published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+    # The album group of the *referencing* message, carried so a forwarded
+    # album can later be counted as one event. Only meaningful together
+    # with the channel — group on `(src_channel_id, grouped_id)`, never on
+    # `grouped_id` alone. Stored, never applied: collapsing an album is a
+    # counting decision that belongs to analysis, not to derivation.
+    grouped_id: Mapped[int | None] = mapped_column(BigInteger)
+
     derived_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

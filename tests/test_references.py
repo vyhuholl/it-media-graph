@@ -5,9 +5,11 @@ counted in the wrong units — so every shape gets its own case. No
 database and no network: these are pure functions over JSON.
 """
 
+from datetime import datetime
 from typing import Any
 
 from itgraph.derive.references import (
+    Forward,
     Reference,
     extract_references,
     forward_target,
@@ -18,6 +20,8 @@ from itgraph.derive.references import (
 
 SRC = 1000000001
 DST = 1000000002
+
+ORIGINAL_DATE = "2026-03-14T09:26:53+00:00"
 
 
 def message(**fields: Any) -> dict[str, Any]:
@@ -52,7 +56,42 @@ def test_forward_from_a_channel_is_that_channel() -> None:
             "from_id": {"_": "PeerChannel", "channel_id": DST},
         }
     )
-    assert forward_target(payload, src_channel_id=SRC) == DST
+    forward = forward_target(payload, src_channel_id=SRC)
+    assert forward is not None
+    assert forward.channel_id == DST
+
+
+def test_a_forward_carries_the_original_post_id_and_date() -> None:
+    payload = message(
+        fwd_from={
+            "_": "MessageFwdHeader",
+            "from_id": {"_": "PeerChannel", "channel_id": DST},
+            "channel_post": 555,
+            "date": ORIGINAL_DATE,
+        }
+    )
+    assert forward_target(payload, src_channel_id=SRC) == Forward(
+        channel_id=DST,
+        msg_id=555,
+        published_at=datetime.fromisoformat(ORIGINAL_DATE),
+    )
+
+
+def test_a_forward_naming_no_original_post_still_yields_a_forward() -> None:
+    # Channel and its date are known, the post id is not — still an edge,
+    # with the post id left empty.
+    payload = message(
+        fwd_from={
+            "_": "MessageFwdHeader",
+            "from_id": {"_": "PeerChannel", "channel_id": DST},
+            "date": ORIGINAL_DATE,
+        }
+    )
+    assert forward_target(payload, src_channel_id=SRC) == Forward(
+        channel_id=DST,
+        msg_id=None,
+        published_at=datetime.fromisoformat(ORIGINAL_DATE),
+    )
 
 
 def test_forward_from_a_user_is_nothing() -> None:
@@ -143,7 +182,43 @@ def test_a_hyperlink_entity_reads_its_hidden_url() -> None:
             }
         ],
     )
-    assert extract_references(payload) == [Reference(channel_id=1234567890)]
+    assert extract_references(payload) == [
+        Reference(channel_id=1234567890, msg_id=55)
+    ]
+
+
+def test_two_links_to_different_posts_of_one_channel_are_two_references() -> (
+    None
+):
+    # Two references, not one: the deduplication that collapses a repeat
+    # keys on the post, so different posts survive it.
+    payload = message(
+        message="https://t.me/durov/10 https://t.me/durov/20",
+        entities=[
+            {"_": "MessageEntityUrl", "offset": 0, "length": 21},
+            {"_": "MessageEntityUrl", "offset": 22, "length": 21},
+        ],
+    )
+    assert extract_references(payload) == [
+        Reference(username="durov", msg_id=10),
+        Reference(username="durov", msg_id=20),
+    ]
+
+
+def test_a_mention_and_a_post_link_to_one_channel_are_two_references() -> None:
+    # One names no post, one names a post — two distinct references to the
+    # same channel.
+    payload = message(
+        message="@durov https://t.me/durov/5",
+        entities=[
+            {"_": "MessageEntityMention", "offset": 0, "length": 6},
+            {"_": "MessageEntityUrl", "offset": 7, "length": 20},
+        ],
+    )
+    assert extract_references(payload) == [
+        Reference(username="durov"),
+        Reference(username="durov", msg_id=5),
+    ]
 
 
 def test_a_non_telegram_link_yields_nothing() -> None:
@@ -166,19 +241,22 @@ def test_tme_name() -> None:
 
 
 def test_tme_name_message() -> None:
-    # A link to one message still points at the channel.
-    assert parse_tme_link("t.me/durov/123") == Reference(username="durov")
+    # A link to one message points at the channel and carries the post id.
+    assert parse_tme_link("t.me/durov/123") == Reference(
+        username="durov", msg_id=123
+    )
 
 
 def test_tme_c_id_message() -> None:
     assert parse_tme_link("t.me/c/1234567890/55") == Reference(
-        channel_id=1234567890
+        channel_id=1234567890, msg_id=55
     )
 
 
 def test_tme_c_id_without_a_message() -> None:
+    # No message segment — the channel, with no post id.
     assert parse_tme_link("https://t.me/c/1234567890") == Reference(
-        channel_id=1234567890
+        channel_id=1234567890, msg_id=None
     )
 
 

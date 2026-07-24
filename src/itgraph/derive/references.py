@@ -12,15 +12,19 @@ Two references leave here: an id (from a forward header or a
 ``t.me/name`` link). An id is a channel's primary key and can become an
 edge at once; a username needs resolving first. Everything else — a user,
 a bot, an invite, a non-Telegram link — resolves to nothing and produces
-no reference.
+no reference. Where a link or a forward header names a specific *post*,
+the referenced message id — and, for a forward, its date — travels with
+the reference, so the edge can point at the post rather than the channel.
 """
 
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from urllib.parse import urlsplit
 
 __all__ = [
+    "Forward",
     "Reference",
     "extract_references",
     "forward_target",
@@ -45,12 +49,38 @@ class Reference:
     """A channel a message points at, by exactly one of two handles.
 
     ``username`` is set for an ``@mention`` or a ``t.me/name`` link;
-    ``channel_id`` for a forward header or a ``t.me/c/<id>`` link. Never
-    both, never neither.
+    ``channel_id`` for a ``t.me/c/<id>`` link. Exactly one, never both.
+
+    ``msg_id`` is the referenced post within that channel when the link
+    names one — ``t.me/name/123`` or ``t.me/c/<id>/<msg>`` — and ``None``
+    for a mention or a link that addresses the channel as a whole.
     """
 
     username: str | None = None
     channel_id: int | None = None
+    msg_id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Forward:
+    """A channel a message was forwarded from, and the post it names.
+
+    ``channel_id`` is always present: a header naming no channel is not a
+    channel-to-channel forward and yields ``None`` from
+    :func:`forward_target`, never a ``Forward``. ``msg_id`` and
+    ``published_at`` are the original post's id (``fwd_from.channel_post``)
+    and date (``fwd_from.date``); a header naming the channel but not the
+    post leaves them empty.
+
+    ``published_at`` is the *original* post's date, not that of the hop it
+    arrived through: when a forward is itself forwarded Telegram keeps
+    ``fwd_from`` pointing at the root author, so the interval derived from
+    it is time since original publication.
+    """
+
+    channel_id: int
+    msg_id: int | None = None
+    published_at: datetime | None = None
 
 
 def normalize_username(raw: str) -> str | None:
@@ -83,12 +113,14 @@ def peer_channel_id(from_id: Any) -> int | None:
 
 def forward_target(
     payload: dict[str, Any], *, src_channel_id: int
-) -> int | None:
-    """The channel a message was forwarded from, if it is an edge at all.
+) -> Forward | None:
+    """The channel a message was forwarded from, and the post it names.
 
     ``None`` for a message that is not a forward, one forwarded from a
     user, one whose origin is hidden, and one a channel forwarded from
-    itself — a self-repost is not a relationship between two channels.
+    itself — a self-repost is not a relationship between two channels. A
+    forward naming no original post still yields a ``Forward`` — with
+    ``msg_id`` and ``published_at`` empty — never ``None``.
 
     The origin is ``fwd_from.from_id``, the original author.
     ``saved_from_peer`` — the intermediate place a message was copied
@@ -102,17 +134,23 @@ def forward_target(
     channel_id = peer_channel_id(fwd.get("from_id"))
     if channel_id is None or channel_id == src_channel_id:
         return None
-    return channel_id
+    channel_post = fwd.get("channel_post")
+    return Forward(
+        channel_id=channel_id,
+        msg_id=channel_post if isinstance(channel_post, int) else None,
+        published_at=_as_datetime(fwd.get("date")),
+    )
 
 
 def parse_tme_link(url: str) -> Reference | None:
     """A ``t.me`` link as the channel it points at, or ``None``.
 
-    Handled: ``t.me/name`` and ``t.me/name/123`` (a channel, and a link
-    to one message in it — both point at the channel), ``t.me/s/name``
-    (the web preview), and ``t.me/c/<id>/<msg>`` (a bare channel id).
-    Refused: ``t.me/joinchat/...`` and ``t.me/+...``, which are invites
-    resolvable only by someone already let in, and any non-``t.me`` host.
+    Handled: ``t.me/name`` (a channel) and ``t.me/name/123`` (one message
+    within it — the channel, carrying the post id), ``t.me/s/name`` (the
+    web preview), and ``t.me/c/<id>`` / ``t.me/c/<id>/<msg>`` (a bare
+    channel id, with the post id when present). Refused: ``t.me/joinchat/
+    ...`` and ``t.me/+...``, which are invites resolvable only by someone
+    already let in, and any non-``t.me`` host.
     """
     raw = url.strip()
     # A bare `t.me/foo` has no `//`, so urlsplit would read `t.me` as the
@@ -137,11 +175,16 @@ def parse_tme_link(url: str) -> Reference | None:
         return _username_reference(segments[1]) if len(segments) > 1 else None
     if first.lower() == "c":
         # t.me/c/<id>/<msg> — the bare id, no `-100` prefix, exactly the
-        # form `channels.tg_id` stores.
+        # form `channels.tg_id` stores. The message id, when present, is
+        # the third segment.
         if len(segments) > 1 and segments[1].isdigit():
-            return Reference(channel_id=int(segments[1]))
+            msg_id = _post_id(segments[2]) if len(segments) > 2 else None
+            return Reference(channel_id=int(segments[1]), msg_id=msg_id)
         return None
-    return _username_reference(first)
+    # t.me/<name> or t.me/<name>/<msg> — the second segment, when it is a
+    # message id, points at one post of the channel.
+    msg_id = _post_id(segments[1]) if len(segments) > 1 else None
+    return _username_reference(first, msg_id=msg_id)
 
 
 def extract_references(payload: dict[str, Any]) -> list[Reference]:
@@ -180,9 +223,34 @@ def extract_references(payload: dict[str, Any]) -> list[Reference]:
     return references
 
 
-def _username_reference(segment: str) -> Reference | None:
+def _username_reference(
+    segment: str, msg_id: int | None = None
+) -> Reference | None:
     username = normalize_username(segment)
-    return Reference(username=username) if username is not None else None
+    if username is None:
+        return None
+    return Reference(username=username, msg_id=msg_id)
+
+
+def _post_id(segment: str) -> int | None:
+    """A path segment as a message id, or ``None`` if it is not one.
+
+    A message id is a run of digits — ``t.me/name/123``. Anything else in
+    that position (a comment thread's ``?comment=`` is already stripped as
+    a query, a stray word) names no post and is dropped rather than
+    guessed at.
+    """
+    return int(segment) if segment.isdigit() else None
+
+
+def _as_datetime(raw: Any) -> datetime | None:
+    """A stored ISO-8601 date string as a datetime, or ``None``.
+
+    The raw layer serializes every date to an ISO-8601 string (see
+    ``tg.payload``); a header without a date, or a malformed one, is
+    nothing rather than an error.
+    """
+    return datetime.fromisoformat(raw) if isinstance(raw, str) else None
 
 
 def _slice_utf16(text: str, offset: int, length: int) -> str:

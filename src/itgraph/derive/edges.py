@@ -136,30 +136,46 @@ async def _flush(
             # a real message always carries one. Defensive, not expected.
             continue
 
-        # A set keyed by (kind, dst): one message referencing the same
-        # channel the same way twice yields one edge, but a forward and a
-        # mention of that channel are two edges of two kinds.
-        message_edges: set[tuple[EdgeKind, int]] = set()
+        # Carried onto every edge this message produces, never applied:
+        # collapsing a forwarded album into one event is a counting
+        # decision that belongs to analysis.
+        grouped_id = _grouped_id(payload)
 
-        target = forward_target(payload, src_channel_id=channel_id)
-        if target is not None:
-            if target not in index.ids:
-                discovered.add(target)
-                index.add(target)
-            message_edges.add((EdgeKind.FORWARD, target))
+        # Keyed by (kind, dst, dst_msg_id): the same post referenced the
+        # same way twice is one edge, but two different posts of one
+        # channel — or a forward and a mention of it — are distinct. The
+        # value is the referenced post's date, which only a forward
+        # carries; a mention leaves it empty.
+        message_edges: dict[
+            tuple[EdgeKind, int, int | None], datetime | None
+        ] = {}
+
+        forward = forward_target(payload, src_channel_id=channel_id)
+        if forward is not None:
+            if forward.channel_id not in index.ids:
+                discovered.add(forward.channel_id)
+                index.add(forward.channel_id)
+            message_edges[
+                (EdgeKind.FORWARD, forward.channel_id, forward.msg_id)
+            ] = forward.published_at
 
         for reference in extract_references(payload):
             if reference.username is not None:
                 dst = index.username_to_id.get(reference.username)
                 if dst is not None:
-                    message_edges.add((EdgeKind.MENTION, dst))
+                    message_edges.setdefault(
+                        (EdgeKind.MENTION, dst, reference.msg_id), None
+                    )
                 else:
                     pending.append(reference.username)
             elif (
                 reference.channel_id is not None
                 and reference.channel_id in index.ids
             ):
-                message_edges.add((EdgeKind.MENTION, reference.channel_id))
+                message_edges.setdefault(
+                    (EdgeKind.MENTION, reference.channel_id, reference.msg_id),
+                    None,
+                )
 
         edge_rows.extend(
             EdgeRow(
@@ -168,8 +184,15 @@ async def _flush(
                 kind=kind,
                 msg_id=msg_id,
                 published_at=published_at,
+                dst_msg_id=dst_msg_id,
+                dst_published_at=dst_published_at,
+                grouped_id=grouped_id,
             )
-            for kind, dst in message_edges
+            for (
+                kind,
+                dst,
+                dst_msg_id,
+            ), dst_published_at in message_edges.items()
         )
 
     if discovered:
@@ -187,3 +210,14 @@ def _published_at(payload: dict[str, Any]) -> datetime | None:
     """The message's publication date, as stored (an ISO-8601 string)."""
     raw = payload.get("date")
     return datetime.fromisoformat(raw) if isinstance(raw, str) else None
+
+
+def _grouped_id(payload: dict[str, Any]) -> int | None:
+    """The album group of the message, if it belongs to one.
+
+    Only meaningful together with the channel — the same group id in two
+    channels is two different albums — so it is stored beside the source
+    channel and never keyed on alone.
+    """
+    raw = payload.get("grouped_id")
+    return raw if isinstance(raw, int) and not isinstance(raw, bool) else None

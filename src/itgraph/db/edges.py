@@ -38,13 +38,21 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class EdgeRow:
-    """One edge, ready to insert. A plain carrier, not a model instance."""
+    """One edge, ready to insert. A plain carrier, not a model instance.
+
+    ``dst_msg_id`` and ``dst_published_at`` name the referenced post where
+    the payload does; ``grouped_id`` is the album group of the referencing
+    message. All three are empty for a reference that names none.
+    """
 
     src_channel_id: int
     dst_channel_id: int
     kind: EdgeKind
     msg_id: int
     published_at: datetime
+    dst_msg_id: int | None = None
+    dst_published_at: datetime | None = None
+    grouped_id: int | None = None
 
 
 @dataclass(slots=True)
@@ -114,8 +122,13 @@ async def insert_edges(session: AsyncSession, edges: Sequence[EdgeRow]) -> int:
     """Insert observed edges, skipping any already recorded.
 
     ``ON CONFLICT DO NOTHING`` on the natural key ``(src, msg_id, kind,
-    dst)`` makes a re-run over unchanged raw data a no-op: the second pass
-    writes nothing. Returns how many rows were new.
+    dst, dst_msg_id)`` makes a re-run over unchanged raw data a no-op: the
+    second pass writes nothing. The conflict is named against the
+    constraint rather than inferred from columns, because the constraint
+    is ``NULLS NOT DISTINCT`` — a null ``dst_msg_id`` must conflict with
+    another null, which is exactly the constraint's own rule and not
+    something a bare column list would state. Returns how many rows were
+    new.
     """
     if not edges:
         return 0
@@ -129,18 +142,14 @@ async def insert_edges(session: AsyncSession, edges: Sequence[EdgeRow]) -> int:
                     "kind": edge.kind,
                     "msg_id": edge.msg_id,
                     "published_at": edge.published_at,
+                    "dst_msg_id": edge.dst_msg_id,
+                    "dst_published_at": edge.dst_published_at,
+                    "grouped_id": edge.grouped_id,
                 }
                 for edge in edges
             ]
         )
-        .on_conflict_do_nothing(
-            index_elements=[
-                Edge.src_channel_id,
-                Edge.msg_id,
-                Edge.kind,
-                Edge.dst_channel_id,
-            ]
-        )
+        .on_conflict_do_nothing(constraint="uq_edges_reference")
         .returning(Edge.id)
     )
     return len((await session.execute(statement)).all())
