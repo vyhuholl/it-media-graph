@@ -162,14 +162,17 @@ async def _flush(
         for reference in extract_references(payload):
             if reference.username is not None:
                 dst = index.username_to_id.get(reference.username)
-                if dst is not None:
+                if dst is None:
+                    pending.append(reference.username)
+                elif dst != channel_id:
+                    # A channel mentioning itself is not a relationship
+                    # between two channels, the same as a self-forward.
                     message_edges.setdefault(
                         (EdgeKind.MENTION, dst, reference.msg_id), None
                     )
-                else:
-                    pending.append(reference.username)
             elif (
                 reference.channel_id is not None
+                and reference.channel_id != channel_id
                 and reference.channel_id in index.ids
             ):
                 message_edges.setdefault(

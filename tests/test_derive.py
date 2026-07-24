@@ -308,6 +308,35 @@ async def test_an_id_link_to_a_known_channel_becomes_a_mention_edge(
     assert (SRC, KNOWN, "mention", 23) in await edges_of(inventory)
 
 
+async def test_a_self_mention_is_no_edge(inventory: Database) -> None:
+    # A channel mentioning its own @username is no relationship — the same
+    # rule as a self-forward, so it must not become a self-loop edge.
+    async with inventory.session() as session:
+        await seed(
+            session,
+            raw(
+                26,
+                message="@src_channel",
+                entities=[mention_entity("src_channel")],
+            ),
+        )
+
+    await derive_graph(inventory)
+
+    assert await edges_of(inventory) == []
+
+
+async def test_a_self_id_link_is_no_edge(inventory: Database) -> None:
+    # The same rule for a t.me/c/<id> link a channel points at itself.
+    link = f"t.me/c/{SRC}/9"
+    async with inventory.session() as session:
+        await seed(session, raw(27, message=link, entities=[url_entity(link)]))
+
+    await derive_graph(inventory)
+
+    assert await edges_of(inventory) == []
+
+
 async def test_an_id_link_to_an_unknown_channel_is_dropped(
     inventory: Database,
 ) -> None:
