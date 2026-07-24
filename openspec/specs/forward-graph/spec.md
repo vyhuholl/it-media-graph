@@ -56,11 +56,6 @@ The system SHALL record an edge for every message forwarded from one channel int
 - **WHEN** derivation runs
 - **THEN** no edge is recorded
 
-#### Scenario: Self-forward
-- **GIVEN** a stored message a channel forwarded from itself
-- **WHEN** derivation runs
-- **THEN** no edge is recorded
-
 ### Requirement: Mention Edges
 
 The system SHALL record an edge for every reference to a channel by username or by `t.me` link in a message, identifying the referenced message where the link names one.
@@ -216,3 +211,34 @@ The system SHALL derive edges only from channels that are in scope, and MUST NOT
 - **WHEN** derivation runs with a rebuild
 - **THEN** that channel's record is retained with its original discovery source
 
+### Requirement: No Self-References
+
+The system SHALL NOT record an edge whose source and target are the same channel, however the reference is expressed.
+
+#### Scenario: Self-forward
+- **GIVEN** a stored message a channel forwarded from itself
+- **WHEN** derivation runs
+- **THEN** no edge is recorded
+
+#### Scenario: Self-mention by username
+- **GIVEN** a stored message in which a channel mentions its own `@username`
+- **WHEN** derivation runs
+- **THEN** no edge is recorded
+
+#### Scenario: Link to the channel's own page
+- **GIVEN** a stored message containing a `t.me` link to the channel that published it
+- **WHEN** derivation runs
+- **THEN** no edge is recorded
+
+#### Scenario: Link to the channel's own post
+- **GIVEN** a stored message linking to a post of the channel that published it
+- **WHEN** derivation runs
+- **THEN** no edge is recorded
+- **AND** this holds for the public `t.me/name/123` form and for the internal
+  `t.me/c/<id>/<msg>` form alike
+
+#### Scenario: A self-reference does not suppress the rest of the message
+- **GIVEN** a stored message referencing both its own channel and a different one
+- **WHEN** derivation runs
+- **THEN** an edge is recorded for the other channel
+- **AND** no edge is recorded for the publishing channel
