@@ -97,6 +97,29 @@ The system SHALL let the operator bound a run by history depth and by number of 
 - **WHEN** no pacing options are supplied
 - **THEN** the slowest configured defaults apply
 
+### Requirement: Per-Channel Message Ceiling
+
+The system SHALL bound how many messages a single channel may ever contribute to the corpus, so that a few high-volume aggregators cannot dominate it, and MUST treat a channel that reaches the ceiling as finished for good.
+
+#### Scenario: The ceiling stops the walk
+- **GIVEN** a channel with more history above the cutoff than the ceiling allows
+- **WHEN** backfill walks it
+- **THEN** the walk stops at the ceiling
+- **AND** the depth recorded for the channel is the date of the oldest message actually stored, not the requested cutoff
+
+#### Scenario: A capped channel is not reopened
+- **GIVEN** a channel that already holds its ceiling of messages
+- **WHEN** backfill runs again, including with an earlier cutoff
+- **THEN** no request is made for that channel
+
+#### Scenario: The ceiling spans runs
+- **WHEN** the messages a channel holds are counted against the ceiling
+- **THEN** rows collected by earlier runs count too
+
+#### Scenario: The ceiling can be lifted deliberately
+- **WHEN** the ceiling is set to zero
+- **THEN** the walk is bounded only by the cutoff
+
 ### Requirement: Failure Isolation
 
 The system SHALL record per-channel failures and continue the run.
@@ -110,7 +133,7 @@ The system SHALL record per-channel failures and continue the run.
 
 #### Scenario: Run summary
 - **WHEN** a run finishes
-- **THEN** counts of completed, skipped and failed channels are reported
+- **THEN** counts of completed, capped, skipped and failed channels are reported
 
 ### Requirement: Channel Metadata Pass
 

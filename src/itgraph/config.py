@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     # this pacing, which is the point. Raise it only with a reason.
     backfill_request_delay: float = 2.0
     backfill_batch_size: int = 100
+    # How many messages one channel may ever contribute to the corpus.
+    # Without it a handful of news aggregators posting dozens of times a
+    # day would be most of the database — and they are the least
+    # informative nodes in the graph, reposting everyone and being
+    # reposted by nobody. Reaching it ends that channel for good, not
+    # just for this run. 0 means no ceiling.
+    backfill_max_messages: int = 2000
 
     backup_dir: Path = DEFAULT_BACKUP_DIR
 

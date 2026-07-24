@@ -36,7 +36,7 @@ from itgraph.db.models import (
 )
 from itgraph.db.session import Database
 from itgraph.tg import backfill as backfill_module
-from itgraph.tg.backfill import backfill_channels
+from itgraph.tg.backfill import backfill_channel, backfill_channels
 
 NOTES = FakeChannel(1000000001, "example_notes", "Example Notes")
 CHAT = FakeChannel(1000000002, "example_notes_chat", "Example Notes - chat")
@@ -553,6 +553,183 @@ async def test_the_channel_limit_leaves_the_rest_pending(
     assert await state_of(inventory, JOBS.id) is None
 
 
+async def test_the_message_ceiling_stops_the_walk(
+    inventory: Database, slept: list[float]
+) -> None:
+    """A channel contributes its share of the corpus and no more.
+
+    The cutoff is deep enough to be irrelevant here: what stops the walk
+    is the ceiling. Without it a few aggregators posting dozens of times
+    a day would be most of the database, while saying the least about who
+    talks to whom.
+    """
+    telegram = client(histories={NOTES.id: history(40)})
+
+    summary = await run(
+        inventory, telegram, cutoff=DEEPER, max_messages=10, limit=1
+    )
+
+    assert len(await stored_ids(inventory, NOTES.id)) == 10
+    assert summary.capped == 1
+    assert summary.completed == 0
+    assert summary.stored == 10
+    assert "capped 1" in summary.line()
+
+
+async def test_a_capped_channel_is_never_walked_again(
+    inventory: Database, slept: list[float]
+) -> None:
+    """The ceiling bounds the channel, not the run.
+
+    Once a channel has its share, no later run asks for more — not with
+    the same cutoff, and not with a deeper one, which is the case that
+    would otherwise let the ceiling be walked straight past.
+    """
+    telegram = client(histories={NOTES.id: history(40)})
+    await run(inventory, telegram, cutoff=CUTOFF, max_messages=10, limit=1)
+    first = await stored_ids(inventory, NOTES.id)
+
+    later = client(histories={NOTES.id: history(40)})
+    summary = await run(inventory, later, cutoff=DEEPER, max_messages=10)
+
+    assert await stored_ids(inventory, NOTES.id) == first
+    # Not one request was spent on it: the ceiling is checked against the
+    # rows already held, before anything is asked of Telegram.
+    assert NOTES.id not in {entity_id for entity_id, _, _ in later.windows}
+    assert summary.capped == 0
+
+
+async def test_a_capped_channel_records_the_depth_it_reached(
+    inventory: Database, slept: list[float]
+) -> None:
+    """The recorded depth is where the rows end, not where the walk aimed.
+
+    Writing the requested cutoff here would have `channels --backfill`
+    claim history that was deliberately never collected.
+    """
+    telegram = client(histories={NOTES.id: history(40)})
+
+    await run(inventory, telegram, cutoff=DEEPER, max_messages=10, limit=1)
+
+    state = await state_of(inventory, NOTES.id)
+    assert state is not None
+    assert state.status is BackfillStatus.COMPLETE
+    assert state.cutoff_at is not None
+    assert state.cutoff_at > DEEPER
+    # 10 daily posts back from 1 June.
+    assert state.cutoff_at == datetime(2026, 5, 23, 12, 0, tzinfo=UTC)
+    # And the cursor still names a row that exists.
+    assert state.oldest_fetched_id == min(
+        await stored_ids(inventory, NOTES.id)
+    )
+
+
+async def test_the_ceiling_counts_messages_from_earlier_runs(
+    inventory: Database, slept: list[float]
+) -> None:
+    """Rows already held count against the ceiling, not just this run's."""
+    telegram = client(histories={NOTES.id: history(40)})
+    await run(inventory, telegram, cutoff=CUTOFF, max_messages=5, limit=1)
+
+    # A deeper cutoff and a raised ceiling: the walk resumes, but only
+    # for what the new ceiling actually leaves.
+    later = client(histories={NOTES.id: history(40)})
+    await run(inventory, later, cutoff=DEEPER, max_messages=12)
+
+    assert len(await stored_ids(inventory, NOTES.id)) == 12
+
+
+async def test_the_ceiling_does_not_over_request(
+    inventory: Database, slept: list[float]
+) -> None:
+    """Asking for a window wider than the ceiling leaves buys nothing.
+
+    Those messages would be dropped on arrival, and the request is the
+    expensive part.
+    """
+    telegram = client(histories={NOTES.id: history(40)})
+
+    await run(
+        inventory,
+        telegram,
+        cutoff=DEEPER,
+        batch_size=100,
+        max_messages=15,
+        limit=1,
+    )
+
+    asked = [limit for _, _, limit in telegram.windows]
+    assert sum(asked) <= 15
+    assert len(await stored_ids(inventory, NOTES.id)) == 15
+
+
+async def test_the_cutoff_still_wins_when_it_comes_first(
+    inventory: Database, slept: list[float]
+) -> None:
+    """A channel short enough to finish is completed, not capped."""
+    telegram = client(histories={NOTES.id: history(3)})
+
+    summary = await run(inventory, telegram, max_messages=100, limit=1)
+
+    state = await state_of(inventory, NOTES.id)
+    assert state is not None
+    assert state.cutoff_at == CUTOFF
+    assert summary.completed == 1
+    assert summary.capped == 0
+
+
+async def test_zero_lifts_the_ceiling(
+    inventory: Database, slept: list[float]
+) -> None:
+    telegram = client(histories={NOTES.id: history(40)})
+
+    summary = await run(
+        inventory, telegram, cutoff=DEEPER, max_messages=0, limit=1
+    )
+
+    assert len(await stored_ids(inventory, NOTES.id)) == 40
+    assert summary.completed == 1
+    assert summary.capped == 0
+
+
+async def test_the_walker_refuses_a_channel_already_at_its_ceiling(
+    inventory: Database, slept: list[float]
+) -> None:
+    """The same guard, for anything that calls the walker directly."""
+    telegram = client(histories={NOTES.id: history(40)})
+    await run(inventory, telegram, cutoff=DEEPER, max_messages=10, limit=1)
+
+    later = client(histories={NOTES.id: history(40)})
+    async with inventory.session() as session:
+        channel = await session.get(Channel, NOTES.id)
+        assert channel is not None
+        result = await backfill_channel(
+            later, session, channel, cutoff=DEEPER, max_messages=10
+        )
+
+    assert result.capped
+    assert result.stored == 0
+    # Not even the username was resolved.
+    assert later.resolved == []
+    assert later.windows == []
+
+
+async def test_the_ceiling_defaults_to_the_configured_one(
+    inventory: Database, slept: list[float], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No option means the configured ceiling, not an unbounded walk."""
+    from itgraph.config import settings
+
+    assert settings.backfill_max_messages == 2000
+    monkeypatch.setattr(settings, "backfill_max_messages", 5)
+    telegram = client(histories={NOTES.id: history(40)})
+
+    summary = await run(inventory, telegram, cutoff=DEEPER, limit=1)
+
+    assert len(await stored_ids(inventory, NOTES.id)) == 5
+    assert summary.capped == 1
+
+
 async def test_the_run_reports_what_it_did(
     inventory: Database, slept: list[float]
 ) -> None:
@@ -563,6 +740,7 @@ async def test_the_run_reports_what_it_did(
     summary = await run(inventory, telegram)
 
     assert summary.completed == 2
+    assert summary.capped == 0
     assert summary.skipped == 1
     assert summary.failed == 0
     assert summary.stored == 5

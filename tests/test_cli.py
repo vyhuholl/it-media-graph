@@ -297,6 +297,40 @@ def test_backfill_reports_what_it_did(
     assert "3 new messages" in result.output
 
 
+def test_backfill_caps_a_channel_at_max_messages(
+    monkeypatch: pytest.MonkeyPatch,
+    inventory: None,
+    dialog_records: list[dict[str, Any]],
+) -> None:
+    telegram = collector_client(dialog_records, posts=3)
+    use_telegram(monkeypatch, telegram)
+    no_sleeping(monkeypatch)
+
+    runner.invoke(app, ["dump-dialogs"])
+    runner.invoke(app, ["mark", str(KNOWN), "--seed"])
+
+    result = runner.invoke(
+        app,
+        ["backfill", "--since", "2026-05-01", "--max-messages", "1"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "1 new messages" in result.output
+    # Stopped by the ceiling rather than by the cutoff, and reported as
+    # such: the rest of that channel is not going to be collected.
+    assert "completed 0" in result.output
+    assert "capped 1" in result.output
+
+
+def test_backfill_rejects_a_negative_ceiling(inventory: None) -> None:
+    result = runner.invoke(
+        app,
+        ["backfill", "--since", "2026-05-01", "--max-messages", "-1"],
+    )
+
+    assert result.exit_code != 0
+
+
 def test_backfill_rejects_a_malformed_date(inventory: None) -> None:
     result = runner.invoke(app, ["backfill", "--since", "last tuesday"])
 

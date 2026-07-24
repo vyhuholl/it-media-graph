@@ -221,6 +221,16 @@ def backfill(
         int | None,
         typer.Option("--batch-size", help="Messages per request."),
     ] = None,
+    max_messages: Annotated[
+        int | None,
+        typer.Option(
+            "--max-messages",
+            help=(
+                "Never collect more than this many messages from one "
+                "channel, ever (0 for no ceiling)."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Fetch channel history into the raw layer. Resumable, and slow.
 
@@ -236,6 +246,10 @@ def backfill(
         raise typer.BadParameter(
             "--since is required, e.g. --since 2026-01-01"
         )
+    if max_messages is not None and max_messages < 0:
+        # Negative would otherwise read as "no ceiling", which is the
+        # opposite of what an operator typing a ceiling means.
+        raise typer.BadParameter("--max-messages cannot be negative")
     # Typer hands back a naive datetime; the column is timezone-aware and
     # comparing the two raises rather than silently guessing an offset.
     cutoff = since.replace(tzinfo=UTC)
@@ -254,6 +268,7 @@ def backfill(
                     limit=limit,
                     batch_size=batch_size,
                     request_delay=delay,
+                    max_messages=max_messages,
                 )
         finally:
             await database.dispose()
