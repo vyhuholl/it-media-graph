@@ -40,27 +40,47 @@ from itgraph.db.edges import (
     load_channel_index,
     truncate_derived,
 )
-from itgraph.db.models import DiscoverySource, EdgeKind, RawMessage
+from itgraph.db.models import (
+    Channel,
+    ChannelStatus,
+    DiscoverySource,
+    EdgeKind,
+    RawMessage,
+)
 from itgraph.db.session import Database
 from itgraph.derive.references import extract_references, forward_target
 
-__all__ = ["DeriveSummary", "derive_graph"]
+__all__ = ["DERIVATION_SOURCE_STATUSES", "DeriveSummary", "derive_graph"]
 
 logger = logging.getLogger(__name__)
+
+# The statuses whose stored history is read as a *source* of edges. Listed
+# rather than defined as "not rejected": the next value ``channel_status``
+# gains must be admitted or excluded on purpose. An allowlist forces that
+# by dropping the newcomer loudly — its edges vanish on the next rebuild —
+# where a denylist would admit it in silence, and for a table that grows
+# the inventory the noisy failure is the safer default.
+DERIVATION_SOURCE_STATUSES = (
+    ChannelStatus.CANDIDATE,
+    ChannelStatus.SEED,
+    ChannelStatus.MAYBE,
+)
 
 
 @dataclass(slots=True)
 class DeriveSummary:
     """What a derivation run produced, in the terms it is judged by."""
 
+    sources: int = 0
     edges: int = 0
     discovered: int = 0
     pending: int = 0
 
     def line(self) -> str:
         return (
-            f"{self.edges} edges written, {self.discovered} channels "
-            f"discovered, {self.pending} mentions left pending"
+            f"{self.sources} channels read, {self.edges} edges written, "
+            f"{self.discovered} channels discovered, "
+            f"{self.pending} mentions left pending"
         )
 
 
@@ -80,6 +100,14 @@ async def derive_graph(
 
     ``rebuild`` truncates the derived tables first; without it the run is
     additive, and idempotent against what is already stored.
+
+    Only in-scope channels are read as sources: status ``candidate``,
+    ``seed`` or ``maybe`` (see ``DERIVATION_SOURCE_STATUSES``), and never a
+    discussion chat. The predicate lives in the cursor, not the loop over
+    payloads, so an out-of-scope message is never read and no reference of
+    it can reach the discovery step. Targets are left unfiltered: an edge
+    to a rejected channel is still written, since a seed reposting a
+    rejected channel is a fact about the seed.
     """
     size = batch_size or settings.derive_batch_size
     summary = DeriveSummary()
@@ -97,11 +125,24 @@ async def derive_graph(
                     RawMessage.msg_id,
                     RawMessage.payload,
                 )
+                .join(Channel, Channel.tg_id == RawMessage.channel_id)
+                .where(
+                    Channel.status.in_(DERIVATION_SOURCE_STATUSES),
+                    Channel.is_chat.is_(False),
+                )
                 .order_by(RawMessage.channel_id, RawMessage.msg_id)
                 .execution_options(yield_per=size)
             )
             batch: list[Any] = []
+            # The stream is ordered by channel_id, so a new id is a new
+            # source; counting transitions reports how many channels were
+            # read without holding a set of them. A predicate that matches
+            # nothing then shows up as `0 channels read`.
+            last_source: int | None = None
             async for row in result:
+                if row.channel_id != last_source:
+                    summary.sources += 1
+                    last_source = row.channel_id
                 batch.append(row)
                 if len(batch) >= size:
                     await _flush(writer, batch, index, summary)

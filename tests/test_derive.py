@@ -26,6 +26,7 @@ from itgraph.db.models import (
     EdgeKind,
     PendingMention,
     RawMessage,
+    RejectReason,
 )
 from itgraph.db.raw import store_messages
 from itgraph.db.session import Database
@@ -34,6 +35,13 @@ from itgraph.derive.edges import derive_graph
 SRC = 1000000001
 KNOWN = 1000000002
 FWD_ONLY = 2000000001  # not in the inventory until a forward discovers it
+
+# Sources used only by the scope tests, each with stored history so the
+# filter is exercised against a channel that would otherwise produce edges.
+CANDIDATE_SRC = 3000000001  # in scope by status
+MAYBE_SRC = 3000000002  # in scope by status
+REJECTED_SRC = 3000000003  # out of scope: rejected
+CHAT_SRC = 3000000004  # out of scope: a discussion chat
 
 DATE = "2026-03-14T09:26:53+00:00"
 ORIGINAL_DATE = "2026-03-10T08:00:00+00:00"  # the referenced post's own date
@@ -184,6 +192,47 @@ async def pending_of(database: Database) -> set[str]:
         return set(
             (await session.scalars(select(PendingMention.username))).all()
         )
+
+
+async def add_channel(
+    session: Any,
+    tg_id: int,
+    *,
+    username: str,
+    status: ChannelStatus,
+    is_chat: bool = False,
+    reject_reason: RejectReason | None = None,
+) -> None:
+    """Add one inventory channel at a given status, for the scope tests.
+
+    ``rejected`` and ``is_chat`` are the two out-of-scope shapes the change
+    guards against; neither can be produced by hand today, which is why the
+    scope tests build them here rather than reusing the ``inventory``
+    fixture.
+    """
+    await upsert_channels(
+        session,
+        [DiscoveredChannel(tg_id, username, username.title(), is_chat)],
+        discovered_via=DiscoverySource.OWN_SUBSCRIPTIONS,
+    )
+    await mark_channel(
+        session, tg_id, status=status, reject_reason=reject_reason
+    )
+
+
+async def store_under(
+    session: Any, channel_id: int, *messages: dict[str, Any]
+) -> None:
+    """Store raw messages under an arbitrary source channel.
+
+    Like ``seed``, but not pinned to ``SRC`` — the scope tests need history
+    under several sources at once.
+    """
+    await store_messages(
+        session,
+        channel_id=channel_id,
+        payloads={payload["id"]: payload for payload in messages},
+    )
 
 
 # --- forwards --------------------------------------------------------
@@ -741,3 +790,193 @@ async def test_no_user_id_is_ever_written_to_a_derived_table(
         )
     assert edge_count == 0
     assert pending_count == 0
+
+
+# --- derivation scope ------------------------------------------------
+
+
+async def test_sources_are_selected_by_status(inventory: Database) -> None:
+    # Spec: only channels with status candidate, seed or maybe are read as
+    # sources; a rejected channel with stored history is not.
+    async with inventory.session() as session:
+        await add_channel(
+            session,
+            CANDIDATE_SRC,
+            username="cand_src",
+            status=ChannelStatus.CANDIDATE,
+        )
+        await add_channel(
+            session,
+            MAYBE_SRC,
+            username="maybe_src",
+            status=ChannelStatus.MAYBE,
+        )
+        await add_channel(
+            session,
+            REJECTED_SRC,
+            username="rej_src",
+            status=ChannelStatus.REJECTED,
+            reject_reason=RejectReason.NOT_IT,
+        )
+        # SRC is already a seed. Every source forwards the same known
+        # target, so each would produce an edge if it were read.
+        await store_under(session, SRC, raw(300, fwd=fwd_from_channel(KNOWN)))
+        await store_under(
+            session, CANDIDATE_SRC, raw(301, fwd=fwd_from_channel(KNOWN))
+        )
+        await store_under(
+            session, MAYBE_SRC, raw(302, fwd=fwd_from_channel(KNOWN))
+        )
+        await store_under(
+            session, REJECTED_SRC, raw(303, fwd=fwd_from_channel(KNOWN))
+        )
+
+    summary = await derive_graph(inventory)
+
+    sources = {src for src, _dst, _kind, _msg in await edges_of(inventory)}
+    assert sources == {SRC, CANDIDATE_SRC, MAYBE_SRC}
+    assert REJECTED_SRC not in sources
+    assert summary.sources == 3
+
+
+async def test_a_discussion_chat_is_never_a_source(
+    inventory: Database,
+) -> None:
+    # Spec: stored messages belonging to a discussion chat produce no edge,
+    # even when the chat's own status would otherwise be in scope.
+    async with inventory.session() as session:
+        await add_channel(
+            session,
+            CHAT_SRC,
+            username="chat_src",
+            status=ChannelStatus.SEED,
+            is_chat=True,
+        )
+        await store_under(
+            session, CHAT_SRC, raw(310, fwd=fwd_from_channel(KNOWN))
+        )
+
+    summary = await derive_graph(inventory)
+
+    assert await edges_of(inventory) == []
+    assert summary.sources == 0
+
+
+async def test_an_out_of_scope_source_discovers_nothing(
+    inventory: Database,
+) -> None:
+    # Spec: an out-of-scope source adds no channel to the inventory through
+    # its references, and records no username as pending.
+    async with inventory.session() as session:
+        await add_channel(
+            session,
+            REJECTED_SRC,
+            username="rej_src",
+            status=ChannelStatus.REJECTED,
+            reject_reason=RejectReason.NOT_IT,
+        )
+        await store_under(
+            session,
+            REJECTED_SRC,
+            raw(320, fwd=fwd_from_channel(FWD_ONLY)),
+            raw(
+                321, message="@newcomer", entities=[mention_entity("newcomer")]
+            ),
+        )
+
+    summary = await derive_graph(inventory)
+
+    assert await edges_of(inventory) == []
+    assert await pending_of(inventory) == set()
+    assert summary.discovered == 0
+    assert summary.pending == 0
+    assert summary.sources == 0
+    # The reference never reached the discovery step, so no row was created.
+    async with inventory.session() as session:
+        assert await session.get(Channel, FWD_ONLY) is None
+
+
+async def test_a_rejected_channel_is_still_a_valid_target(
+    inventory: Database,
+) -> None:
+    # Spec: an in-scope channel referencing a rejected one still records the
+    # edge — only sources are filtered, never targets.
+    async with inventory.session() as session:
+        await mark_channel(
+            session,
+            KNOWN,
+            status=ChannelStatus.REJECTED,
+            reject_reason=RejectReason.NOT_IT,
+        )
+        await store_under(session, SRC, raw(330, fwd=fwd_from_channel(KNOWN)))
+
+    summary = await derive_graph(inventory)
+
+    assert (SRC, KNOWN, "forward", 330) in await edges_of(inventory)
+    assert summary.edges == 1
+
+
+async def test_a_rejection_takes_effect_only_on_rebuild(
+    inventory: Database,
+) -> None:
+    # Spec: rejecting a source leaves its already-derived edges in place;
+    # only a rebuild, which truncates first, removes them.
+    async with inventory.session() as session:
+        await store_under(session, SRC, raw(340, fwd=fwd_from_channel(KNOWN)))
+
+    await derive_graph(inventory)
+    assert (SRC, KNOWN, "forward", 340) in await edges_of(inventory)
+
+    async with inventory.session() as session:
+        await mark_channel(
+            session,
+            SRC,
+            status=ChannelStatus.REJECTED,
+            reject_reason=RejectReason.NOT_IT,
+        )
+
+    # An ordinary run never deletes, so the stale edges remain, and the
+    # now-rejected source is no longer read.
+    additive = await derive_graph(inventory)
+    assert (SRC, KNOWN, "forward", 340) in await edges_of(inventory)
+    assert additive.sources == 0
+
+    # A rebuild truncates first, and re-derives from in-scope sources only.
+    await derive_graph(inventory, rebuild=True)
+    assert await edges_of(inventory) == []
+
+
+async def test_rebuild_retains_channels_discovered_through_a_rejected_source(
+    inventory: Database,
+) -> None:
+    # Spec: a channel that entered through a source since rejected keeps its
+    # row and its original discovery source across a rebuild.
+    async with inventory.session() as session:
+        await store_under(
+            session, SRC, raw(350, fwd=fwd_from_channel(FWD_ONLY))
+        )
+
+    first = await derive_graph(inventory)
+    assert first.discovered == 1
+    async with inventory.session() as session:
+        discovered = await session.get(Channel, FWD_ONLY)
+    assert discovered is not None
+    assert discovered.discovered_via is DiscoverySource.FORWARD
+
+    async with inventory.session() as session:
+        await mark_channel(
+            session,
+            SRC,
+            status=ChannelStatus.REJECTED,
+            reject_reason=RejectReason.NOT_IT,
+        )
+    await derive_graph(inventory, rebuild=True)
+
+    # The edge is gone (its source is out of scope now), but the channel it
+    # introduced survives, provenance intact — channels are never deleted.
+    assert await edges_of(inventory) == []
+    async with inventory.session() as session:
+        still = await session.get(Channel, FWD_ONLY)
+    assert still is not None
+    assert still.discovered_via is DiscoverySource.FORWARD
+    assert still.status is ChannelStatus.CANDIDATE
