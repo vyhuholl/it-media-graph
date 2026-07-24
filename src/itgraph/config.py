@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     # Deliberately slow. History arrives 100 messages per request, so a
     # first pass over 200 channels is a few thousand requests: hours at
     # this pacing, which is the point. Raise it only with a reason.
-    backfill_request_delay: float = 2.0
+    backfill_request_delay: float = 4.0
     backfill_batch_size: int = 100
     # How many messages one channel may ever contribute to the corpus.
     # Without it a handful of news aggregators posting dozens of times a
@@ -56,6 +56,12 @@ class Settings(BaseSettings):
     # reposted by nobody. Reaching it ends that channel for good, not
     # just for this run. 0 means no ceiling.
     backfill_max_messages: int = 2000
+
+    # Messages read per partition when deriving edges. Derivation touches
+    # no network, so this is a memory/round-trip trade, not a pacing one:
+    # large enough that the batch write amortizes, small enough that a run
+    # holds a bounded slice of the raw layer in memory at once.
+    derive_batch_size: int = 1000
 
     backup_dir: Path = DEFAULT_BACKUP_DIR
 

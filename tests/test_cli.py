@@ -354,3 +354,50 @@ def test_channels_can_show_backfill_state(
 
     assert result.exit_code == 0, result.output
     assert "complete to 2026-05-01" in result.output
+
+
+def test_derive_reports_what_it_did(
+    monkeypatch: pytest.MonkeyPatch,
+    inventory: None,
+    dialog_records: list[dict[str, Any]],
+) -> None:
+    """The derivation command runs off stored data and reports a summary.
+
+    The collected history here carries no forwards, so it derives no
+    edges — which is exactly the point: the command wires up and reports
+    without ever reaching for the network.
+    """
+    telegram = collector_client(dialog_records, posts=3)
+    use_telegram(monkeypatch, telegram)
+    no_sleeping(monkeypatch)
+
+    runner.invoke(app, ["dump-dialogs"])
+    runner.invoke(app, ["mark", str(KNOWN), "--seed"])
+    runner.invoke(app, ["backfill", "--since", "2026-05-01"])
+
+    result = runner.invoke(app, ["derive"])
+
+    assert result.exit_code == 0, result.output
+    assert "edges written" in result.output
+
+
+def test_resolve_reports_what_it_did(
+    monkeypatch: pytest.MonkeyPatch,
+    inventory: None,
+    dialog_records: list[dict[str, Any]],
+) -> None:
+    """Imported channels are already resolved, so a fresh run has no work.
+
+    Every dialog-imported channel carries a username, so it is born
+    resolved and the queue is empty — the command reports zero rather than
+    re-resolving what is already known.
+    """
+    use_telegram(monkeypatch, collector_client(dialog_records, posts=1))
+    no_sleeping(monkeypatch)
+
+    runner.invoke(app, ["dump-dialogs"])
+
+    result = runner.invoke(app, ["resolve"])
+
+    assert result.exit_code == 0, result.output
+    assert "resolved 0" in result.output

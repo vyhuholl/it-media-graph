@@ -226,11 +226,12 @@ async def test_re_fetching_does_not_duplicate(
 async def test_nothing_derived_is_written(
     inventory: Database, slept: list[float]
 ) -> None:
-    """A completed run leaves the raw layer and nothing else.
+    """A completed run writes the raw layer and touches nothing derived.
 
-    Edges, mentions, links and language all read this data and belong to
-    the derivation change; a table appearing here would mean parsing had
-    crept into the collector.
+    Edges and pending mentions belong to the derivation change; the
+    collector must leave them empty. Their tables exist in the schema now,
+    so the invariant is about rows, not about which tables are present: a
+    row in either would mean parsing had crept into the collector.
     """
     telegram = client(histories={NOTES.id: history(3)})
 
@@ -240,24 +241,13 @@ async def test_nothing_derived_is_written(
         # History did arrive — otherwise this passes vacuously.
         assert (await session.execute(select(RawMessage).limit(1))).first()
 
-        present = set(
-            (
-                await session.scalars(
-                    text(
-                        "SELECT table_name FROM information_schema.tables "
-                        "WHERE table_schema = 'public'"
-                    )
-                )
-            ).all()
+        edges = await session.scalar(text("SELECT count(*) FROM edges"))
+        pending = await session.scalar(
+            text("SELECT count(*) FROM pending_mentions")
         )
 
-    # Any table beyond these means parsing crept into the collector.
-    assert present == {
-        "channels",
-        "raw_messages",
-        "raw_channels",
-        "backfill_state",
-    }
+    assert edges == 0
+    assert pending == 0
 
 
 # --- depth and resumption -------------------------------------------

@@ -1,23 +1,4 @@
-# channel-inventory Specification
-
-## Purpose
-TBD - created by archiving change add-channel-inventory. Update Purpose after archive.
-## Requirements
-### Requirement: Telegram Session Authentication
-
-The system SHALL connect to Telegram using an existing Telethon session file and MUST NOT attempt an interactive login.
-
-#### Scenario: Authorized session present
-- **GIVEN** a session file at the configured path belonging to an authorized account
-- **WHEN** a command requiring Telegram access runs
-- **THEN** the client connects and the command proceeds
-
-#### Scenario: Session missing or unauthorized
-- **GIVEN** no session file, or one whose account is not authorized
-- **WHEN** a command requiring Telegram access runs
-- **THEN** the command exits with a non-zero status
-- **AND** the error points to the bootstrap instructions in the README
-- **AND** no prompt for a phone number, code or password is shown
+## MODIFIED Requirements
 
 ### Requirement: Channel Record
 
@@ -42,37 +23,6 @@ The system SHALL store one record per Telegram channel or chat, keyed by its Tel
 #### Scenario: Rejection cannot be reasonless
 - **WHEN** a record is written with status `rejected` and no rejection reason
 - **THEN** the write is refused at the database level
-
-### Requirement: Subscription Import
-
-The system SHALL provide `itgraph dump-dialogs`, importing every channel and chat
-the authorized account is subscribed to.
-
-#### Scenario: First run populates the inventory
-- **GIVEN** an empty inventory
-- **WHEN** the command runs
-- **THEN** every broadcast channel and group in the account's dialog list is inserted
-- **AND** each record has discovery source `own_subscriptions` and status `candidate`
-- **AND** the number of inserted records is reported
-
-#### Scenario: Private dialogs are not imported
-- **GIVEN** the dialog list contains direct messages, legacy group chats, and
-  channels without a public username
-- **WHEN** the command runs
-- **THEN** none of them are inserted into the inventory
-- **AND** the number of skipped dialogs is reported, without their titles
-
-#### Scenario: Re-running preserves review work
-- **GIVEN** an inventory in which some channels have already been reviewed
-- **WHEN** the command runs again
-- **THEN** username and title are refreshed from Telegram
-- **AND** status, kind, rejection reason and review timestamp are left unchanged
-- **AND** the discovery source of existing records is left unchanged
-
-#### Scenario: Unsubscribing does not remove a record
-- **GIVEN** a channel in the inventory that is no longer in the dialog list
-- **WHEN** the command runs
-- **THEN** the record is retained unchanged
 
 ### Requirement: Manual Review
 
@@ -123,26 +73,3 @@ The system SHALL provide `itgraph mark`, recording the review outcome for a sing
 - **WHEN** the review queue is built
 - **THEN** it is excluded from the queue
 - **AND** it enters the queue once resolved
-
-### Requirement: Records Are Never Deleted
-
-The system SHALL retain every discovered channel, including rejected ones, and MUST NOT delete channel records.
-
-#### Scenario: Rejected channels remain queryable
-- **WHEN** the inventory is queried without a status filter
-- **THEN** rejected channels are included in the result
-
-### Requirement: Inventory Listing
-
-The system SHALL provide `itgraph channels`, showing the inventory so review
-progress is visible.
-
-#### Scenario: Listing by status
-- **WHEN** the command runs with a status filter
-- **THEN** only channels with that status are listed
-- **AND** each row shows id, username, title, status and kind
-
-#### Scenario: Progress summary
-- **WHEN** the command runs without a filter
-- **THEN** a count per status is reported
-

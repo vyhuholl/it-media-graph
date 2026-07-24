@@ -14,10 +14,13 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Integer,
     MetaData,
     Text,
+    UniqueConstraint,
     false,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -30,7 +33,10 @@ __all__ = [
     "ChannelKind",
     "ChannelStatus",
     "DiscoverySource",
+    "Edge",
+    "EdgeKind",
     "FailureKind",
+    "PendingMention",
     "RawChannel",
     "RawMessage",
     "RejectReason",
@@ -110,6 +116,21 @@ class DiscoverySource(enum.StrEnum):
     MENTION = "mention"
     MANUAL = "manual"
     LINKED_CHAT = "linked_chat"
+
+
+class EdgeKind(enum.StrEnum):
+    """What kind of reference an edge records.
+
+    ``FORWARD`` is a repost carrying the origin channel's id; ``MENTION``
+    is a reference by ``@username`` or ``t.me`` link. Both point from the
+    referencing channel to the referenced one. Values a later derivation
+    might add — a reply, a comment — are not declared here: unlike
+    discovery sources, a new edge kind is a new derivation, and it can
+    afford the enum migration it comes with.
+    """
+
+    FORWARD = "forward"
+    MENTION = "mention"
 
 
 class BackfillStatus(enum.StrEnum):
@@ -213,6 +234,23 @@ class Channel(Base):
     last_post_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
+
+    # Resolution state. A channel discovered by forward carries only its
+    # id; `itgraph resolve` fills in username and title from Telegram and
+    # stamps `resolved_at`. `resolved_at IS NULL` is the whole "still
+    # needs resolving" predicate — the same shape `reviewed_at` uses for
+    # review. Attempts are counted so a cache miss (see the resolve pass)
+    # is retried on demand rather than treated as a permanent verdict.
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    resolve_attempts: Mapped[int] = mapped_column(
+        Integer, server_default=text("0")
+    )
+    resolve_last_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    resolve_last_error: Mapped[str | None] = mapped_column(Text)
 
     def __repr__(self) -> str:
         return (
@@ -328,3 +366,95 @@ class BackfillState(Base):
             f"status={self.status.value!r}, "
             f"oldest_fetched_id={self.oldest_fetched_id})"
         )
+
+
+class Edge(Base):
+    """One observed reference from one channel to another.
+
+    An observation, not an aggregate: a channel that reposts another ten
+    times is ten rows, each carrying the message it came from and when it
+    was published. Weights, decay and clustering are computed from these
+    rows and never stored here — that is the analysis this table feeds,
+    not part of it.
+
+    The natural key is ``(src, msg_id, kind, dst)``: one message can
+    forward from a channel and also mention it, and both are real, but the
+    same message mentioning the same channel twice is one edge. Rows are
+    inserted with ``ON CONFLICT DO NOTHING``, so re-deriving over
+    unchanged raw data writes nothing.
+
+    Only channel ids appear here. User ids from ``fwd_from`` and signed
+    posts are dropped at the derivation boundary and stay in the raw
+    layer, which is never exported — that is what keeps this table safe to
+    visualize and share.
+    """
+
+    __tablename__ = "edges"
+    __table_args__ = (
+        UniqueConstraint(
+            "src_channel_id",
+            "msg_id",
+            "kind",
+            "dst_channel_id",
+            name="observed_reference",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+
+    src_channel_id: Mapped[int] = mapped_column(
+        ForeignKey("channels.tg_id", ondelete="CASCADE"), index=True
+    )
+    dst_channel_id: Mapped[int] = mapped_column(
+        ForeignKey("channels.tg_id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[EdgeKind] = mapped_column(_pg_enum(EdgeKind, "edge_kind"))
+
+    # The referencing message, in the raw layer's per-channel numbering,
+    # and its publication date — every time-decayed analysis reads this.
+    msg_id: Mapped[int] = mapped_column(BigInteger)
+    published_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    derived_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"Edge(src={self.src_channel_id}, dst={self.dst_channel_id}, "
+            f"kind={self.kind.value!r}, msg_id={self.msg_id})"
+        )
+
+
+class PendingMention(Base):
+    """A username mentioned somewhere, not yet a channel in the inventory.
+
+    A forward names an id, which is a channel's primary key, so its row is
+    created in the same pass. A mention names only a ``@username``, which
+    resolves to no id without a Telegram lookup — so it waits here,
+    keyed by the normalized username, until ``itgraph resolve`` turns it
+    into a channel. The *next* derivation run then writes the edge.
+
+    This keeps unresolved state out of ``edges``: the table analysis reads
+    never carries a half-known endpoint that every consumer would have to
+    filter out.
+    """
+
+    __tablename__ = "pending_mentions"
+
+    # Lowercased, without the leading `@` — the same normalization the
+    # channel lookup uses, so a username here and a username there agree.
+    username: Mapped[str] = mapped_column(Text, primary_key=True)
+
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    attempts: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    last_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+    def __repr__(self) -> str:
+        return f"PendingMention(username={self.username!r})"

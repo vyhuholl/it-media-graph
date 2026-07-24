@@ -19,7 +19,7 @@ Keep **collection** and **analysis** strictly separate. The collector writes raw
 
 ## Storage
 
-PostgreSQL, nothing exotic. `raw_messages(channel_id, msg_id, payload jsonb, fetched_at)` plus normalized tables `channels / messages / edges(src, dst, type, ts, weight)`. Separately, **snapshots** `message_metrics(msg_id, ts, views, forwards, reactions jsonb)` — without them there is no spike detection and no retrospective analysis.
+PostgreSQL, nothing exotic. `raw_messages(channel_id, msg_id, payload jsonb, fetched_at)` plus normalized tables `channels / messages / edges(src, dst, type, ts)`. Separately, **snapshots** `message_metrics(msg_id, ts, views, forwards, reactions jsonb)` — without them there is no spike detection and no retrospective analysis.
 
 No graph database. At the scale of a few thousand channels, Postgres plus an in-memory export to `networkx`/`igraph` covers everything.
 

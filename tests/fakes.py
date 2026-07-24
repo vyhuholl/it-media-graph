@@ -5,6 +5,36 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from telethon.errors import FloodWaitError
+from telethon.tl.types import Channel as TLChannel
+from telethon.tl.types import User as TLUser
+
+
+def tl_channel(
+    tg_id: int,
+    *,
+    username: str | None = None,
+    title: str = "",
+    megagroup: bool = False,
+) -> TLChannel:
+    """A real Telethon ``Channel``, so ``isinstance`` checks are honest.
+
+    Resolution accepts only a genuine ``Channel``; the fake must return
+    the real type, not a look-alike, or the acceptance test proves
+    nothing.
+    """
+    return TLChannel(
+        id=tg_id,
+        title=title,
+        photo=None,
+        date=datetime(2026, 1, 1, tzinfo=UTC),
+        username=username,
+        megagroup=megagroup,
+    )
+
+
+def tl_user(tg_id: int, *, bot: bool = False) -> TLUser:
+    """A real Telethon ``User`` — what a mention of a person resolves to."""
+    return TLUser(id=tg_id, bot=bot)
 
 
 class FakeEntity:
@@ -225,19 +255,28 @@ class FakeTelegramClient:
         records: list[dict[str, Any]] | None = None,
         *,
         entities: dict[str, FakeChannel] | None = None,
+        entities_by_id: dict[int, Any] | None = None,
         full_channels: dict[int, FakeFullChannel] | None = None,
         histories: dict[int, list[FakeHistoryMessage]] | None = None,
         flood_on_window: dict[int, int] | None = None,
+        resolve_floods: dict[str | int, int] | None = None,
         raises: BaseException | None = None,
     ) -> None:
         self.records = records or []
         self.entities = entities or {}
+        # Resolution by id reaches here: a channel discovered by forward
+        # is looked up through a `PeerChannel`, keyed by its channel id.
+        self.entities_by_id = entities_by_id or {}
         self.full_channels = full_channels or {}
         self.histories = histories or {}
         # window index -> seconds to claim the flood will last
         self.flood_on_window = flood_on_window or {}
+        # lookup key (username or id) -> seconds to flood, once, before
+        # the retry succeeds.
+        self.resolve_floods = resolve_floods or {}
+        self._flooded: set[str | int] = set()
         self.raises = raises
-        self.resolved: list[str] = []
+        self.resolved: list[str | int] = []
         self.requests: list[Any] = []
         self.windows: list[tuple[int, int, int]] = []
         self.downloads: list[Any] = []
@@ -272,14 +311,32 @@ class FakeTelegramClient:
 
         return dialogs()
 
-    async def get_entity(self, username: str) -> FakeChannel:
-        self.resolved.append(username)
+    async def get_entity(self, ref: Any) -> Any:
+        # A username is a str; a channel id arrives as a `PeerChannel`
+        # (or a bare int). The key is what a test asserts was asked for.
+        if isinstance(ref, str | int):
+            key: str | int = ref
+        else:
+            key = ref.channel_id
+        self.resolved.append(key)
+
+        flood = self.resolve_floods.get(key)
+        if flood is not None and key not in self._flooded:
+            self._flooded.add(key)
+            raise FloodWaitError(request=None, capture=flood)
+
         if self.raises is not None:
             raise self.raises
+
+        if isinstance(ref, str):
+            try:
+                return self.entities[ref]
+            except KeyError:
+                raise ValueError(f"no entity @{ref}") from None
         try:
-            return self.entities[username]
+            return self.entities_by_id[key]
         except KeyError:
-            raise ValueError(f"no entity @{username}") from None
+            raise ValueError(f"no entity for id {key}") from None
 
     async def __call__(self, request: Any) -> Any:
         self.requests.append(request)

@@ -26,11 +26,15 @@ __all__ = [
     "ChannelNotFoundError",
     "DiscoveredChannel",
     "UpsertCounts",
+    "channels_awaiting_resolution",
     "count_by_status",
+    "create_resolved_channel",
     "find_channel",
     "link_discussion_chat",
     "list_channels",
     "mark_channel",
+    "record_channel_resolve_failure",
+    "record_channel_resolved",
     "upsert_channels",
 ]
 
@@ -106,7 +110,14 @@ async def upsert_channels(
     First discovery wins: ``discovered_via``, ``first_seen_at`` and every
     review field of an existing row are left alone. Re-running an import
     must never cost the operator a review they already did.
+
+    A channel imported with a username is known — it is born resolved, so
+    it never enters the resolution queue. One imported without a username
+    (a bare linked chat) is left awaiting resolution. On conflict the
+    existing resolved state is preserved, and only filled in if a row
+    discovered by reference is now, by this import, known by name.
     """
+    now = datetime.now(UTC)
     # One row per id: Postgres refuses to let a single ON CONFLICT
     # statement touch the same row twice.
     rows = {
@@ -116,6 +127,7 @@ async def upsert_channels(
             "title": channel.title,
             "is_chat": channel.is_chat,
             "discovered_via": discovered_via,
+            "resolved_at": now if channel.username else None,
         }
         for channel in channels
     }
@@ -128,6 +140,9 @@ async def upsert_channels(
         set_={
             "username": statement.excluded.username,
             "title": statement.excluded.title,
+            "resolved_at": func.coalesce(
+                Channel.resolved_at, statement.excluded.resolved_at
+            ),
         },
     )
     # xmax is zero only on a freshly inserted row; on the update path it
@@ -235,6 +250,122 @@ async def list_channels(
     if status is not None:
         statement = statement.where(Channel.status == status)
     return (await session.scalars(statement)).all()
+
+
+async def channels_awaiting_resolution(
+    session: AsyncSession,
+    *,
+    retry_failed: bool = False,
+    limit: int | None = None,
+) -> Sequence[Channel]:
+    """Channels that entered by reference and still lack an identity.
+
+    The queue is ``resolved_at IS NULL``. A channel a previous run failed
+    on — a cache miss, since resolving a bare id needs an ``access_hash``
+    the session may not have yet — is skipped by default and only revisited
+    under ``retry_failed``: a later backfill may have taught the session
+    that hash, so the failure is provisional, not final.
+
+    Ordered by id so a bounded run covers the same channels in the same
+    order across sittings.
+    """
+    statement = select(Channel).where(Channel.resolved_at.is_(None))
+    if not retry_failed:
+        statement = statement.where(Channel.resolve_attempts == 0)
+    statement = statement.order_by(Channel.tg_id)
+    if limit is not None:
+        statement = statement.limit(limit)
+    return (await session.scalars(statement)).all()
+
+
+async def record_channel_resolved(
+    session: AsyncSession,
+    tg_id: int,
+    *,
+    username: str | None,
+    title: str | None,
+    is_chat: bool,
+) -> None:
+    """Store a resolved identity and stamp the channel resolved.
+
+    Setting ``resolved_at`` is what takes the row out of the resolution
+    queue and — now that it has a username — puts it into the review one.
+    """
+    now = datetime.now(UTC)
+    await session.execute(
+        update(Channel)
+        .where(Channel.tg_id == tg_id)
+        .values(
+            username=username,
+            title=title,
+            is_chat=is_chat,
+            resolved_at=now,
+            resolve_last_attempt_at=now,
+            resolve_last_error=None,
+        )
+    )
+
+
+async def record_channel_resolve_failure(
+    session: AsyncSession, tg_id: int, error: str
+) -> None:
+    """Count a failed attempt and store why, without resolving the row.
+
+    The row keeps ``resolved_at IS NULL``, so it stays out of the review
+    queue; the bumped attempt count keeps it out of routine resolution
+    until ``retry_failed`` asks for it.
+    """
+    now = datetime.now(UTC)
+    await session.execute(
+        update(Channel)
+        .where(Channel.tg_id == tg_id)
+        .values(
+            resolve_attempts=Channel.resolve_attempts + 1,
+            resolve_last_attempt_at=now,
+            # Truncated: a driver traceback in a status column helps
+            # nobody, and the log has the whole thing.
+            resolve_last_error=error[:500],
+        )
+    )
+
+
+async def create_resolved_channel(
+    session: AsyncSession,
+    *,
+    channel: DiscoveredChannel,
+    discovered_via: DiscoverySource,
+) -> None:
+    """Create — or refresh — a channel whose identity is already known.
+
+    Used when a pending mention resolves: the lookup returned a full
+    identity, so the new row is stamped resolved at once rather than
+    queued to resolve itself. A channel that already exists (discovered by
+    an earlier forward, say) keeps its provenance, status and first-seen
+    time; only its identity and resolved state are refreshed.
+    """
+    now = datetime.now(UTC)
+    statement = insert(Channel).values(
+        tg_id=channel.tg_id,
+        username=channel.username,
+        title=channel.title,
+        is_chat=channel.is_chat,
+        discovered_via=discovered_via,
+        resolved_at=now,
+        resolve_last_attempt_at=now,
+    )
+    await session.execute(
+        statement.on_conflict_do_update(
+            index_elements=[Channel.tg_id],
+            set_={
+                "username": statement.excluded.username,
+                "title": statement.excluded.title,
+                "is_chat": statement.excluded.is_chat,
+                "resolved_at": statement.excluded.resolved_at,
+                "resolve_last_attempt_at": statement.excluded.resolve_last_attempt_at,
+                "resolve_last_error": None,
+            },
+        )
+    )
 
 
 async def count_by_status(session: AsyncSession) -> dict[ChannelStatus, int]:

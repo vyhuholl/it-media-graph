@@ -278,6 +278,92 @@ def backfill(
 
 
 @app.command()
+def derive(
+    rebuild: Annotated[
+        bool,
+        typer.Option(
+            "--rebuild",
+            help="Empty the derived tables first, then rebuild from scratch.",
+        ),
+    ] = False,
+    batch_size: Annotated[
+        int | None,
+        typer.Option("--batch-size", help="Messages read per batch."),
+    ] = None,
+) -> None:
+    """Derive the edge graph from the raw layer.
+
+    Reads stored messages and writes forward and mention edges. Touches no
+    network and is safe to re-run at any time: a pass over unchanged raw
+    data writes nothing. Mention edges to a not-yet-known channel appear
+    only after `itgraph resolve` turns the username into a channel and
+    this command runs again.
+    """
+    from itgraph.db.session import Database
+    from itgraph.derive.edges import derive_graph
+
+    async def run() -> None:
+        database = Database()
+        try:
+            summary = await derive_graph(
+                database, batch_size=batch_size, rebuild=rebuild
+            )
+        finally:
+            await database.dispose()
+        typer.echo(summary.line())
+
+    _run(run())
+
+
+@app.command()
+def resolve(
+    retry_failed: Annotated[
+        bool,
+        typer.Option(
+            "--retry-failed",
+            help="Also retry references a previous run could not resolve.",
+        ),
+    ] = False,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", help="Make at most this many requests."),
+    ] = None,
+    delay: Annotated[
+        float | None,
+        typer.Option("--delay", help="Seconds between requests."),
+    ] = None,
+) -> None:
+    """Fill in username and title for channels discovered by reference.
+
+    The only command here that talks to Telegram, and it obeys the same
+    pacing and FloodWait rules as `backfill`. It resolves channels found
+    by forward (by id) and usernames left pending by a mention. Run
+    `derive` again afterwards to write the mention edges the newly
+    resolved channels unblock.
+    """
+    from itgraph.db.session import Database
+    from itgraph.tg.client import connected
+    from itgraph.tg.resolve import resolve_inventory
+
+    async def run() -> None:
+        database = Database()
+        try:
+            async with connected() as client:
+                summary = await resolve_inventory(
+                    client,
+                    database,
+                    retry_failed=retry_failed,
+                    delay=delay,
+                    limit=limit,
+                )
+        finally:
+            await database.dispose()
+        typer.echo(summary.line())
+
+    _run(run())
+
+
+@app.command()
 def backup(
     full: Annotated[
         bool,

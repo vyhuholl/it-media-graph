@@ -1,6 +1,5 @@
 # src/itgraph
-Collection and storage layer for the IT-media channel graph: the Telegram client,
-raw ingestion, database models, and the CLI that drives them.
+Collection and storage layer for the IT-media channel graph: the Telegram client, raw ingestion, database models, and the CLI that drives them.
 
 Module map and local conventions. Project-wide rules live in the root `CLAUDE.md`.
 
@@ -14,10 +13,15 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `tg/payload.py` | Telethon objects → JSON-safe payloads; the only place that touches payload shape |
 | `tg/full_channel.py` | The per-channel metadata pass, and the linked chat it resolves |
 | `tg/backfill.py` | The history walk: pacing, resumption, FloodWait, failure classification |
+| `tg/resolve.py` | The resolution pass: username and title for channels found by reference |
 | `tg/` | MTProto collection: fetch and store raw payloads |
+| `derive/references.py` | Pure parsing of a payload into the channels it references |
+| `derive/edges.py` | The derivation pass: raw messages → edges; touches no network |
+| `derive/` | Deriving graph data from the raw layer |
 | `db/session.py` | `Database`: engine + session factory |
 | `db/models.py` | SQLAlchemy models, `Base` |
-| `db/channels.py` | The channel inventory: upsert, review, listing |
+| `db/channels.py` | The channel inventory: upsert, review, listing, resolution state |
+| `db/edges.py` | The derived tables: `edges` and `pending_mentions` |
 | `db/raw.py` | Writes into the raw layer; nothing here reads a payload |
 | `db/backfill.py` | Which channels to walk, how far each got, and why one stopped |
 | `db/backup.py` | Dumps, the schedule that picks which, and the pruning |
@@ -25,10 +29,8 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `db/migrations/` | Alembic revisions (async template) |
 
 ## Conventions
-- Read settings via `from itgraph.config import settings`. Nothing else touches
-  `os.environ`.
-- New CLI command: argument parsing in `cli.py`, logic in its own module. Keep
-  command bodies short enough to read at a glance.
+- Read settings via `from itgraph.config import settings`. Nothing else touches `os.environ`.
+- New CLI command: argument parsing in `cli.py`, logic in its own module. Keep command bodies short enough to read at a glance.
 - DB sessions come from the factory in `db/`; no module-level engine, no globals.
 - Anything that parses, derives or aggregates lives outside `tg/`.
 - `logging` for diagnostics, typer's `echo` for user-facing CLI output. No `print`.
