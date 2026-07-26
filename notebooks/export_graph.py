@@ -3,8 +3,7 @@
 Exploratory tooling: not part of the package, not spec'd, not tested. Look at
 the picture, change the constants, look again, throw it away.
 
-    uv add --dev "psycopg[binary]" networkx
-    uv run python notebooks/export_graph.py
+    uv run notebooks/export_graph.py
 
 Only seed -> seed edges are exported. Channels discovered by reference have no
 outgoing edges yet — not because they have none, but because their history has
@@ -21,7 +20,6 @@ DSN = "postgresql://itgraph:itgraph@localhost:5433/itgraph"
 OUT = "seed_graph.gexf"
 
 HALF_LIFE_DAYS = 90.0
-KIND: str | None = "forward"  # None for forwards + mentions together
 
 NODES = """
     SELECT tg_id, username, title, kind::text
@@ -34,7 +32,6 @@ EDGES = """
     FROM edges e
     JOIN channels s ON s.tg_id = e.src_channel_id AND s.status = 'seed'
     JOIN channels d ON d.tg_id = e.dst_channel_id AND d.status = 'seed'
-    WHERE (%(kind)s::text IS NULL OR e.kind::text = %(kind)s::text)
 """
 
 
@@ -56,7 +53,7 @@ def main() -> None:
                 kind=kind or "",
             )
 
-        for src, dst, published_at in conn.execute(EDGES, {"kind": KIND}):
+        for src, dst, published_at in conn.execute(EDGES):
             u, v = str(src), str(dst)
             w = decay(published_at, now)
             if g.has_edge(u, v):

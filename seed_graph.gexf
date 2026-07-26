@@ -1,0 +1,1021 @@
+<?xml version='1.0' encoding='utf-8'?>
+<gexf xmlns="http://www.gexf.net/1.2draft" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.gexf.net/1.2draft http://www.gexf.net/1.2draft/gexf.xsd" version="1.2">
+  <meta lastmodifieddate="2026-07-26">
+    <creator>NetworkX 3.6.1</creator>
+  </meta>
+  <graph defaultedgetype="directed" mode="static" name="">
+    <attributes mode="static" class="edge">
+      <attribute id="2" title="count" type="long" />
+    </attributes>
+    <attributes mode="static" class="node">
+      <attribute id="0" title="username" type="string" />
+      <attribute id="1" title="kind" type="string" />
+    </attributes>
+    <nodes>
+      <node id="1071014162" label="Moscow Python">
+        <attvalues>
+          <attvalue for="0" value="moscow_python" />
+          <attvalue for="1" value="community" />
+        </attvalues>
+      </node>
+      <node id="1269722631" label="T-Crew">
+        <attvalues>
+          <attvalue for="0" value="t_crew" />
+          <attvalue for="1" value="company" />
+        </attvalues>
+      </node>
+      <node id="3873974484" label="Территория AI">
+        <attvalues>
+          <attvalue for="0" value="ai_bay" />
+          <attvalue for="1" value="community" />
+        </attvalues>
+      </node>
+      <node id="1005993407" label="addmeto">
+        <attvalues>
+          <attvalue for="0" value="addmeto" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1466120158" label="эйай ньюз">
+        <attvalues>
+          <attvalue for="0" value="ai_newz" />
+          <attvalue for="1" value="aggregator" />
+        </attvalues>
+      </node>
+      <node id="1051500113" label="Denis Sexy IT 🤖">
+        <attvalues>
+          <attvalue for="0" value="denissexy" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1150855655" label="gonzo-обзоры ML статей">
+        <attvalues>
+          <attvalue for="0" value="gonzo_ML" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1780707547" label="Рекрутинг, котики и апокалипсис (Кира Кузьменко)">
+        <attvalues>
+          <attvalue for="0" value="kirafound" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1165814759" label="Яндекс нанимает | Вакансии для разработчиков">
+        <attvalues>
+          <attvalue for="0" value="ya_jobs" />
+          <attvalue for="1" value="vacancies" />
+        </attvalues>
+      </node>
+      <node id="1170868593" label="Набока орёт в борщ | 🌋">
+        <attvalues>
+          <attvalue for="0" value="onaboka" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1178238337" label="Борис опять">
+        <attvalues>
+          <attvalue for="0" value="boris_again" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1322005976" label="RemoteGeekjob">
+        <attvalues>
+          <attvalue for="0" value="remotegeekjob" />
+          <attvalue for="1" value="vacancies" />
+        </attvalues>
+      </node>
+      <node id="1381822968" label="Job for Python">
+        <attvalues>
+          <attvalue for="0" value="forpython" />
+          <attvalue for="1" value="vacancies" />
+        </attvalues>
+      </node>
+      <node id="1389399945" label="Positive Technologies">
+        <attvalues>
+          <attvalue for="0" value="Positive_Technologies" />
+          <attvalue for="1" value="company" />
+        </attvalues>
+      </node>
+      <node id="1511414765" label="Сиолошная">
+        <attvalues>
+          <attvalue for="0" value="seeallochnaya" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1576403059" label="Neurogen">
+        <attvalues>
+          <attvalue for="0" value="neurogen_news" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1798534821" label="MAGNIT TECH career">
+        <attvalues>
+          <attvalue for="0" value="magnittech" />
+          <attvalue for="1" value="vacancies" />
+        </attvalues>
+      </node>
+      <node id="1728068565" label="Территория AI">
+        <attvalues>
+          <attvalue for="0" value="territoriya_AI" />
+          <attvalue for="1" value="community" />
+        </attvalues>
+      </node>
+      <node id="1868423109" label="Эдгар Сипки">
+        <attvalues>
+          <attvalue for="0" value="zergslaw_channel" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1880188397" label="Откровения от Олега">
+        <attvalues>
+          <attvalue for="0" value="tg_1red2black" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1943579488" label="LLM под капотом">
+        <attvalues>
+          <attvalue for="0" value="llm_under_hood" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="2102826919" label="IT Portal">
+        <attvalues>
+          <attvalue for="0" value="IT_Portal" />
+          <attvalue for="1" value="aggregator" />
+        </attvalues>
+      </node>
+      <node id="2182541317" label="Data Secrets | Карьера">
+        <attvalues>
+          <attvalue for="0" value="data_secrets_career" />
+          <attvalue for="1" value="vacancies" />
+        </attvalues>
+      </node>
+      <node id="2232794854" label="Acid Crunch — AI, GameDev, R&amp;D, нейросети и GPT хаки">
+        <attvalues>
+          <attvalue for="0" value="AcidCrunch" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="2416283284" label="Роман Тетюркин | Доктрина ИИ">
+        <attvalues>
+          <attvalue for="0" value="mainherolab" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1032086354" label="Хабр">
+        <attvalues>
+          <attvalue for="0" value="habr_com" />
+          <attvalue for="1" value="aggregator" />
+        </attvalues>
+      </node>
+      <node id="1223541233" label="Yandex for Developers">
+        <attvalues>
+          <attvalue for="0" value="Yandex4Developers" />
+          <attvalue for="1" value="company" />
+        </attvalues>
+      </node>
+      <node id="1276888564" label="Selectel [команда]">
+        <attvalues>
+          <attvalue for="0" value="selectelcareers" />
+          <attvalue for="1" value="vacancies" />
+        </attvalues>
+      </node>
+      <node id="1341326876" label="AbstractDL">
+        <attvalues>
+          <attvalue for="0" value="abstractDL" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1343774152" label="Системный Блокъ">
+        <attvalues>
+          <attvalue for="0" value="sysblok" />
+          <attvalue for="1" value="media" />
+        </attvalues>
+      </node>
+      <node id="1433806174" label="Yandex for ML">
+        <attvalues>
+          <attvalue for="0" value="yandexforml" />
+          <attvalue for="1" value="company" />
+        </attvalues>
+      </node>
+      <node id="1454077785" label="Neural Shit">
+        <attvalues>
+          <attvalue for="0" value="NeuralShit" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1477843447" label="Мы обречены">
+        <attvalues>
+          <attvalue for="0" value="myobrechenychannel" />
+          <attvalue for="1" value="media" />
+        </attvalues>
+      </node>
+      <node id="1556862154" label="Градиент обреченный">
+        <attvalues>
+          <attvalue for="0" value="doomgrad" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1577094346" label="ProIT Fest">
+        <attvalues>
+          <attvalue for="0" value="proitfest" />
+          <attvalue for="1" value="event" />
+        </attvalues>
+      </node>
+      <node id="1616698413" label="Avito Career">
+        <attvalues>
+          <attvalue for="0" value="avito_career" />
+          <attvalue for="1" value="vacancies" />
+        </attvalues>
+      </node>
+      <node id="1632569361" label="Техножрица 👩‍💻👩‍🏫👩‍🔧">
+        <attvalues>
+          <attvalue for="0" value="tech_priestess" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1823620813" label="nlp_daily">
+        <attvalues>
+          <attvalue for="0" value="nlp_daily" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1868919653" label="Yandex for Backend">
+        <attvalues>
+          <attvalue for="0" value="yandexforbackend" />
+          <attvalue for="1" value="company" />
+        </attvalues>
+      </node>
+      <node id="1998280831" label="Кибердом">
+        <attvalues>
+          <attvalue for="0" value="cyberdom_business" />
+          <attvalue for="1" value="aggregator" />
+        </attvalues>
+      </node>
+      <node id="2326550150" label="Better Call Lory">
+        <attvalues>
+          <attvalue for="0" value="bettercalllory" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="2400996678" label="Брейндамп от Олега (МИКРОВАЙБОВЫЙ СЛОЙ ЗАШКВАРА КАБА`НОВ)">
+        <attvalues>
+          <attvalue for="0" value="braindump_1red2black" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="2595582809" label="IT cваха">
+        <attvalues>
+          <attvalue for="0" value="svahait" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1067797620" label="AvitoTech">
+        <attvalues>
+          <attvalue for="0" value="avitotech" />
+          <attvalue for="1" value="company" />
+        </attvalues>
+      </node>
+      <node id="1233907704" label="Находки в опенсорсе">
+        <attvalues>
+          <attvalue for="0" value="opensource_findings" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1257074146" label="DLStories">
+        <attvalues>
+          <attvalue for="0" value="dl_stories" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="3059283110" label="Debug Skills">
+        <attvalues>
+          <attvalue for="0" value="DebugSkills" />
+          <attvalue for="1" value="community" />
+        </attvalues>
+      </node>
+      <node id="3191393066" label="Roman Doronin | AI for Friends">
+        <attvalues>
+          <attvalue for="0" value="doronin_aiforfriends" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1305323621" label="АйТиБорода">
+        <attvalues>
+          <attvalue for="0" value="itbeard" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1442579184" label="X5 Tech">
+        <attvalues>
+          <attvalue for="0" value="x5_tech" />
+          <attvalue for="1" value="company" />
+        </attvalues>
+      </node>
+      <node id="1476882161" label="Код Желтый">
+        <attvalues>
+          <attvalue for="0" value="kod_zheltyi" />
+          <attvalue for="1" value="company" />
+        </attvalues>
+      </node>
+      <node id="1490055498" label="Культурный датасайнс (Даня Скоринкин)">
+        <attvalues>
+          <attvalue for="0" value="fckndh" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1680781925" label="Нескучный Data Science">
+        <attvalues>
+          <attvalue for="0" value="not_boring_ds" />
+          <attvalue for="1" value="community" />
+        </attvalues>
+      </node>
+      <node id="1690011844" label="Ozon Tech">
+        <attvalues>
+          <attvalue for="0" value="ozon_tech" />
+          <attvalue for="1" value="company" />
+        </attvalues>
+      </node>
+      <node id="1767764126" label="Lamoda Tech">
+        <attvalues>
+          <attvalue for="0" value="latech" />
+          <attvalue for="1" value="company" />
+        </attvalues>
+      </node>
+      <node id="1820144498" label="Все в ШАД!">
+        <attvalues>
+          <attvalue for="0" value="vse_v_shad" />
+          <attvalue for="1" value="community" />
+        </attvalues>
+      </node>
+      <node id="1891111916" label="AI da Code">
+        <attvalues>
+          <attvalue for="0" value="aidacode" />
+          <attvalue for="1" value="aggregator" />
+        </attvalues>
+      </node>
+      <node id="2015800238" label="Старший Авгур">
+        <attvalues>
+          <attvalue for="0" value="senior_augur" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="2193370548" label="Находки в опенсорсе: Python">
+        <attvalues>
+          <attvalue for="0" value="opensource_findings_python" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="2299646426" label="IT-волна">
+        <attvalues>
+          <attvalue for="0" value="IT_Chuyana" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="2508714323" label="Внутри AI | Кейсы ИИ Агентов в бизнесе">
+        <attvalues>
+          <attvalue for="0" value="inside_ai_tech" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1132240823" label="Rebryk Blog">
+        <attvalues>
+          <attvalue for="0" value="rebrykblog" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1009962628" label="TechSparks">
+        <attvalues>
+          <attvalue for="0" value="techsparks" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1011903786" label="Хабр Карьера">
+        <attvalues>
+          <attvalue for="0" value="habr_career" />
+          <attvalue for="1" value="vacancies" />
+        </attvalues>
+      </node>
+      <node id="1052346215" label="Job in IT&amp;Digital">
+        <attvalues>
+          <attvalue for="0" value="geekjobs" />
+          <attvalue for="1" value="vacancies" />
+        </attvalues>
+      </node>
+      <node id="1200168356" label="Гриненко про ИИ, бизнес и образование">
+        <attvalues>
+          <attvalue for="0" value="devspotting" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1474685293" label="Программисты делают бизнес">
+        <attvalues>
+          <attvalue for="0" value="ktsdaily" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1622822682" label="Сергей Марков: машинное обучение, искусство и шитпостинг">
+        <attvalues>
+          <attvalue for="0" value="oulenspiegel_channel" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1114591086" label="Machinelearning">
+        <attvalues>
+          <attvalue for="0" value="ai_machinelearning_big_data" />
+          <attvalue for="1" value="aggregator" />
+        </attvalues>
+      </node>
+      <node id="1137236002" label="Job for Analysts &amp; Data Scientists">
+        <attvalues>
+          <attvalue for="0" value="foranalysts" />
+          <attvalue for="1" value="vacancies" />
+        </attvalues>
+      </node>
+      <node id="2405883561" label="FastNews | Никита Пастухов">
+        <attvalues>
+          <attvalue for="0" value="fastnewsdev" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="2480863703" label="Пикник Айтишника">
+        <attvalues>
+          <attvalue for="0" value="pcnc_pro" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="1352895466" label="ТЕХНО: Яндекс про технологии">
+        <attvalues>
+          <attvalue for="0" value="techno_yandex" />
+          <attvalue for="1" value="media" />
+        </attvalues>
+      </node>
+      <node id="1720833502" label="Data Secrets">
+        <attvalues>
+          <attvalue for="0" value="data_secrets" />
+          <attvalue for="1" value="aggregator" />
+        </attvalues>
+      </node>
+      <node id="1738612591" label="Осознанная Меркантильность | Антон Назар">
+        <attvalues>
+          <attvalue for="0" value="m0rtymerr_channel" />
+          <attvalue for="1" value="community" />
+        </attvalues>
+      </node>
+      <node id="1871266271" label="Anton Alekseev | Инфраструктура для AI и ML">
+        <attvalues>
+          <attvalue for="0" value="mlops_infra" />
+          <attvalue for="1" value="personal" />
+        </attvalues>
+      </node>
+      <node id="2139675468" label="Рефералки в IT | Вакансии и резюме">
+        <attvalues>
+          <attvalue for="0" value="refer_me_it" />
+          <attvalue for="1" value="vacancies" />
+        </attvalues>
+      </node>
+    </nodes>
+    <edges>
+      <edge source="1071014162" target="1233907704" id="0" weight="1.1510554658109686">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="1071014162" target="2405883561" id="1" weight="0.6609336273321663">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1071014162" target="1577094346" id="2" weight="12.801064738494228">
+        <attvalues>
+          <attvalue for="2" value="17" />
+        </attvalues>
+      </edge>
+      <edge source="1071014162" target="1442579184" id="3" weight="0.8715030936589625">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="3873974484" target="1728068565" id="4" weight="0.5902765157646942">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1466120158" target="1051500113" id="5" weight="2.0979912193269232">
+        <attvalues>
+          <attvalue for="2" value="3" />
+        </attvalues>
+      </edge>
+      <edge source="1466120158" target="3191393066" id="6" weight="1.4643184255249488">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="1051500113" target="1466120158" id="7" weight="7.303399826011907">
+        <attvalues>
+          <attvalue for="2" value="10" />
+        </attvalues>
+      </edge>
+      <edge source="1051500113" target="1720833502" id="8" weight="0.5100099285957608">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1051500113" target="1511414765" id="9" weight="9.615105940080095">
+        <attvalues>
+          <attvalue for="2" value="13" />
+        </attvalues>
+      </edge>
+      <edge source="1051500113" target="1454077785" id="10" weight="0.6214468094810003">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1051500113" target="1009962628" id="11" weight="0.6219518322380206">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1780707547" target="1005993407" id="12" weight="0.48863752473786687">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1165814759" target="1223541233" id="13" weight="25.8944098599793">
+        <attvalues>
+          <attvalue for="2" value="37" />
+        </attvalues>
+      </edge>
+      <edge source="1165814759" target="1433806174" id="14" weight="1.2197582177633466">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="1165814759" target="1868919653" id="15" weight="0.6552842622348665">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1170868593" target="1477843447" id="16" weight="1.1163782735680314">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="1178238337" target="1556862154" id="17" weight="1.8971249502903087">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="1322005976" target="1005993407" id="18" weight="0.48863090414822363">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1381822968" target="1005993407" id="19" weight="0.48863338685882773">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1381822968" target="1137236002" id="20" weight="4.8099611420448">
+        <attvalues>
+          <attvalue for="2" value="8" />
+        </attvalues>
+      </edge>
+      <edge source="1389399945" target="1998280831" id="21" weight="1.3784037489645447">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="1511414765" target="1132240823" id="22" weight="1.0618381863788466">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="1511414765" target="1051500113" id="23" weight="1.7456916822777746">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="1511414765" target="1943579488" id="24" weight="1.915594156435138">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="1511414765" target="1556862154" id="25" weight="1.9166122957852354">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="1576403059" target="1114591086" id="26" weight="0.5392832438954421">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1798534821" target="1767764126" id="27" weight="0.6364624882658738">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1880188397" target="2400996678" id="28" weight="1.2867377855786446">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="2102826919" target="1276888564" id="29" weight="2.947817610637684">
+        <attvalues>
+          <attvalue for="2" value="4" />
+        </attvalues>
+      </edge>
+      <edge source="2182541317" target="1720833502" id="30" weight="2.219904449753061">
+        <attvalues>
+          <attvalue for="2" value="3" />
+        </attvalues>
+      </edge>
+      <edge source="2232794854" target="1051500113" id="31" weight="3.3998537491571437">
+        <attvalues>
+          <attvalue for="2" value="5" />
+        </attvalues>
+      </edge>
+      <edge source="2232794854" target="1511414765" id="32" weight="0.5763988213540348">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="2416283284" target="1998280831" id="33" weight="1.479473166114659">
+        <attvalues>
+          <attvalue for="2" value="3" />
+        </attvalues>
+      </edge>
+      <edge source="1032086354" target="1011903786" id="34" weight="16.950560573315407">
+        <attvalues>
+          <attvalue for="2" value="25" />
+        </attvalues>
+      </edge>
+      <edge source="1223541233" target="1433806174" id="35" weight="1.2011224510254412">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="1223541233" target="1868919653" id="36" weight="0.6452734296537597">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1341326876" target="1720833502" id="37" weight="0.510006473501015">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1433806174" target="1820144498" id="38" weight="0.5754368705123551">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1433806174" target="1223541233" id="39" weight="0.7189701328861917">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1454077785" target="1051500113" id="40" weight="3.6176657238594183">
+        <attvalues>
+          <attvalue for="2" value="6" />
+        </attvalues>
+      </edge>
+      <edge source="1454077785" target="1466120158" id="41" weight="3.331761257678574">
+        <attvalues>
+          <attvalue for="2" value="5" />
+        </attvalues>
+      </edge>
+      <edge source="1454077785" target="1632569361" id="42" weight="2.342474329013913">
+        <attvalues>
+          <attvalue for="2" value="3" />
+        </attvalues>
+      </edge>
+      <edge source="1454077785" target="1341326876" id="43" weight="0.6991096622554036">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1454077785" target="2015800238" id="44" weight="0.7888382733882046">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1454077785" target="1352895466" id="45" weight="1.6542116389548676">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="1454077785" target="1178238337" id="46" weight="0.9038439350703301">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1454077785" target="1511414765" id="47" weight="0.9499606781114549">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1477843447" target="1170868593" id="48" weight="0.5051343150674856">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1477843447" target="1067797620" id="49" weight="3.8659578308271767">
+        <attvalues>
+          <attvalue for="2" value="5" />
+        </attvalues>
+      </edge>
+      <edge source="1477843447" target="1276888564" id="50" weight="9.205004754838754">
+        <attvalues>
+          <attvalue for="2" value="10" />
+        </attvalues>
+      </edge>
+      <edge source="1577094346" target="2595582809" id="51" weight="1.2548555406487578">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="1577094346" target="1071014162" id="52" weight="0.6867268476004794">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1632569361" target="1257074146" id="53" weight="1.346957437983916">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="1632569361" target="1178238337" id="54" weight="1.4561042605869945">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="1632569361" target="1454077785" id="55" weight="0.6872318066832591">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1632569361" target="2015800238" id="56" weight="0.8793554842696449">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1632569361" target="1511414765" id="57" weight="0.9713462089899081">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1823620813" target="1341326876" id="58" weight="1.9673733605888628">
+        <attvalues>
+          <attvalue for="2" value="3" />
+        </attvalues>
+      </edge>
+      <edge source="2326550150" target="1622822682" id="59" weight="0.6360589551203452">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="2326550150" target="1170868593" id="60" weight="0.6774050651522082">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="2326550150" target="1577094346" id="61" weight="0.8253587554837003">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="2595582809" target="1577094346" id="62" weight="17.895726928192847">
+        <attvalues>
+          <attvalue for="2" value="27" />
+        </attvalues>
+      </edge>
+      <edge source="2595582809" target="1071014162" id="63" weight="0.686730153183284">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1067797620" target="1616698413" id="64" weight="0.6765146332645608">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1067797620" target="1690011844" id="65" weight="0.8263801971293152">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1067797620" target="1476882161" id="66" weight="0.8263801971293152">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1233907704" target="2405883561" id="67" weight="0.6410147298646683">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1257074146" target="1178238337" id="68" weight="0.6454517638758243">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1257074146" target="1632569361" id="69" weight="0.6454517638758243">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="3059283110" target="2480863703" id="70" weight="0.5093287731965356">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="3191393066" target="1466120158" id="71" weight="1.6826823737007484">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="3191393066" target="1051500113" id="72" weight="0.8671014183179959">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1305323621" target="1005993407" id="73" weight="0.5309646225180277">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1490055498" target="1343774152" id="74" weight="0.821161519186732">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1490055498" target="1943579488" id="75" weight="1.7708973602832034">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="1680781925" target="1341326876" id="76" weight="1.6035172306416268">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="1891111916" target="1943579488" id="77" weight="0.8985610402509867">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="2193370548" target="1233907704" id="78" weight="0.9265486748970873">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="2299646426" target="3059283110" id="79" weight="2.933581415283153">
+        <attvalues>
+          <attvalue for="2" value="4" />
+        </attvalues>
+      </edge>
+      <edge source="2508714323" target="1474685293" id="80" weight="1.2601121043945882">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="1009962628" target="1454077785" id="81" weight="0.5715138966963698">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1009962628" target="1051500113" id="82" weight="1.4360208425979037">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="1009962628" target="1341326876" id="83" weight="0.7030354068954737">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1009962628" target="1720833502" id="84" weight="0.7881483486069075">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1052346215" target="1005993407" id="85" weight="0.48863177527331486">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1052346215" target="1137236002" id="86" weight="7.576551980337252">
+        <attvalues>
+          <attvalue for="2" value="10" />
+        </attvalues>
+      </edge>
+      <edge source="1052346215" target="1381822968" id="87" weight="3.2666209612416037">
+        <attvalues>
+          <attvalue for="2" value="4" />
+        </attvalues>
+      </edge>
+      <edge source="1200168356" target="2405883561" id="88" weight="1.5794981447853012">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="1474685293" target="2508714323" id="89" weight="1.4804336508001883">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="1622822682" target="1150855655" id="90" weight="0.819499710660888">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1622822682" target="1178238337" id="91" weight="0.819499710660888">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1622822682" target="1511414765" id="92" weight="0.819499710660888">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1622822682" target="1720833502" id="93" weight="0.9343485118497908">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1114591086" target="1352895466" id="94" weight="2.7839686081180504">
+        <attvalues>
+          <attvalue for="2" value="3" />
+        </attvalues>
+      </edge>
+      <edge source="1137236002" target="1005993407" id="95" weight="0.4886312090418289">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1137236002" target="1381822968" id="96" weight="4.809462616355431">
+        <attvalues>
+          <attvalue for="2" value="8" />
+        </attvalues>
+      </edge>
+      <edge source="2405883561" target="1051500113" id="97" weight="1.5114844032171009">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="2405883561" target="1511414765" id="98" weight="1.989735389732378">
+        <attvalues>
+          <attvalue for="2" value="3" />
+        </attvalues>
+      </edge>
+      <edge source="2405883561" target="1233907704" id="99" weight="1.306130904749338">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="2405883561" target="1200168356" id="100" weight="1.5796368047986182">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="2480863703" target="3059283110" id="101" weight="0.6992246486871163">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1352895466" target="1051500113" id="102" weight="0.7530145414036155">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1720833502" target="1269722631" id="103" weight="0.5321007579157482">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1720833502" target="2182541317" id="104" weight="0.9374565332149302">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="1738612591" target="2139675468" id="105" weight="1.474968159681194">
+        <attvalues>
+          <attvalue for="2" value="2" />
+        </attvalues>
+      </edge>
+      <edge source="1871266271" target="1868423109" id="106" weight="0.8647037926752826">
+        <attvalues>
+          <attvalue for="2" value="1" />
+        </attvalues>
+      </edge>
+      <edge source="2139675468" target="1738612591" id="107" weight="11.447049115996542">
+        <attvalues>
+          <attvalue for="2" value="15" />
+        </attvalues>
+      </edge>
+    </edges>
+  </graph>
+</gexf>

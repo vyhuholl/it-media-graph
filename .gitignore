@@ -11,10 +11,6 @@
 *.dump
 itgraph-backups/
 
-# Graph exports from notebooks/: the seed subgraph is derived from the
-# operator's own subscriptions.
-*.gexf
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
