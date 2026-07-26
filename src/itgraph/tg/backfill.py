@@ -41,8 +41,10 @@ from itgraph.db.backfill import (
     start_channel,
     was_completed_to,
 )
-from itgraph.db.models import Channel, FailureKind
+from itgraph.db.models import Channel, CollectionCommand, FailureKind
 from itgraph.db.raw import count_messages, metadata_age, store_messages
+from itgraph.db.session import Database
+from itgraph.tg.floods import FloodRecorder
 from itgraph.tg.full_channel import fetch_full_channel
 from itgraph.tg.pacing import pace, pause_between_channels
 from itgraph.tg.payload import encode_payload
@@ -177,7 +179,9 @@ def classify(error: BaseException) -> FailureKind:
     return FailureKind.TRANSIENT
 
 
-async def waiting_out_floods[T](operation: Callable[[], Awaitable[T]]) -> T:
+async def waiting_out_floods[T](
+    operation: Callable[[], Awaitable[T]], recorder: FloodRecorder
+) -> T:
     """Run a request, sleeping off a short rate limit and asking again.
 
     Every request this module makes goes through here, which matters more
@@ -198,20 +202,34 @@ async def waiting_out_floods[T](operation: Callable[[], Awaitable[T]]) -> T:
     than measuring their rate. The run stops instead, and the operator
     re-runs after the reported time; the walk resumes from its cursor
     like any other interruption.
+
+    Every wait is recorded before it is acted on, so the method that was
+    limited survives the run that hit it. ``recorder`` never raises.
     """
     while True:
         try:
             return await operation()
         except FloodWaitError as exc:
             seconds = getattr(exc, "seconds", 0)
-            if seconds > settings.flood_abort_threshold:
+            halting = seconds > settings.flood_abort_threshold
+            await recorder.record(
+                request=getattr(exc, "request", None),
+                seconds=seconds,
+                halted=halting,
+            )
+            if halting:
                 raise FloodWaitTooLong(seconds) from exc
             logger.warning("FloodWait for %ds — sleeping it off", seconds)
             await asyncio.sleep(seconds)
 
 
 async def _fetch_window(
-    client: TelegramClient, entity: Any, *, offset_id: int, size: int
+    client: TelegramClient,
+    entity: Any,
+    *,
+    offset_id: int,
+    size: int,
+    recorder: FloodRecorder,
 ) -> list[Any]:
     """One window of history, oldest-ward from ``offset_id``."""
 
@@ -223,7 +241,7 @@ async def _fetch_window(
             )
         ]
 
-    return await waiting_out_floods(fetch)
+    return await waiting_out_floods(fetch, recorder)
 
 
 async def _resolve_peer(
@@ -234,6 +252,7 @@ async def _resolve_peer(
     username: str,
     delay: float,
     refresh_metadata: bool,
+    recorder: FloodRecorder,
 ) -> Any:
     """The peer to walk, fetching extended information only if it is due.
 
@@ -264,7 +283,7 @@ async def _resolve_peer(
             try:
                 await pace(delay)
                 return await waiting_out_floods(
-                    lambda: client.get_input_entity(username)
+                    lambda: client.get_input_entity(username), recorder
                 )
             except (RPCError, OSError, ValueError, TypeError) as exc:
                 # A halt is a `FloodWaitTooLong`, which is deliberately
@@ -277,7 +296,8 @@ async def _resolve_peer(
 
     await pace(delay)
     metadata = await waiting_out_floods(
-        lambda: fetch_full_channel(client, session, username=username)
+        lambda: fetch_full_channel(client, session, username=username),
+        recorder,
     )
     await session.commit()
     return metadata.entity
@@ -294,6 +314,7 @@ async def backfill_channel(
     request_delay: float | None = None,
     max_messages: int | None = None,
     refresh_metadata: bool = False,
+    recorder: FloodRecorder,
 ) -> ChannelRun:
     """Walk one channel back to ``cutoff``, or until it holds its share.
 
@@ -346,6 +367,7 @@ async def backfill_channel(
         username=username,
         delay=delay,
         refresh_metadata=refresh_metadata,
+        recorder=recorder,
     )
 
     # 0 means "from the newest message"; a stored cursor means "carry on
@@ -371,7 +393,11 @@ async def backfill_channel(
         want = size if remaining is None else min(size, remaining)
         await pace(delay)
         window = await _fetch_window(
-            client, entity, offset_id=offset_id or 0, size=want
+            client,
+            entity,
+            offset_id=offset_id or 0,
+            size=want,
+            recorder=recorder,
         )
         if not window:
             break
@@ -442,6 +468,7 @@ async def backfill_channels(
     request_delay: float | None = None,
     max_messages: int | None = None,
     refresh_metadata: bool = False,
+    database: Database,
 ) -> RunSummary:
     """Walk every in-scope channel, one at a time, and survive each one.
 
@@ -456,6 +483,9 @@ async def backfill_channels(
     summary = RunSummary()
     ceiling = ceiling_for(max_messages)
     worked = False
+    # Rebound per channel below, so an event names the channel that was
+    # being walked when the limit arrived.
+    recorder = FloodRecorder(database, CollectionCommand.BACKFILL)
 
     # Read off the mapped instances once, here. A rollback in the failure
     # handler below expires every loaded object — not just the channel
@@ -526,6 +556,7 @@ async def backfill_channels(
                 request_delay=request_delay,
                 max_messages=max_messages,
                 refresh_metadata=refresh_metadata,
+                recorder=recorder.for_channel(tg_id),
             )
         except FloodWaitTooLong as exc:
             # Not this channel's fault and not a channel failure: nothing

@@ -43,9 +43,10 @@ from itgraph.db.edges import (
     pending_mentions_to_resolve,
     record_pending_failure,
 )
-from itgraph.db.models import DiscoverySource
+from itgraph.db.models import CollectionCommand, DiscoverySource
 from itgraph.db.session import Database
 from itgraph.tg.backfill import FloodWaitTooLong, waiting_out_floods
+from itgraph.tg.floods import FloodRecorder
 from itgraph.tg.pacing import pace
 
 __all__ = ["ResolveSummary", "channel_identity", "resolve_inventory"]
@@ -121,6 +122,10 @@ async def resolve_inventory(
     pause = delay if delay is not None else settings.backfill_request_delay
     summary = ResolveSummary()
     remaining = limit
+    # No channel is attributed: resolution walks references, not
+    # channels, and the id it is asking about is not one the inventory
+    # necessarily holds yet.
+    recorder = FloodRecorder(database, CollectionCommand.RESOLVE)
 
     async with database.session() as session:
         channels = await channels_awaiting_resolution(
@@ -131,7 +136,9 @@ async def resolve_inventory(
                 if remaining is not None and remaining <= 0:
                     break
                 await pace(pause)
-                await _resolve_channel(client, session, channel.tg_id, summary)
+                await _resolve_channel(
+                    client, session, channel.tg_id, summary, recorder
+                )
                 if remaining is not None:
                     remaining -= 1
 
@@ -146,7 +153,7 @@ async def resolve_inventory(
                     break
                 await pace(pause)
                 await _resolve_pending(
-                    client, session, mention.username, summary
+                    client, session, mention.username, summary, recorder
                 )
                 if remaining is not None:
                     remaining -= 1
@@ -164,11 +171,12 @@ async def _resolve_channel(
     session: AsyncSession,
     tg_id: int,
     summary: ResolveSummary,
+    recorder: FloodRecorder,
 ) -> None:
     """Resolve one channel by id, through the session's cached hash."""
     try:
         entity = await waiting_out_floods(
-            lambda: client.get_entity(PeerChannel(tg_id))
+            lambda: client.get_entity(PeerChannel(tg_id)), recorder
         )
     except _LOOKUP_ERRORS as exc:
         logger.warning("channel %d did not resolve: %s", tg_id, exc)
@@ -202,10 +210,13 @@ async def _resolve_pending(
     session: AsyncSession,
     username: str,
     summary: ResolveSummary,
+    recorder: FloodRecorder,
 ) -> None:
     """Resolve one pending username by public lookup."""
     try:
-        entity = await waiting_out_floods(lambda: client.get_entity(username))
+        entity = await waiting_out_floods(
+            lambda: client.get_entity(username), recorder
+        )
     except _LOOKUP_ERRORS as exc:
         logger.warning("@%s did not resolve: %s", username, exc)
         await record_pending_failure(session, username, str(exc))

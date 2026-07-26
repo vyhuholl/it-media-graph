@@ -303,6 +303,7 @@ def backfill(
                     request_delay=delay,
                     max_messages=max_messages,
                     refresh_metadata=refresh_metadata,
+                    database=database,
                 )
         finally:
             await database.dispose()
@@ -498,6 +499,79 @@ def channels(
                         state = await session.get(BackfillState, channel.tg_id)
                         line = f"{line:<100} {_backfill_column(state)}"
                     typer.echo(line)
+        finally:
+            await database.dispose()
+
+    _run(run())
+
+
+@app.command()
+def floods(
+    since: Annotated[
+        datetime | None,
+        typer.Option(
+            "--since",
+            formats=["%Y-%m-%d"],
+            help="Only rate limits recorded on or after this date.",
+        ),
+    ] = None,
+    limit: Annotated[
+        int,
+        typer.Option("--limit", help="Show at most this many events."),
+    ] = 50,
+) -> None:
+    """Show the rate limits collection has run into, and what caused them.
+
+    `backfill` and `resolve` both spend `contacts.resolveUsername` and
+    `channels.getChannels`, so the method is what says whether a limit
+    one of them hit also applies to the other. That question is the
+    reason this record exists.
+    """
+    from itgraph.db.floods import flood_summary, recent_floods
+    from itgraph.db.session import Database
+
+    cutoff = since.replace(tzinfo=UTC) if since is not None else None
+
+    async def run() -> None:
+        database = Database()
+        try:
+            async with database.session() as session:
+                events = await recent_floods(
+                    session, since=cutoff, limit=limit
+                )
+                if not events:
+                    typer.echo(
+                        "No rate limits recorded"
+                        + (" in that window." if cutoff else " yet.")
+                    )
+                    return
+
+                tallies = await flood_summary(session, since=cutoff)
+                typer.echo(f"{'method':<34} {'times':>5} {'longest':>9}")
+                for tally in tallies:
+                    typer.echo(
+                        f"{tally.method:<34} {tally.times:>5} "
+                        f"{tally.longest:>8}s"
+                    )
+
+                typer.echo("")
+                for event in events:
+                    channel = event.channel_id or "-"
+                    halted = " HALTED" if event.halted else ""
+                    typer.echo(
+                        f"{event.occurred_at:%Y-%m-%d %H:%M} "
+                        f"{event.command.value:<8} "
+                        f"{event.method:<34} "
+                        f"{event.seconds:>6}s  {channel}{halted}"
+                    )
+
+                typer.echo(
+                    "\nA row is not proof a request was sent: Telethon "
+                    "refuses a method that is\nstill under a wait, and "
+                    "that refusal arrives as a rate limit too. Waits "
+                    "shorter\nthan flood_sleep_threshold never reach "
+                    "this record at all."
+                )
         finally:
             await database.dispose()
 

@@ -29,6 +29,7 @@ from itgraph.db.models import (
     BackfillState,
     BackfillStatus,
     Channel,
+    CollectionCommand,
     ChannelKind,
     ChannelStatus,
     DiscoverySource,
@@ -40,6 +41,7 @@ from itgraph.db.session import Database
 from itgraph.tg import backfill as backfill_module
 from itgraph.tg import pacing as pacing_module
 from itgraph.tg.backfill import backfill_channel, backfill_channels
+from itgraph.tg.floods import FloodRecorder
 
 NOTES = FakeChannel(1000000001, "example_notes", "Example Notes")
 CHAT = FakeChannel(1000000002, "example_notes_chat", "Example Notes - chat")
@@ -168,6 +170,7 @@ async def run(
             session,
             cutoff=cutoff,
             request_delay=request_delay,
+            database=database,
             **kwargs,
         )
 
@@ -547,7 +550,9 @@ async def test_the_defaults_are_the_slow_ones(
     telegram = client(histories={NOTES.id: history(2), JOBS.id: history(2)})
 
     async with inventory.session() as session:
-        await backfill_channels(telegram, session, cutoff=CUTOFF)
+        await backfill_channels(
+            telegram, session, cutoff=CUTOFF, database=inventory
+        )
 
     delay = settings.backfill_request_delay
     assert delay >= 1
@@ -875,6 +880,7 @@ async def test_the_walker_refuses_a_channel_already_at_its_ceiling(
             username="example_notes",
             cutoff=DEEPER,
             max_messages=10,
+            recorder=FloodRecorder(inventory, CollectionCommand.BACKFILL),
         )
 
     assert result.capped

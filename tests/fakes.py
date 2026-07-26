@@ -262,7 +262,12 @@ class FakeTelegramClient:
         resolve_floods: dict[str | int, int] | None = None,
         raises: BaseException | None = None,
         cached_peers: dict[str, Any] | None = None,
+        flood_request: Any = None,
     ) -> None:
+        # What a raised FloodWaitError names as its cause. `None` is the
+        # shape a rate limit that named no request has; a test that cares
+        # about the recorded method passes a real one.
+        self.flood_request = flood_request
         self.records = records or []
         self.entities = entities or {}
         # What the session file could answer without a network call.
@@ -302,7 +307,9 @@ class FakeTelegramClient:
 
         async def walk() -> AsyncIterator[FakeHistoryMessage]:
             if flood_seconds is not None:
-                raise FloodWaitError(request=None, capture=flood_seconds)
+                raise FloodWaitError(
+                    request=self.flood_request, capture=flood_seconds
+                )
             messages = self.histories.get(entity.id, [])
             # offset_id 0 means "from the newest"; otherwise strictly
             # older than it, the way Telegram walks backwards.
@@ -331,7 +338,7 @@ class FakeTelegramClient:
         flood = self.resolve_floods.get(key)
         if flood is not None and key not in self._flooded:
             self._flooded.add(key)
-            raise FloodWaitError(request=None, capture=flood)
+            raise FloodWaitError(request=self.flood_request, capture=flood)
 
         if self.raises is not None:
             raise self.raises

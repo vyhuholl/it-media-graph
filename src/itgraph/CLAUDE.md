@@ -12,6 +12,7 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `tg/dialogs.py` | The account's own subscriptions → inventory rows |
 | `tg/payload.py` | Telethon objects → JSON-safe payloads; the only place that touches payload shape |
 | `tg/pacing.py` | How long to wait before a request; the only random source in the project |
+| `tg/floods.py` | Which method a rate limit named, and writing it down without endangering the run |
 | `tg/full_channel.py` | The per-channel metadata pass, and the linked chat it resolves |
 | `tg/backfill.py` | The history walk: pacing, resumption, FloodWait, failure classification |
 | `tg/resolve.py` | The resolution pass: username and title for channels found by reference |
@@ -24,6 +25,7 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `db/channels.py` | The channel inventory: upsert, review, listing, resolution state |
 | `db/edges.py` | The derived tables: `edges` and `pending_mentions` |
 | `db/raw.py` | Writes into the raw layer; nothing here reads a payload |
+| `db/floods.py` | The record of rate limits: one row per wait, and the two questions asked of it |
 | `db/backfill.py` | Which channels to walk, how far each got, and why one stopped |
 | `db/backup.py` | Dumps, the schedule that picks which, and the pruning |
 | `db/guard.py` | Refuses a destructive migration against a non-scratch database |

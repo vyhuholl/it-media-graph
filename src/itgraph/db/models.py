@@ -33,10 +33,12 @@ __all__ = [
     "Channel",
     "ChannelKind",
     "ChannelStatus",
+    "CollectionCommand",
     "DiscoverySource",
     "Edge",
     "EdgeKind",
     "FailureKind",
+    "FloodEvent",
     "PendingMention",
     "RawChannel",
     "RawMessage",
@@ -132,6 +134,19 @@ class EdgeKind(enum.StrEnum):
 
     FORWARD = "forward"
     MENTION = "mention"
+
+
+class CollectionCommand(enum.StrEnum):
+    """Which networked command a recorded rate limit came from.
+
+    Both commands share ``contacts.resolveUsername`` and
+    ``channels.getChannels``, so the method alone does not say which run
+    spent the quota. Telling them apart is half the reason the record
+    exists.
+    """
+
+    BACKFILL = "backfill"
+    RESOLVE = "resolve"
 
 
 class BackfillStatus(enum.StrEnum):
@@ -500,3 +515,58 @@ class PendingMention(Base):
 
     def __repr__(self) -> str:
         return f"PendingMention(username={self.username!r})"
+
+
+class FloodEvent(Base):
+    """One rate limit the collector saw, and what caused it.
+
+    Written because the question this answers is always asked after the
+    fact — usually a day later, often about a run nobody was watching. A
+    log line answers it only for someone who was already reading the log.
+
+    A row is **not** proof that a request reached Telegram. Telethon keeps
+    its own per-method ledger of outstanding waits and refuses a method
+    that is still under one, and that refusal arrives as the same
+    ``FloodWaitError`` as a real limit. Nothing on the exception marks
+    which is which, so this table does not pretend to know; a reader who
+    assumes every row cost a request will overcount what a run spent.
+
+    Only long waits land here. Telethon sleeps through anything under
+    ``flood_sleep_threshold`` itself, so a rising rate of *short* waits —
+    the early warning that throttling has begun — is invisible from this
+    table.
+    """
+
+    __tablename__ = "flood_events"
+    __table_args__ = (
+        # The two questions asked of this table: what happened lately, and
+        # how often this particular method.
+        Index("ix_flood_events_occurred_at", "occurred_at"),
+        Index("ix_flood_events_method", "method"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    # The innermost request class name, unwrapped from Telegram's
+    # invocation wrappers, or `unknown` for a limit that named no request.
+    method: Mapped[str] = mapped_column(Text)
+    seconds: Mapped[int] = mapped_column(Integer)
+
+    command: Mapped[CollectionCommand] = mapped_column(
+        _pg_enum(CollectionCommand, "collection_command")
+    )
+
+    # Nullable: a limit hit during resolution, or before a walk starts,
+    # belongs to no channel.
+    channel_id: Mapped[int | None] = mapped_column(
+        ForeignKey("channels.tg_id", ondelete="SET NULL")
+    )
+
+    halted: Mapped[bool] = mapped_column(server_default=false())
+
+    def __repr__(self) -> str:
+        return f"FloodEvent(method={self.method!r}, seconds={self.seconds})"
