@@ -34,7 +34,7 @@ EDGES = """
     FROM edges e
     JOIN channels s ON s.tg_id = e.src_channel_id AND s.status = 'seed'
     JOIN channels d ON d.tg_id = e.dst_channel_id AND d.status = 'seed'
-    WHERE (%(kind)s IS NULL OR e.kind::text = %(kind)s)
+    WHERE (%(kind)s::text IS NULL OR e.kind::text = %(kind)s::text)
 """
 
 
