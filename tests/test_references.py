@@ -8,6 +8,8 @@ database and no network: these are pure functions over JSON.
 from datetime import datetime
 from typing import Any
 
+import pytest
+
 from itgraph.derive.references import (
     Forward,
     Reference,
@@ -272,6 +274,46 @@ def test_tme_joinchat_is_an_invite() -> None:
 
 def test_tme_plus_is_an_invite() -> None:
     assert parse_tme_link("https://t.me/+AbCdEf12345") is None
+
+
+def test_tme_addlist_is_a_folder_not_a_channel() -> None:
+    # Both spellings: the slug in the path, and the slug in the query
+    # string, which leaves the reserved word alone in the path.
+    assert parse_tme_link("https://t.me/addlist/AbCdEf12345") is None
+    assert parse_tme_link("https://t.me/addlist?slug=AbCdEf12345") is None
+
+
+def test_tme_addstickers_is_a_sticker_pack_not_a_channel() -> None:
+    assert parse_tme_link("https://t.me/addstickers/SomePack") is None
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://t.me/addemoji/SomePack",
+        "https://t.me/addtheme/SomeTheme",
+        "https://t.me/setlanguage/some_lang",
+        "https://t.me/share/url?url=https://example.com",
+        "https://t.me/proxy?server=example.com",
+        "https://t.me/socks?server=example.com",
+        "https://t.me/login/12345",
+        "https://t.me/confirmphone?phone=1&hash=x",
+        "https://t.me/invoice/AbCdEf12345",
+        "https://t.me/giftcode/AbCdEf12345",
+        "https://t.me/contact/AbCdEf12345",
+        "https://t.me/boost/durov",
+    ],
+)
+def test_a_service_link_is_not_a_channel(url: str) -> None:
+    assert parse_tme_link(url) is None
+
+
+def test_a_service_word_is_reserved_in_the_preview_form_too() -> None:
+    assert parse_tme_link("https://t.me/s/addstickers") is None
+
+
+def test_a_service_word_is_reserved_whatever_its_case() -> None:
+    assert parse_tme_link("https://t.me/AddStickers/SomePack") is None
 
 
 def test_a_scheme_and_www_are_tolerated() -> None:

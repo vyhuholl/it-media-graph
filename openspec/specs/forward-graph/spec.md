@@ -83,6 +83,18 @@ The system SHALL record an edge for every reference to a channel by username or 
 - **WHEN** derivation runs
 - **THEN** no edge is recorded
 
+#### Scenario: Links reserved for an action rather than a channel
+- **GIVEN** a `t.me` link whose first path segment is one Telegram reserves
+  for an action — adding a folder of channels, a sticker pack, an emoji or
+  theme pack, setting a language, sharing, a proxy, a login, an invoice, a
+  gift code, a contact, a boost
+- **WHEN** derivation runs
+- **THEN** no edge is recorded
+- **AND** no channel named by that reserved word enters the inventory or the
+  pending mentions, the word being a plausible username that would never resolve
+- **AND** this holds whether the link carries its payload in the path
+  (`t.me/addlist/<slug>`) or in the query string (`t.me/addlist?slug=<slug>`)
+
 #### Scenario: The same post referenced twice in one message
 - **GIVEN** a stored message referencing the same post of the same channel more than once
 - **WHEN** derivation runs

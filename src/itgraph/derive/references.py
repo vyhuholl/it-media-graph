@@ -11,8 +11,9 @@ Two references leave here: an id (from a forward header or a
 ``t.me/c/<id>`` link) and a username (from an ``@mention`` or a
 ``t.me/name`` link). An id is a channel's primary key and can become an
 edge at once; a username needs resolving first. Everything else — a user,
-a bot, an invite, a non-Telegram link — resolves to nothing and produces
-no reference. Where a link or a forward header names a specific *post*,
+a bot, an invite, a link ``t.me`` reserves for an action rather than a
+channel, a non-Telegram link — resolves to nothing and produces no
+reference. Where a link or a forward header names a specific *post*,
 the referenced message id — and, for a forward, its date — travels with
 the reference, so the edge can point at the post rather than the channel.
 """
@@ -42,6 +43,38 @@ _TME_HOSTS = {"t.me", "telegram.me", "telegram.dog"}
 # fragment, and the length floor is what rejects the reserved single
 # letters `s` and `c` should they ever reach here as a bare segment.
 _USERNAME = re.compile(r"^[a-z][a-z0-9_]{3,31}$")
+
+# First path segments `t.me` reserves for an action rather than a
+# channel: `t.me/addlist/<slug>` adds a folder of channels,
+# `t.me/addstickers/<pack>` a sticker pack, `t.me/share/url?url=...`
+# opens the share sheet. Each is a plausible-looking username by the
+# regex above, so without this list every such link invented a channel
+# named `addlist` or `addstickers` and parked it in `pending_mentions`,
+# where resolution could only ever fail. Some of these are also written
+# with the payload in the query string (`t.me/addlist?slug=...`), which
+# leaves the reserved word alone in the path and reaches here the same
+# way. Only segments long enough to pass `_USERNAME` need listing — the
+# short ones (`bg`, `iv`, `s`, `c`) are already rejected by length or
+# handled explicitly.
+_SERVICE_PATHS = frozenset(
+    {
+        "addemoji",
+        "addlist",
+        "addstickers",
+        "addtheme",
+        "boost",
+        "confirmphone",
+        "contact",
+        "giftcode",
+        "invoice",
+        "joinchat",
+        "login",
+        "proxy",
+        "setlanguage",
+        "share",
+        "socks",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,9 +181,10 @@ def parse_tme_link(url: str) -> Reference | None:
     Handled: ``t.me/name`` (a channel) and ``t.me/name/123`` (one message
     within it — the channel, carrying the post id), ``t.me/s/name`` (the
     web preview), and ``t.me/c/<id>`` / ``t.me/c/<id>/<msg>`` (a bare
-    channel id, with the post id when present). Refused: ``t.me/joinchat/
-    ...`` and ``t.me/+...``, which are invites resolvable only by someone
-    already let in, and any non-``t.me`` host.
+    channel id, with the post id when present). Refused: ``t.me/+...``
+    and every link whose first segment is one of ``_SERVICE_PATHS`` —
+    an invite, a sticker pack, a folder of channels — which name an
+    action to take, not a channel to point at, and any non-``t.me`` host.
     """
     raw = url.strip()
     # A bare `t.me/foo` has no `//`, so urlsplit would read `t.me` as the
@@ -168,7 +202,7 @@ def parse_tme_link(url: str) -> Reference | None:
         return None
 
     first = segments[0]
-    if first.startswith("+") or first.lower() == "joinchat":
+    if first.startswith("+"):
         return None
     if first.lower() == "s":
         # t.me/s/<name> — the same channel, in its web-preview form.
@@ -226,8 +260,15 @@ def extract_references(payload: dict[str, Any]) -> list[Reference]:
 def _username_reference(
     segment: str, msg_id: int | None = None
 ) -> Reference | None:
+    """A path segment as the channel it names, or ``None``.
+
+    The one place a ``t.me`` path segment becomes a username, so the
+    reserved-word check sits here rather than at each call site: it holds
+    for the plain ``t.me/<name>`` form and for the ``t.me/s/<name>``
+    preview alike.
+    """
     username = normalize_username(segment)
-    if username is None:
+    if username is None or username in _SERVICE_PATHS:
         return None
     return Reference(username=username, msg_id=msg_id)
 
