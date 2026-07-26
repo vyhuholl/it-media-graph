@@ -21,6 +21,7 @@ from telethon.errors import ChannelPrivateError
 
 from itgraph.db.channels import (
     DiscoveredChannel,
+    link_discussion_chat,
     mark_channel,
     upsert_channels,
 )
@@ -33,6 +34,7 @@ from itgraph.db.models import (
     DiscoverySource,
     FailureKind,
     RawMessage,
+    RejectReason,
 )
 from itgraph.db.session import Database
 from itgraph.tg import backfill as backfill_module
@@ -42,6 +44,7 @@ from itgraph.tg.backfill import backfill_channel, backfill_channels
 NOTES = FakeChannel(1000000001, "example_notes", "Example Notes")
 CHAT = FakeChannel(1000000002, "example_notes_chat", "Example Notes - chat")
 JOBS = FakeChannel(1000000005, "example_jobs", "Example Jobs")
+COMMUNITY = FakeChannel(1000000009, "example_community", "Example Community")
 
 CUTOFF = datetime(2026, 5, 1, tzinfo=UTC)
 DEEPER = datetime(2026, 1, 1, tzinfo=UTC)
@@ -100,7 +103,13 @@ def gaps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
 
 @pytest.fixture
 async def inventory(database: Database) -> AsyncIterator[Database]:
-    """Two accepted channels, one chat, one rejected — the real mix."""
+    """The real mix: two channels, a linked chat, a standalone one, junk.
+
+    The two chats differ in the one way that matters here. ``CHAT``
+    belongs to ``NOTES``, so it is out of scope because its parent is
+    what was reviewed; ``COMMUNITY`` belongs to nothing and was accepted
+    on its own, so it is deferred rather than passed over.
+    """
     async with database.session() as session:
         await upsert_channels(
             session,
@@ -108,12 +117,22 @@ async def inventory(database: Database) -> AsyncIterator[Database]:
                 DiscoveredChannel(NOTES.id, "example_notes", "Notes", False),
                 DiscoveredChannel(JOBS.id, "example_jobs", "Jobs", False),
                 DiscoveredChannel(CHAT.id, "example_notes_chat", "Chat", True),
+                DiscoveredChannel(
+                    COMMUNITY.id, "example_community", "Community", True
+                ),
                 DiscoveredChannel(999000001, "rejected_one", "Nope", False),
                 DiscoveredChannel(999000002, None, "No username", False),
             ],
             discovered_via=DiscoverySource.OWN_SUBSCRIPTIONS,
         )
-        for tg_id in (NOTES.id, JOBS.id, CHAT.id, 999000002):
+        await link_discussion_chat(
+            session,
+            parent_tg_id=NOTES.id,
+            chat=DiscoveredChannel(
+                CHAT.id, "example_notes_chat", "Chat", True
+            ),
+        )
+        for tg_id in (NOTES.id, JOBS.id, CHAT.id, COMMUNITY.id, 999000002):
             await mark_channel(
                 session,
                 tg_id,
@@ -189,6 +208,45 @@ async def test_only_accepted_channels_are_walked(
     assert 999000001 not in walked
     assert CHAT.id not in walked
     assert summary.completed == 2
+
+
+async def test_a_standalone_chat_is_deferred_rather_than_silently_skipped(
+    inventory: Database, slept: list[float]
+) -> None:
+    """A chat accepted on its own is waiting work, not work passed over.
+
+    Nothing walks community chats yet, so the run must say so: otherwise
+    a reviewed chat sits untouched behind a summary that reads clean.
+    """
+    telegram = client(
+        histories={NOTES.id: history(3), JOBS.id: history(2, newest_id=500)}
+    )
+
+    summary = await run(inventory, telegram)
+
+    walked = {entity_id for entity_id, _, _ in telegram.windows}
+    assert COMMUNITY.id not in walked
+    # The linked chat is not deferred — its parent channel was what was
+    # reviewed, and that is what gets walked.
+    assert summary.deferred == 1
+    assert "1 standalone chat deferred" in summary.line()
+
+
+async def test_a_run_with_no_standalone_chats_says_nothing_about_them(
+    inventory: Database, slept: list[float]
+) -> None:
+    async with inventory.session() as session:
+        await mark_channel(
+            session,
+            COMMUNITY.id,
+            status=ChannelStatus.REJECTED,
+            reject_reason=RejectReason.NOT_IT,
+        )
+
+    summary = await run(inventory, client(histories={NOTES.id: history(1)}))
+
+    assert summary.deferred == 0
+    assert "deferred" not in summary.line()
 
 
 async def test_an_entity_without_a_username_is_refused(
@@ -856,6 +914,7 @@ async def test_the_run_reports_what_it_did(
     assert summary.skipped == 1
     assert summary.failed == 0
     assert summary.stored == 5
+    assert summary.deferred == 1
     assert "completed 2" in summary.line()
 
 

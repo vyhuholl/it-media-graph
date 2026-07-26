@@ -13,6 +13,12 @@ The system SHALL fetch history only from channels that were reviewed and accepte
 - **THEN** only channels with status `seed` are selected
 - **AND** discussion chats are excluded regardless of their parent's status
 
+#### Scenario: Standalone community chats are out of scope for now
+- **GIVEN** a chat with status `seed` and no parent channel
+- **WHEN** backfill runs
+- **THEN** it is not walked
+- **AND** it is reported as deferred rather than silently skipped
+
 #### Scenario: Entities without a public username are refused
 - **GIVEN** a selected channel that has no username
 - **WHEN** the collector is asked for its history

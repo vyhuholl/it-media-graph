@@ -32,6 +32,7 @@ from telethon.errors import FloodWaitError, RPCError
 from itgraph.config import settings
 from itgraph.db.backfill import (
     channels_in_scope,
+    count_deferred_chats,
     load_state,
     record_complete,
     record_failure,
@@ -116,6 +117,11 @@ class RunSummary:
     ``halt`` is set when a rate limit stopped the run short. The counts
     around it are still true — they describe committed work — so a halted
     run reports rather than vanishes.
+
+    ``deferred`` counts what the run never considered rather than what it
+    did: accepted chats with no parent channel, which nothing walks yet.
+    It is reported in its own clause because those are not channels the
+    run passed over — they are work that is waiting.
     """
 
     completed: int = 0
@@ -123,14 +129,21 @@ class RunSummary:
     skipped: int = 0
     failed: int = 0
     stored: int = 0
+    deferred: int = 0
     halt: FloodWaitTooLong | None = None
 
     def line(self) -> str:
-        return (
+        line = (
             f"completed {self.completed}, capped {self.capped}, "
             f"skipped {self.skipped}, failed {self.failed}; "
             f"{self.stored} new messages"
         )
+        if self.deferred:
+            line += (
+                f"; {self.deferred} standalone chat"
+                f"{'' if self.deferred == 1 else 's'} deferred"
+            )
+        return line
 
 
 def ceiling_for(max_messages: int | None) -> int | None:
@@ -453,6 +466,16 @@ async def backfill_channels(
         (channel.tg_id, channel.username)
         for channel in await channels_in_scope(session)
     ]
+
+    # Counted before the walk, so a run stopped by a rate limit still
+    # reports it: what is deferred does not depend on how far the run got.
+    summary.deferred = await count_deferred_chats(session)
+    if summary.deferred:
+        logger.info(
+            "%d accepted standalone chat(s) deferred: reading community "
+            "chats is not implemented yet",
+            summary.deferred,
+        )
 
     for tg_id, username in targets:
         touched = summary.completed + summary.capped + summary.failed

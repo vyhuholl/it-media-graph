@@ -9,7 +9,7 @@ run will ever ask for again.
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +23,7 @@ from itgraph.db.models import (
 
 __all__ = [
     "channels_in_scope",
+    "count_deferred_chats",
     "load_state",
     "record_complete",
     "record_failure",
@@ -56,6 +57,29 @@ async def channels_in_scope(session: AsyncSession) -> Sequence[Channel]:
         .order_by(Channel.tg_id)
     )
     return (await session.scalars(statement)).all()
+
+
+async def count_deferred_chats(session: AsyncSession) -> int:
+    """Accepted chats that belong to no channel, and so are left alone.
+
+    ``channels_in_scope`` excludes every chat, which is right for a
+    discussion chat — its parent channel is what was reviewed. A chat
+    accepted on its own is a different thing: somebody looked at it and
+    said yes, and it is not walked only because reading a community chat
+    is not built yet. Counting them is what keeps that decision visible
+    instead of letting the run look complete while a reviewed chat sits
+    untouched.
+    """
+    statement = (
+        select(func.count())
+        .select_from(Channel)
+        .where(
+            Channel.status == ChannelStatus.SEED,
+            Channel.is_chat.is_(True),
+            Channel.linked_to.is_(None),
+        )
+    )
+    return await session.scalar(statement) or 0
 
 
 async def load_state(
