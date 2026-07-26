@@ -8,9 +8,15 @@ import asyncio
 import logging
 from collections.abc import Coroutine
 from datetime import UTC, datetime
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
+
+if TYPE_CHECKING:
+    # Under `TYPE_CHECKING` because importing it for real would pull in
+    # `settings`, and `itgraph --help` has to work before there is a
+    # `.env` to read.
+    from itgraph.tg.backfill import FloodWaitTooLong
 
 from itgraph import __version__
 from itgraph.db.models import (
@@ -37,6 +43,23 @@ def _run(body: Coroutine[Any, Any, None]) -> None:
     except (ChannelLookupError, NotAuthorizedError) as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(1) from exc
+
+
+def _report_halt(halt: "FloodWaitTooLong | None") -> None:
+    """Report a rate-limit halt and fail the command.
+
+    The summary printed just before this is real work that was committed,
+    so it is not an error — but the run did not finish, and a scheduled
+    one must not be able to pass for a clean one. Hence: the counts on
+    stdout, the reason on stderr, exit 1.
+
+    Re-running after the reported time picks up from the stored cursor;
+    there is nothing else for the operator to do.
+    """
+    if halt is None:
+        return
+    typer.secho(str(halt), fg=typer.colors.RED, err=True)
+    raise typer.Exit(1)
 
 
 @app.callback()
@@ -231,6 +254,16 @@ def backfill(
             ),
         ),
     ] = None,
+    refresh_metadata: Annotated[
+        bool,
+        typer.Option(
+            "--refresh-metadata",
+            help=(
+                "Re-fetch channel descriptions and linked chats even when "
+                "the stored ones are still fresh."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Fetch channel history into the raw layer. Resumable, and slow.
 
@@ -269,10 +302,12 @@ def backfill(
                     batch_size=batch_size,
                     request_delay=delay,
                     max_messages=max_messages,
+                    refresh_metadata=refresh_metadata,
                 )
         finally:
             await database.dispose()
         typer.echo(summary.line())
+        _report_halt(summary.halt)
 
     _run(run())
 
@@ -359,6 +394,7 @@ def resolve(
         finally:
             await database.dispose()
         typer.echo(summary.line())
+        _report_halt(summary.halt)
 
     _run(run())
 

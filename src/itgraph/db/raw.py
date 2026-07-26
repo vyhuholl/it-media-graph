@@ -5,7 +5,7 @@ collector stores is interpreted later, from these tables, by code that
 must stay re-runnable — that is the whole reason the raw layer exists.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
@@ -14,7 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from itgraph.db.models import RawChannel, RawMessage
 
-__all__ = ["count_messages", "store_channel_payload", "store_messages"]
+__all__ = [
+    "count_messages",
+    "metadata_age",
+    "store_channel_payload",
+    "store_messages",
+]
 
 
 async def count_messages(session: AsyncSession, channel_id: int) -> int:
@@ -30,6 +35,28 @@ async def count_messages(session: AsyncSession, channel_id: int) -> int:
         .where(RawMessage.channel_id == channel_id)
     )
     return total or 0
+
+
+async def metadata_age(
+    session: AsyncSession, channel_id: int
+) -> timedelta | None:
+    """How long ago this channel's extended information was stored.
+
+    ``None`` when there is none, which the caller reads as "must fetch"
+    rather than as "infinitely old" — the two are the same decision here,
+    but only one of them is a fact.
+
+    The age is returned rather than a verdict: how old is too old is a
+    setting, and settings are not this module's business.
+    """
+    fetched_at = await session.scalar(
+        select(RawChannel.fetched_at).where(
+            RawChannel.channel_id == channel_id
+        )
+    )
+    if fetched_at is None:
+        return None
+    return datetime.now(UTC) - fetched_at
 
 
 async def store_messages(

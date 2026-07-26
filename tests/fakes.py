@@ -261,9 +261,17 @@ class FakeTelegramClient:
         flood_on_window: dict[int, int] | None = None,
         resolve_floods: dict[str | int, int] | None = None,
         raises: BaseException | None = None,
+        cached_peers: dict[str, Any] | None = None,
     ) -> None:
         self.records = records or []
         self.entities = entities or {}
+        # What the session file could answer without a network call.
+        # Defaults to everything this client knows, which is the normal
+        # case; pass `{}` for a session that has never seen the channel.
+        self.cached_peers = (
+            dict(entities or {}) if cached_peers is None else cached_peers
+        )
+        self.input_entities: list[str] = []
         # Resolution by id reaches here: a channel discovered by forward
         # is looked up through a `PeerChannel`, keyed by its channel id.
         self.entities_by_id = entities_by_id or {}
@@ -337,6 +345,20 @@ class FakeTelegramClient:
             return self.entities_by_id[key]
         except KeyError:
             raise ValueError(f"no entity for id {key}") from None
+
+    async def get_input_entity(self, ref: Any) -> Any:
+        """The peer Telethon can answer from its session cache.
+
+        Recorded separately from ``resolved`` because the whole point of
+        the cached path is that it is *not* a `contacts.resolveUsername`;
+        a test that cannot tell the two apart cannot show the metadata
+        pass was skipped.
+        """
+        self.input_entities.append(ref)
+        try:
+            return self.cached_peers[ref]
+        except KeyError:
+            raise ValueError(f"no cached peer for {ref}") from None
 
     async def __call__(self, request: Any) -> Any:
         self.requests.append(request)

@@ -30,7 +30,7 @@ from itgraph.db.raw import store_messages
 from itgraph.db.session import Database
 from itgraph.derive.edges import derive_graph
 from itgraph.tg import backfill as backfill_module
-from itgraph.tg import resolve as resolve_module
+from itgraph.tg import pacing as pacing_module
 from itgraph.tg.resolve import resolve_inventory
 
 SRC = 1000000001
@@ -51,9 +51,17 @@ def slept(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     async def sleep(seconds: float) -> None:
         taken.append(seconds)
 
-    monkeypatch.setattr(resolve_module.asyncio, "sleep", sleep)
+    monkeypatch.setattr(pacing_module.asyncio, "sleep", sleep)
     monkeypatch.setattr(backfill_module.asyncio, "sleep", sleep)
     return taken
+
+
+@pytest.fixture
+def no_long_pauses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Switch off the rare long pause, so a band assertion is decidable."""
+    from itgraph.config import settings
+
+    monkeypatch.setattr(settings, "pacing_long_pause_chance", 0.0)
 
 
 async def add_forward_channel(database: Database, tg_id: int) -> None:
@@ -224,7 +232,7 @@ async def test_a_flood_wait_is_waited_out_then_the_request_retried(
 
 
 async def test_requests_are_paced_and_bounded_by_a_limit(
-    inventory: Database, slept: list[float]
+    inventory: Database, slept: list[float], no_long_pauses: None
 ) -> None:
     await add_forward_channel(inventory, FWD_ID)
     await add_forward_channel(inventory, FAIL_ID)
@@ -240,8 +248,10 @@ async def test_requests_are_paced_and_bounded_by_a_limit(
     # Only one of the two was asked for; the limit stopped the run.
     assert len(client.resolved) == 1
     assert summary.resolved == 1
-    # And that one request was preceded by the configured pause.
-    assert slept.count(2.5) == 1
+    # And that one request was preceded by a pause from the band around
+    # the configured delay — drawn, not the delay repeated.
+    assert len(slept) == 1
+    assert 1.25 <= slept[0] <= 3.75
 
 
 async def test_a_resolved_channel_is_not_revisited(
@@ -346,3 +356,52 @@ async def test_derive_resolve_derive_completes_a_mention_edge(
     assert rows[0].src_channel_id == SRC
     assert rows[0].dst_channel_id == NEWCOMER
     assert rows[0].kind.value == "mention"
+
+
+async def test_a_long_flood_wait_halts_resolution(
+    inventory: Database, slept: list[float]
+) -> None:
+    """A day-long wait stops the run instead of being slept through.
+
+    Both queues with it: the halt is about the account, not about the
+    reference that happened to be next.
+    """
+    await add_forward_channel(inventory, FWD_ID)
+    await add_forward_channel(inventory, FAIL_ID)
+    await add_pending(inventory, "newcomer")
+    client = FakeTelegramClient(
+        entities_by_id={
+            FWD_ID: tl_channel(FWD_ID, username="a"),
+            FAIL_ID: tl_channel(FAIL_ID, username="b"),
+        },
+        entities={"newcomer": tl_channel(NEWCOMER, username="newcomer")},
+        resolve_floods={FAIL_ID: 86400},
+    )
+
+    summary = await resolve_inventory(client, inventory, delay=0)
+
+    assert summary.halt is not None
+    assert summary.halt.seconds == 86400
+    assert 86400 not in slept
+    # The first reference resolved before the halt, and is committed.
+    assert summary.resolved == 1
+    # The pending-username queue was never reached.
+    assert "newcomer" not in client.resolved
+    async with inventory.session() as session:
+        assert await session.get(PendingMention, "newcomer") is not None
+
+
+async def test_a_short_flood_wait_is_still_waited_out_in_resolution(
+    inventory: Database, slept: list[float]
+) -> None:
+    await add_forward_channel(inventory, FWD_ID)
+    client = FakeTelegramClient(
+        entities_by_id={FWD_ID: tl_channel(FWD_ID, username="a")},
+        resolve_floods={FWD_ID: 30},
+    )
+
+    summary = await resolve_inventory(client, inventory, delay=0)
+
+    assert 30 in slept
+    assert summary.halt is None
+    assert summary.resolved == 1

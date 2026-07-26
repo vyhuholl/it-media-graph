@@ -20,7 +20,6 @@ Whatever resolves to a user or a bot rather than a channel is recorded as
 such and creates no channel row: this graph holds channels only.
 """
 
-import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -46,7 +45,8 @@ from itgraph.db.edges import (
 )
 from itgraph.db.models import DiscoverySource
 from itgraph.db.session import Database
-from itgraph.tg.backfill import waiting_out_floods
+from itgraph.tg.backfill import FloodWaitTooLong, waiting_out_floods
+from itgraph.tg.pacing import pace
 
 __all__ = ["ResolveSummary", "channel_identity", "resolve_inventory"]
 
@@ -61,12 +61,17 @@ _LOOKUP_ERRORS = (RPCError, OSError, ValueError, TypeError)
 
 @dataclass(slots=True)
 class ResolveSummary:
-    """What a resolution run did, across both queues."""
+    """What a resolution run did, across both queues.
+
+    ``halt`` is set when a rate limit stopped the run short. Everything
+    resolved before that point is committed and counted here.
+    """
 
     resolved: int = 0
     discovered: int = 0
     not_channels: int = 0
     failed: int = 0
+    halt: FloodWaitTooLong | None = None
 
     def line(self) -> str:
         return (
@@ -107,7 +112,11 @@ async def resolve_inventory(
     Channels-by-id first, then pending usernames. ``limit`` bounds the
     whole run — total requests across both queues — so a cautious operator
     can spend a fixed number of requests and stop. Every request is paced
-    by ``delay`` and passes through the collector's FloodWait handling.
+    the same way the collector's are, and passes through the collector's
+    FloodWait handling.
+
+    A rate limit too long to sit through stops the whole run, both queues
+    with it. What was resolved first is committed and reported.
     """
     pause = delay if delay is not None else settings.backfill_request_delay
     summary = ResolveSummary()
@@ -117,24 +126,34 @@ async def resolve_inventory(
         channels = await channels_awaiting_resolution(
             session, retry_failed=retry_failed, limit=remaining
         )
-        for channel in channels:
-            if remaining is not None and remaining <= 0:
-                break
-            await asyncio.sleep(pause)
-            await _resolve_channel(client, session, channel.tg_id, summary)
-            if remaining is not None:
-                remaining -= 1
+        try:
+            for channel in channels:
+                if remaining is not None and remaining <= 0:
+                    break
+                await pace(pause)
+                await _resolve_channel(client, session, channel.tg_id, summary)
+                if remaining is not None:
+                    remaining -= 1
 
-        pending = await pending_mentions_to_resolve(
-            session, retry_failed=retry_failed, limit=remaining
-        )
-        for mention in pending:
-            if remaining is not None and remaining <= 0:
-                break
-            await asyncio.sleep(pause)
-            await _resolve_pending(client, session, mention.username, summary)
-            if remaining is not None:
-                remaining -= 1
+            # Queried only now: `remaining` has to reflect what the first
+            # queue already spent, or `--limit` bounds each queue instead
+            # of the run.
+            pending = await pending_mentions_to_resolve(
+                session, retry_failed=retry_failed, limit=remaining
+            )
+            for mention in pending:
+                if remaining is not None and remaining <= 0:
+                    break
+                await pace(pause)
+                await _resolve_pending(
+                    client, session, mention.username, summary
+                )
+                if remaining is not None:
+                    remaining -= 1
+        except FloodWaitTooLong as exc:
+            logger.warning("%s", exc)
+            await session.rollback()
+            summary.halt = exc
 
     logger.info("resolution done: %s", summary.line())
     return summary

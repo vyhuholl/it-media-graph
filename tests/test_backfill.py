@@ -36,6 +36,7 @@ from itgraph.db.models import (
 )
 from itgraph.db.session import Database
 from itgraph.tg import backfill as backfill_module
+from itgraph.tg import pacing as pacing_module
 from itgraph.tg.backfill import backfill_channel, backfill_channels
 
 NOTES = FakeChannel(1000000001, "example_notes", "Example Notes")
@@ -48,13 +49,52 @@ DEEPER = datetime(2026, 1, 1, tzinfo=UTC)
 
 @pytest.fixture
 def slept(monkeypatch: pytest.MonkeyPatch) -> list[float]:
-    """Record sleeps instead of taking them."""
+    """Record sleeps instead of taking them.
+
+    Both seams: pacing gaps come from ``tg.pacing``, FloodWait sleeps
+    from ``waiting_out_floods`` in ``tg.backfill``. One list, because
+    what most tests want to know is simply that a run never sleeps for
+    real.
+    """
     taken: list[float] = []
 
     async def sleep(seconds: float) -> None:
         taken.append(seconds)
 
+    monkeypatch.setattr(pacing_module.asyncio, "sleep", sleep)
     monkeypatch.setattr(backfill_module.asyncio, "sleep", sleep)
+    return taken
+
+
+@pytest.fixture
+def no_long_pauses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Switch off the rare long pause, so a band assertion is decidable.
+
+    Tests that care about the band want the band; the long pause has its
+    own test.
+    """
+    from itgraph.config import settings
+
+    monkeypatch.setattr(settings, "pacing_long_pause_chance", 0.0)
+
+
+@pytest.fixture
+def gaps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Only the pacing gaps, in order, with the channel pauses removed.
+
+    The band a gap falls in is the contract now, so a test asserting on
+    it must not have to sift 10-to-40-second channel pauses out of the
+    same list.
+    """
+    taken: list[float] = []
+    real_gap = pacing_module.request_gap
+
+    def record(delay: float) -> float:
+        gap = real_gap(delay)
+        taken.append(gap)
+        return gap
+
+    monkeypatch.setattr(pacing_module, "request_gap", record)
     return taken
 
 
@@ -407,13 +447,19 @@ async def test_a_flood_wait_is_not_recorded_as_a_failure(
 
 
 async def test_channels_are_paced_and_sequential(
-    inventory: Database, slept: list[float]
+    inventory: Database,
+    slept: list[float],
+    gaps: list[float],
+    no_long_pauses: None,
 ) -> None:
     """One at a time, with a gap before every request.
 
     Concurrency would buy nothing — Telegram's limits are per account, so
     parallel workers reach the same ceiling faster and look worse doing
     it.
+
+    The gap is drawn per request now, so the band is what can be asserted
+    — an exact value would only prove the randomization was not wired up.
     """
     telegram = client(
         histories={NOTES.id: history(3), JOBS.id: history(3, newest_id=500)}
@@ -425,12 +471,17 @@ async def test_channels_are_paced_and_sequential(
     # grouped, not interleaved.
     walked = [entity_id for entity_id, _, _ in telegram.windows]
     assert walked == sorted(walked)
-    # And every history request was preceded by the configured wait.
-    assert slept.count(2.5) == len(telegram.windows)
+    # A gap before every request — the history windows, and the metadata
+    # request that opens each channel.
+    assert len(gaps) == len(telegram.windows) + 2
+    # Every one of them inside the band, and none of them the bare delay
+    # repeated, which is what this used to assert.
+    assert all(1.25 <= gap <= 3.75 for gap in gaps)
+    assert len(set(gaps)) > 1
 
 
 async def test_the_defaults_are_the_slow_ones(
-    inventory: Database, slept: list[float]
+    inventory: Database, slept: list[float], gaps: list[float]
 ) -> None:
     """No pacing options means the conservative configured defaults."""
     from itgraph.config import settings
@@ -440,10 +491,78 @@ async def test_the_defaults_are_the_slow_ones(
     async with inventory.session() as session:
         await backfill_channels(telegram, session, cutoff=CUTOFF)
 
-    assert settings.backfill_request_delay >= 1
-    assert slept.count(settings.backfill_request_delay) == len(
-        telegram.windows
+    delay = settings.backfill_request_delay
+    assert delay >= 1
+    assert gaps
+    # Either the ordinary band around the configured delay, or one of the
+    # rare long pauses — nothing in between, and nothing shorter.
+    assert all(
+        delay * 0.5 <= gap <= delay * 1.5
+        or settings.pacing_long_pause_min
+        <= gap
+        <= settings.pacing_long_pause_max
+        for gap in gaps
     )
+
+
+async def test_pacing_can_be_switched_off(
+    inventory: Database, slept: list[float]
+) -> None:
+    """A delay of zero takes no gap at all, not a jittered almost-zero.
+
+    Zero is how an operator says they know what they are doing. A
+    mechanism that occasionally sleeps 40 seconds regardless would be a
+    surprise, so the long pause must not fire either.
+    """
+    telegram = client(histories={NOTES.id: history(2), JOBS.id: history(2)})
+
+    await run(inventory, telegram, request_delay=0)
+
+    # Only the pauses between channels are left; no per-request gap of
+    # any size was taken, including a literal sleep(0).
+    assert len(slept) == 1
+    assert 10 <= slept[0] <= 40
+
+
+async def test_a_long_pause_replaces_the_gap_rather_than_adding_to_it(
+    inventory: Database, slept: list[float], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rare long pause is the gap, not an extra sleep beside it."""
+    from itgraph.config import settings
+
+    monkeypatch.setattr(settings, "pacing_long_pause_chance", 1.0)
+    telegram = client(histories={NOTES.id: history(2)})
+
+    await run(inventory, telegram, request_delay=2.5, limit=1)
+
+    long_pauses = [
+        gap
+        for gap in slept
+        if settings.pacing_long_pause_min
+        <= gap
+        <= settings.pacing_long_pause_max
+    ]
+    assert long_pauses
+    # Nothing from the ordinary band alongside them.
+    assert not [gap for gap in slept if 1.25 <= gap <= 3.75]
+
+
+async def test_gaps_do_not_come_from_the_seedable_global_random() -> None:
+    """A `random.seed()` anywhere must not make the pacing predictable.
+
+    This is the only property `secrets` buys over `random` here, so it is
+    the one worth pinning.
+    """
+    import random
+
+    from itgraph.tg.pacing import request_gap
+
+    random.seed(1234)
+    first = [request_gap(4.0) for _ in range(20)]
+    random.seed(1234)
+    second = [request_gap(4.0) for _ in range(20)]
+
+    assert first != second
 
 
 # --- failures ---------------------------------------------------------
@@ -691,10 +810,13 @@ async def test_the_walker_refuses_a_channel_already_at_its_ceiling(
 
     later = client(histories={NOTES.id: history(40)})
     async with inventory.session() as session:
-        channel = await session.get(Channel, NOTES.id)
-        assert channel is not None
         result = await backfill_channel(
-            later, session, channel, cutoff=DEEPER, max_messages=10
+            later,
+            session,
+            channel_id=NOTES.id,
+            username="example_notes",
+            cutoff=DEEPER,
+            max_messages=10,
         )
 
     assert result.capped
@@ -735,3 +857,251 @@ async def test_the_run_reports_what_it_did(
     assert summary.failed == 0
     assert summary.stored == 5
     assert "completed 2" in summary.line()
+
+
+# --- the pause between channels ---------------------------------------
+
+
+async def test_a_longer_pause_separates_channels(
+    inventory: Database, slept: list[float], no_long_pauses: None
+) -> None:
+    """Where the quota-bearing per-channel requests cluster.
+
+    Before this existed, a channel's metadata request followed the
+    previous channel's last history request with no gap whatsoever — the
+    one boundary in the walk that was not paced at all, in front of the
+    one request that is never cached.
+    """
+    telegram = client(
+        histories={NOTES.id: history(3), JOBS.id: history(3, newest_id=500)}
+    )
+
+    await run(inventory, telegram, request_delay=2.5)
+
+    pauses = [gap for gap in slept if 10 <= gap <= 40]
+    # Two channels walked, so exactly one transition between them.
+    assert len(pauses) == 1
+
+
+async def test_the_first_channel_is_not_delayed(
+    inventory: Database, slept: list[float]
+) -> None:
+    """It separates channels; there is nothing before the first one."""
+    telegram = client(histories={NOTES.id: history(2)})
+
+    await run(inventory, telegram, request_delay=0, limit=1)
+
+    assert slept == []
+
+
+async def test_a_skipped_channel_costs_no_pause(
+    inventory: Database, slept: list[float]
+) -> None:
+    """A channel that makes no request should not cost 25 seconds.
+
+    The inventory holds a seed channel with no username, and its id sorts
+    ahead of the rest, so the run skips it before touching anything. Were
+    the pause taken in the loop header rather than past the guards, the
+    channel that follows would pay for it.
+    """
+    telegram = client(histories={NOTES.id: history(2)})
+
+    summary = await run(inventory, telegram, request_delay=0, limit=1)
+
+    assert summary.skipped == 1
+    assert summary.completed == 1
+    # The skip is not work, so the channel after it is still the first
+    # one to do any — and nothing was separated from anything.
+    assert slept == []
+
+
+# --- the conditional metadata pass -------------------------------------
+
+
+async def test_a_recent_payload_is_not_refetched(
+    inventory: Database, slept: list[float]
+) -> None:
+    """The least cacheable request in the walk, skipped when it is not due.
+
+    Two hundred channels re-read every run is two hundred quota-bearing
+    requests spent to learn that a description has not changed.
+    """
+    first = client(histories={NOTES.id: history(2)})
+    await run(inventory, first, limit=1)
+    assert len(first.requests) == 1
+
+    second = client(histories={NOTES.id: history(2, newest_id=900)})
+    await run(inventory, second, cutoff=DEEPER, limit=1)
+
+    # No GetFullChannelRequest, and no username resolution either: the
+    # peer came out of the session's own cache.
+    assert second.requests == []
+    assert second.resolved == []
+    assert second.input_entities == ["example_notes"]
+    # And the walk still happened.
+    assert second.windows
+
+
+async def test_a_stale_payload_is_refreshed(
+    inventory: Database, slept: list[float]
+) -> None:
+    first = client(histories={NOTES.id: history(2)})
+    await run(inventory, first, limit=1)
+
+    # Age the stored payload past the freshness window.
+    async with inventory.session() as session:
+        await session.execute(
+            text(
+                "UPDATE raw_channels SET fetched_at = now() - interval "
+                "'400 days' WHERE channel_id = :cid"
+            ),
+            {"cid": NOTES.id},
+        )
+        await session.commit()
+
+    second = client(histories={NOTES.id: history(2, newest_id=900)})
+    await run(inventory, second, cutoff=DEEPER, limit=1)
+
+    assert len(second.requests) == 1
+
+
+async def test_the_skip_falls_back_rather_than_failing(
+    inventory: Database, slept: list[float]
+) -> None:
+    """A session that cannot supply the peer must not turn a skip into a
+    failure — the fallback is the path that already worked."""
+    first = client(histories={NOTES.id: history(2)})
+    await run(inventory, first, limit=1)
+
+    second = client(histories={NOTES.id: history(2, newest_id=900)})
+    second.cached_peers = {}
+
+    summary = await run(inventory, second, cutoff=DEEPER, limit=1)
+
+    assert summary.failed == 0
+    # Asked the cache, was refused, ran the full pass instead.
+    assert second.input_entities == ["example_notes"]
+    assert len(second.requests) == 1
+    assert second.windows
+
+
+async def test_a_refresh_can_be_demanded(
+    inventory: Database, slept: list[float]
+) -> None:
+    first = client(histories={NOTES.id: history(2)})
+    await run(inventory, first, limit=1)
+
+    second = client(histories={NOTES.id: history(2, newest_id=900)})
+    await run(inventory, second, cutoff=DEEPER, limit=1, refresh_metadata=True)
+
+    assert len(second.requests) == 1
+    # The cached path was not even consulted.
+    assert second.input_entities == []
+
+
+# --- halting on a long FloodWait ---------------------------------------
+
+
+async def test_a_wait_within_the_threshold_is_still_slept_off(
+    inventory: Database, slept: list[float]
+) -> None:
+    """The existing behaviour, unchanged below the threshold."""
+    from itgraph.config import settings
+
+    assert settings.flood_abort_threshold == 1800
+    telegram = client(
+        histories={NOTES.id: history(3)}, flood_on_window={0: 1800}
+    )
+
+    summary = await run(inventory, telegram, limit=1)
+
+    assert 1800 in slept
+    assert summary.halt is None
+    assert summary.failed == 0
+    assert await stored_ids(inventory, NOTES.id) == [1000, 999, 998]
+
+
+async def test_a_long_wait_halts_the_run(
+    inventory: Database, slept: list[float]
+) -> None:
+    """A day-long wait is not slept through inside the process."""
+    telegram = client(
+        histories={NOTES.id: history(3), JOBS.id: history(3, newest_id=500)},
+        flood_on_window={0: 86400},
+    )
+
+    summary = await run(inventory, telegram)
+
+    assert summary.halt is not None
+    assert summary.halt.seconds == 86400
+    assert summary.halt.resume_after > datetime.now(UTC)
+    # Never slept it off, and never asked for anything else.
+    assert 86400 not in slept
+    walked = {entity_id for entity_id, _, _ in telegram.windows}
+    assert walked == {NOTES.id}
+
+
+async def test_a_halt_is_not_recorded_as_a_channel_failure(
+    inventory: Database, slept: list[float]
+) -> None:
+    """`FloodWaitError` is an `RPCError`; a halt must not be one.
+
+    Were the halt absorbed by the per-channel handler, it would be filed
+    as a transient failure and the run would ask the next channel
+    immediately — a fresh request at the exact moment Telegram asked for
+    silence, which is what escalates a limit into a ban.
+    """
+    telegram = client(
+        histories={NOTES.id: history(3), JOBS.id: history(3, newest_id=500)},
+        flood_on_window={0: 86400},
+    )
+
+    summary = await run(inventory, telegram)
+
+    assert summary.failed == 0
+    state = await state_of(inventory, NOTES.id)
+    assert state is not None
+    assert state.failure_kind is None
+
+
+async def test_a_halted_run_reports_what_it_committed(
+    inventory: Database, slept: list[float]
+) -> None:
+    """The counts around a halt are real work, not a lost run."""
+    telegram = client(
+        histories={NOTES.id: history(3), JOBS.id: history(3, newest_id=500)},
+        # The first channel finishes; the second is refused outright.
+        flood_on_window={1: 86400},
+    )
+
+    summary = await run(inventory, telegram)
+
+    assert summary.halt is not None
+    assert summary.completed == 1
+    assert summary.stored == 3
+    assert await stored_ids(inventory, NOTES.id) == [1000, 999, 998]
+
+
+async def test_a_halted_run_resumes_from_its_cursor(
+    inventory: Database, slept: list[float]
+) -> None:
+    """A halt leaves the same state an interruption would."""
+    telegram = client(
+        histories={NOTES.id: history(5)}, flood_on_window={1: 86400}
+    )
+    halted = await run(inventory, telegram, batch_size=2, limit=1)
+    assert halted.halt is not None
+    partial = await stored_ids(inventory, NOTES.id)
+    assert partial == [1000, 999]
+
+    later = client(histories={NOTES.id: history(5)})
+    resumed = await run(inventory, later, batch_size=2, limit=1)
+
+    assert resumed.halt is None
+    assert await stored_ids(inventory, NOTES.id) == [
+        1000,
+        999,
+        998,
+        997,
+        996,
+    ]

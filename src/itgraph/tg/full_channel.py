@@ -1,10 +1,24 @@
-"""The per-channel metadata pass: one request, before any history.
+"""The per-channel metadata pass: one request, when it is due.
 
-``GetFullChannelRequest`` is cheap and answers three questions at once —
-whether the channel is reachable at all, what its description says, and
-which discussion chat belongs to it. Running it first means an
-inaccessible channel costs one request rather than failing part-way
-through a long history walk.
+``GetFullChannelRequest`` answers two questions at once — what a
+channel's description says, and which discussion chat belongs to it.
+
+It is not cheap in the way that matters. It is never cached, so it is a
+network call every time, and it is one of the methods that carries a
+per-day quota. Over two hundred channels that is two hundred quota-bearing
+requests per run, spent to re-read a description and a linked chat that
+change on the order of months. So the caller runs this only when what it
+holds is absent or older than ``channel_metadata_max_age_days``, and
+takes the peer from the session's entity cache the rest of the time. See
+``backfill._resolve_peer``.
+
+That skip gives something up. This pass ran before any history partly as
+a reachability probe: an inaccessible channel cost one request here
+rather than failing part-way through a long walk. When it is skipped the
+first history request finds out instead — one request either way, and
+``backfill.classify`` reaches the same verdict about whether to try again.
+The probe was cheap insurance, not a guarantee, and it was not worth two
+hundred requests a run to keep.
 
 The payload is stored as it arrives. The external links in a channel's
 description are extracted later, from that payload, by code that has to
