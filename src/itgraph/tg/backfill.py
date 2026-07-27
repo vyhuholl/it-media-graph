@@ -1,10 +1,21 @@
-"""The history walk: the one place in this project that spends requests.
+"""The history walk: many requests, none of them scarce.
 
-Two rules shape everything here. A run must survive being interrupted,
+Three rules shape everything here. A run must survive being interrupted,
 so the cursor advances in the same transaction as the batch it describes
-and never ahead of it. And a run must never look like a bot in a hurry,
-so channels are walked strictly one at a time, with a delay between
-requests, and every rate limit is answered by waiting.
+and never ahead of it. A run must never look like a bot in a hurry, so
+channels are walked strictly one at a time, with a delay between
+requests, and every rate limit is answered by waiting. And a walk spends
+no request that carries a daily quota: it asks for history and nothing
+else.
+
+That third rule is the newest and the least obvious, because the two
+quota-bearing requests it removed did not look like requests at all —
+they looked like getting hold of the channel. Resolving a username and
+fetching extended information were both preconditions of walking, and
+both were rationed per day, so a first pass over two hundred channels
+ran out of budget before it collected anything. Now the peer comes from
+the session file, extended information is a separate command, and what a
+walk spends is `messages.getHistory` and time.
 
 Nothing is derived. Messages arrive, are re-encoded into something
 ``jsonb`` accepts, and are stored. Forward edges, mentions, links and
@@ -28,11 +39,13 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError, RPCError
+from telethon.utils import maybe_async
 
 from itgraph.config import settings
 from itgraph.db.backfill import (
     channels_in_scope,
     count_deferred_chats,
+    count_stale_metadata,
     load_state,
     record_complete,
     record_failure,
@@ -42,19 +55,20 @@ from itgraph.db.backfill import (
     was_completed_to,
 )
 from itgraph.db.models import Channel, CollectionCommand, FailureKind
-from itgraph.db.raw import count_messages, metadata_age, store_messages
+from itgraph.db.raw import count_messages, store_messages
 from itgraph.db.session import Database
 from itgraph.tg.floods import FloodRecorder
-from itgraph.tg.full_channel import fetch_full_channel
 from itgraph.tg.pacing import pace, pause_between_channels
 from itgraph.tg.payload import encode_payload
 
 __all__ = [
     "ChannelRun",
     "FloodWaitTooLong",
+    "PeerNotCached",
     "RunSummary",
     "backfill_channel",
     "backfill_channels",
+    "cached_peer",
     "ceiling_for",
     "classify",
 ]
@@ -124,6 +138,12 @@ class RunSummary:
     did: accepted chats with no parent channel, which nothing walks yet.
     It is reported in its own clause because those are not channels the
     run passed over — they are work that is waiting.
+
+    ``stale_metadata`` is the same kind of number for a different queue:
+    in-scope channels whose description and linked chat are absent or
+    out of date. A walk no longer fetches any of that, so without this
+    the only sign that ``itgraph metadata`` was never run would be
+    silence. Counting costs a query and no request.
     """
 
     completed: int = 0
@@ -132,6 +152,7 @@ class RunSummary:
     failed: int = 0
     stored: int = 0
     deferred: int = 0
+    stale_metadata: int = 0
     halt: FloodWaitTooLong | None = None
 
     def line(self) -> str:
@@ -144,6 +165,12 @@ class RunSummary:
             line += (
                 f"; {self.deferred} standalone chat"
                 f"{'' if self.deferred == 1 else 's'} deferred"
+            )
+        if self.stale_metadata:
+            line += (
+                f"; {self.stale_metadata} channel"
+                f"{'' if self.stale_metadata == 1 else 's'} "
+                "awaiting `itgraph metadata`"
             )
         return line
 
@@ -244,63 +271,47 @@ async def _fetch_window(
     return await waiting_out_floods(fetch, recorder)
 
 
-async def _resolve_peer(
-    client: TelegramClient,
-    session: AsyncSession,
-    *,
-    channel_id: int,
-    username: str,
-    delay: float,
-    refresh_metadata: bool,
-    recorder: FloodRecorder,
-) -> Any:
-    """The peer to walk, fetching extended information only if it is due.
+class PeerNotCached(RuntimeError):
+    """The session file holds no peer for this channel.
 
-    ``GetFullChannelRequest`` is the least cacheable request in the walk
-    and one of the ones that carries a daily quota, and a description and
-    a linked discussion chat change on the order of months. Running it on
-    every channel on every run spent roughly two hundred of them per pass
-    to learn nothing.
-
-    When it is skipped, the peer comes from ``get_input_entity``, which
-    Telethon answers out of the session file's entity cache — usually no
-    network call at all. On a cache miss it resolves the username itself,
-    which is the request the full pass would have made anyway, so the
-    skip is never the more expensive path.
-
-    Two things are given up deliberately. The metadata pass also served
-    as a reachability probe, so an inaccessible channel cost one request
-    rather than failing part-way through a long walk; without it the
-    first history request finds out instead — one request either way, and
-    ``classify`` reaches the same verdict. And anything that goes wrong
-    on the cached path falls back to the full pass rather than failing,
-    because a skip must never be worse than not skipping.
+    Deliberately **not** a ``ValueError``, which is what the session
+    raises on a miss. ``classify`` files a bare ``ValueError`` as
+    ``PERMANENT``, and ``channels_in_scope`` excludes anything
+    permanently failed — so a miss allowed to reach the per-channel
+    failure handler would retire the channel from collection for good,
+    silently, over a session file that can be rebuilt in one command.
+    Its own class is what keeps that unreachable.
     """
-    if not refresh_metadata:
-        age = await metadata_age(session, channel_id)
-        window = timedelta(days=settings.channel_metadata_max_age_days)
-        if age is not None and age < window:
-            try:
-                await pace(delay)
-                return await waiting_out_floods(
-                    lambda: client.get_input_entity(username), recorder
-                )
-            except (RPCError, OSError, ValueError, TypeError) as exc:
-                # A halt is a `FloodWaitTooLong`, which is deliberately
-                # outside this tuple and passes straight through.
-                logger.debug(
-                    "@%s: no cached peer (%s) — fetching metadata instead",
-                    username,
-                    exc,
-                )
 
-    await pace(delay)
-    metadata = await waiting_out_floods(
-        lambda: fetch_full_channel(client, session, username=username),
-        recorder,
-    )
-    await session.commit()
-    return metadata.entity
+    def __init__(self, username: str) -> None:
+        self.username = username
+        super().__init__(f"@{username} is not in the session's entity cache")
+
+
+async def cached_peer(client: TelegramClient, username: str) -> Any:
+    """The peer for a username, out of the session file and nowhere else.
+
+    Asks the *session* rather than the client, and the distinction is the
+    whole point. ``client.get_input_entity`` consults the same cache, but
+    on a miss it keeps going: ``telethon/client/users.py`` falls through
+    to ``_get_entity_from_string`` and out to
+    ``contacts.resolveUsername`` — the tightest daily quota in the
+    project, and exactly the request a history walk must never make. By
+    the time that call raised, the quota would already be spent, so
+    catching its error would be catching the wrong thing at the wrong
+    time. ``session.get_input_entity`` stops at the cache and raises.
+
+    Two hundred channels on a rebuilt session is what this prevents: a
+    day's resolution budget gone before a single message arrived.
+
+    ``maybe_async`` because a session may implement the lookup either
+    way; the bundled SQLite one is synchronous, and Telethon wraps it the
+    same way at its own call site.
+    """
+    try:
+        return await maybe_async(client.session.get_input_entity(username))
+    except (ValueError, TypeError) as exc:
+        raise PeerNotCached(username) from exc
 
 
 async def backfill_channel(
@@ -313,7 +324,6 @@ async def backfill_channel(
     batch_size: int | None = None,
     request_delay: float | None = None,
     max_messages: int | None = None,
-    refresh_metadata: bool = False,
     recorder: FloodRecorder,
 ) -> ChannelRun:
     """Walk one channel back to ``cutoff``, or until it holds its share.
@@ -360,15 +370,9 @@ async def backfill_channel(
     await start_channel(session, channel_id)
     await session.commit()
 
-    entity = await _resolve_peer(
-        client,
-        session,
-        channel_id=channel_id,
-        username=username,
-        delay=delay,
-        refresh_metadata=refresh_metadata,
-        recorder=recorder,
-    )
+    # No pacing before this one: it reads the session file, not the
+    # network, so there is nothing to be polite to.
+    entity = await cached_peer(client, username)
 
     # 0 means "from the newest message"; a stored cursor means "carry on
     # from where the last run stopped".
@@ -467,7 +471,6 @@ async def backfill_channels(
     batch_size: int | None = None,
     request_delay: float | None = None,
     max_messages: int | None = None,
-    refresh_metadata: bool = False,
     database: Database,
 ) -> RunSummary:
     """Walk every in-scope channel, one at a time, and survive each one.
@@ -497,14 +500,25 @@ async def backfill_channels(
         for channel in await channels_in_scope(session)
     ]
 
-    # Counted before the walk, so a run stopped by a rate limit still
-    # reports it: what is deferred does not depend on how far the run got.
+    # Both counted before the walk, so a run stopped by a rate limit
+    # still reports them: neither depends on how far the run got.
     summary.deferred = await count_deferred_chats(session)
     if summary.deferred:
         logger.info(
             "%d accepted standalone chat(s) deferred: reading community "
             "chats is not implemented yet",
             summary.deferred,
+        )
+
+    summary.stale_metadata = await count_stale_metadata(
+        session,
+        max_age=timedelta(days=settings.channel_metadata_max_age_days),
+    )
+    if summary.stale_metadata:
+        logger.info(
+            "%d channel(s) have no current description or linked chat; "
+            "run `itgraph metadata`",
+            summary.stale_metadata,
         )
 
     for tg_id, username in targets:
@@ -555,9 +569,21 @@ async def backfill_channels(
                 batch_size=batch_size,
                 request_delay=request_delay,
                 max_messages=max_messages,
-                refresh_metadata=refresh_metadata,
                 recorder=recorder.for_channel(tg_id),
             )
+        except PeerNotCached as exc:
+            # Not a failure: the channel is fine, this session simply has
+            # never seen it. Recording it as failed would be worse than
+            # useless — `classify` would call the underlying `ValueError`
+            # permanent and `channels_in_scope` would drop the channel for
+            # good. Caught before the handler below, which is what keeps
+            # that from happening; see `PeerNotCached`.
+            logger.info("skipping @%s: %s", username, exc)
+            await session.rollback()
+            await record_skip(session, tg_id, "no cached peer")
+            await session.commit()
+            summary.skipped += 1
+            continue
         except FloodWaitTooLong as exc:
             # Not this channel's fault and not a channel failure: nothing
             # is recorded against it, and its committed progress stands.

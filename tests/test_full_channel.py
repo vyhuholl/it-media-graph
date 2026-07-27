@@ -1,10 +1,15 @@
-"""The per-channel metadata pass, and the discussion chat it resolves."""
+"""The per-channel metadata fetch, and the discussion chat it resolves."""
 
 import base64
 from collections.abc import AsyncIterator
 
 import pytest
-from fakes import FakeChannel, FakeFullChannel, FakeTelegramClient
+from fakes import (
+    FakeChannel,
+    FakeFullChannel,
+    FakeInputPeer,
+    FakeTelegramClient,
+)
 from sqlalchemy import select
 
 from itgraph.db.channels import DiscoveredChannel, upsert_channels
@@ -15,6 +20,11 @@ from itgraph.tg.full_channel import fetch_full_channel
 PARENT = FakeChannel(1000000001, "example_notes", "Example Notes")
 CHAT = FakeChannel(1000000002, "example_notes_chat", "Example Notes - chat")
 LONELY = FakeChannel(1000000005, "example_jobs", "Example Jobs")
+
+# What the caller hands in: a peer out of the session's cache, never a
+# username. The fetch is not allowed to resolve one.
+PARENT_PEER = FakeInputPeer(PARENT)
+LONELY_PEER = FakeInputPeer(LONELY)
 
 
 @pytest.fixture
@@ -60,7 +70,7 @@ async def test_the_payload_is_stored_as_it_arrives(
     client = client_with_chat()
 
     async with inventory.session() as session:
-        await fetch_full_channel(client, session, username="example_notes")
+        await fetch_full_channel(client, session, peer=PARENT_PEER)
 
     async with inventory.session() as session:
         row = await session.get(RawChannel, PARENT.id)
@@ -80,9 +90,7 @@ async def test_a_linked_chat_enters_the_inventory(
     client = client_with_chat()
 
     async with inventory.session() as session:
-        result = await fetch_full_channel(
-            client, session, username="example_notes"
-        )
+        result = await fetch_full_channel(client, session, peer=PARENT_PEER)
 
     assert result.linked_chat_id == CHAT.id
 
@@ -124,9 +132,7 @@ async def test_an_already_known_chat_is_linked_not_duplicated(
         first_seen_at = original.first_seen_at
 
     async with inventory.session() as session:
-        await fetch_full_channel(
-            client_with_chat(), session, username="example_notes"
-        )
+        await fetch_full_channel(client_with_chat(), session, peer=PARENT_PEER)
 
     async with inventory.session() as session:
         rows = (
@@ -151,9 +157,7 @@ async def test_a_channel_without_a_discussion_chat(
     )
 
     async with inventory.session() as session:
-        result = await fetch_full_channel(
-            client, session, username="example_jobs"
-        )
+        result = await fetch_full_channel(client, session, peer=LONELY_PEER)
 
     assert result.linked_chat_id is None
 
@@ -172,9 +176,7 @@ async def test_a_second_pass_refreshes_rather_than_accumulates(
 ) -> None:
     """The freshest payload wins: a description is current or it is noise."""
     async with inventory.session() as session:
-        await fetch_full_channel(
-            client_with_chat(), session, username="example_notes"
-        )
+        await fetch_full_channel(client_with_chat(), session, peer=PARENT_PEER)
 
     later = FakeTelegramClient(
         entities={"example_notes": PARENT},
@@ -185,7 +187,7 @@ async def test_a_second_pass_refreshes_rather_than_accumulates(
         },
     )
     async with inventory.session() as session:
-        await fetch_full_channel(later, session, username="example_notes")
+        await fetch_full_channel(later, session, peer=PARENT_PEER)
 
     async with inventory.session() as session:
         rows = (await session.scalars(select(RawChannel))).all()
@@ -196,20 +198,42 @@ async def test_a_second_pass_refreshes_rather_than_accumulates(
     )
 
 
-async def test_the_entity_is_handed_back_for_the_history_walk(
+async def test_identity_comes_from_the_response(
     inventory: Database,
 ) -> None:
-    """Resolution is a request, and every request on this path is counted."""
+    """Who this channel is, without a second request to ask.
+
+    The response carries the ``Channel`` beside the ``ChannelFull``, so
+    the id, title and username are already in hand. Reading them there
+    rather than from a resolved entity is what lets the fetch take a peer
+    at all — and taking a peer is what keeps it off
+    ``contacts.resolveUsername``.
+    """
     client = client_with_chat()
 
     async with inventory.session() as session:
-        result = await fetch_full_channel(
-            client, session, username="example_notes"
-        )
+        result = await fetch_full_channel(client, session, peer=PARENT_PEER)
 
-    assert result.entity is PARENT
     assert result.tg_id == PARENT.id
-    assert client.resolved == ["example_notes"]
+    assert result.username == "example_notes"
+    assert result.title == "Example Notes"
+
+
+async def test_no_username_is_resolved(inventory: Database) -> None:
+    """The whole point of the change, as a flat assertion.
+
+    ``contacts.resolveUsername`` carries the tightest daily quota in the
+    project. A fetch that spends one has undone this.
+    """
+    client = client_with_chat()
+
+    async with inventory.session() as session:
+        await fetch_full_channel(client, session, peer=PARENT_PEER)
+
+    assert client.resolved == []
+    assert client.input_entities == []
+    # One request, and it is the one this pass exists to make.
+    assert len(client.requests) == 1
 
 
 async def test_a_missing_chat_in_the_response_does_not_lose_the_payload(
@@ -225,9 +249,7 @@ async def test_a_missing_chat_in_the_response_does_not_lose_the_payload(
     )
 
     async with inventory.session() as session:
-        result = await fetch_full_channel(
-            client, session, username="example_notes"
-        )
+        result = await fetch_full_channel(client, session, peer=PARENT_PEER)
 
     assert result.linked_chat_id == CHAT.id
 

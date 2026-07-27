@@ -31,6 +31,10 @@ The corollary is worth stating separately: **anything derivable can be deferred 
   - `replies.channel_id` — id of the linked discussion group.
 - **Comments**: a channel has a linked chat; `GetDiscussionMessageRequest` plus iteration over replies. By volume this is 10–100× the posts — a separate phase.
 - Treat FloodWait as normal, not as an error: exponential backoff, a persistent per-channel `offset_id` cursor so a backfill is resumable.
+- **Not every request is priced the same, and the difference decides the shape of the tooling.** `messages.getHistory` is cheap: it rate-limits per burst, and a wait is measured in seconds. Two others carry a *per-day* quota, where waiting does not help because the limit counts calls rather than measuring their rate:
+  - `contacts.resolveUsername` — the tightest of them, empirically a couple of hundred a day, and it has no batch form. Telethon's own `get_entity` docstring warns that flood waits start "around 50 usernames in a short period". Only `itgraph resolve` is allowed to spend it; a `ResolveUsernameRequest` recorded in `flood_events` under any other command is a regression.
+  - `channels.getFullChannel` — rationed too, and what `itgraph metadata` spends. Descriptions and linked chats change on the order of months, so it runs about monthly rather than alongside every walk.
+  A history walk spends neither: its peer comes out of the session file's entity cache, and a channel the cache cannot supply is skipped rather than resolved. That is why the daily quota bounds how fast *new* channels enter the graph, not how much history can be collected.
 
 ## Storage
 
@@ -110,7 +114,7 @@ Repost activity across the wider chat ecosystem — beyond the channels collecte
 | Weeks | What | Artifact |
 |---|---|---|
 | 1–2 | Collector + schema + backfill of seed channels | Forward graph v0 |
-| 3–4 | Candidates + triage UI + classifier | 300–500 channels |
+| 3–4 | Candidates + classifier | 300–500 channels |
 | 5–6 | Clustering + role metrics + visualization | **First useful result** |
 | 7–8 | Post-level virality + metric snapshots + alert bot | Working notifications |
 | 9–10 | Comments (the heavy phase) | Commenter graph |

@@ -141,6 +141,49 @@ class FakeChannel:
             self.username = username
 
 
+class FakeSession:
+    """The session file's entity cache, and nothing else.
+
+    Exists because production asks the *session* for a peer, not the
+    client. The difference is the whole point of that code: the client
+    would go to ``contacts.resolveUsername`` on a miss, and the session
+    just says no. A fake that answered on the client would let a
+    regression through silently, which is the one thing this cache is
+    guarding against.
+
+    Synchronous, like Telethon's bundled SQLite session — the caller
+    wraps it in ``maybe_async``, so both shapes work and this is the one
+    the real code meets.
+    """
+
+    def __init__(self, cached_peers: dict[str, Any]) -> None:
+        self.cached_peers = cached_peers
+        self.lookups: list[Any] = []
+
+    def get_input_entity(self, ref: Any) -> Any:
+        self.lookups.append(ref)
+        try:
+            return self.cached_peers[ref]
+        except KeyError:
+            raise ValueError(f"no cached peer for {ref}") from None
+
+
+class FakeInputPeer:
+    """What ``get_input_entity`` answers with: an ``InputPeerChannel``.
+
+    Spells the id ``channel_id``, not ``id``, because that is what
+    Telethon's real input peer does — and the difference is not cosmetic
+    here. An input peer is the argument that keeps a request from
+    reaching ``contacts.resolveUsername``, so a fake that let ``.id``
+    work would hide the one shape change the production code makes.
+    """
+
+    def __init__(self, channel: FakeChannel) -> None:
+        self.channel_id = channel.id
+        # Present because a real one carries it; nothing here reads it.
+        self.access_hash = -channel.id
+
+
 class FakeFullChannel:
     """A ``messages.ChatFull``, as ``GetFullChannelRequest`` returns one.
 
@@ -259,8 +302,10 @@ class FakeTelegramClient:
         full_channels: dict[int, FakeFullChannel] | None = None,
         histories: dict[int, list[FakeHistoryMessage]] | None = None,
         flood_on_window: dict[int, int] | None = None,
+        flood_on_request: dict[int, int] | None = None,
         resolve_floods: dict[str | int, int] | None = None,
         raises: BaseException | None = None,
+        raises_for: dict[int, BaseException] | None = None,
         cached_peers: dict[str, Any] | None = None,
         flood_request: Any = None,
     ) -> None:
@@ -273,10 +318,14 @@ class FakeTelegramClient:
         # What the session file could answer without a network call.
         # Defaults to everything this client knows, which is the normal
         # case; pass `{}` for a session that has never seen the channel.
-        self.cached_peers = (
-            dict(entities or {}) if cached_peers is None else cached_peers
+        self.session = FakeSession(
+            {
+                name: FakeInputPeer(channel)
+                for name, channel in (entities or {}).items()
+            }
+            if cached_peers is None
+            else cached_peers
         )
-        self.input_entities: list[str] = []
         # Resolution by id reaches here: a channel discovered by forward
         # is looked up through a `PeerChannel`, keyed by its channel id.
         self.entities_by_id = entities_by_id or {}
@@ -284,11 +333,21 @@ class FakeTelegramClient:
         self.histories = histories or {}
         # window index -> seconds to claim the flood will last
         self.flood_on_window = flood_on_window or {}
+        # channel id -> seconds, for the metadata request. Fires once,
+        # so a wait short enough to sleep off is followed by a success
+        # and a wait long enough to halt still only happens once.
+        self.flood_on_request = flood_on_request or {}
+        self._flooded_requests: set[int] = set()
         # lookup key (username or id) -> seconds to flood, once, before
         # the retry succeeds.
         self.resolve_floods = resolve_floods or {}
         self._flooded: set[str | int] = set()
         self.raises = raises
+        # Per-channel, for the history walk. A walk no longer looks a
+        # channel up before reading it, so "this channel is unreachable"
+        # can only be said at the point history is asked for — which is
+        # also where Telegram would say it.
+        self.raises_for = raises_for or {}
         self.resolved: list[str | int] = []
         self.requests: list[Any] = []
         self.windows: list[tuple[int, int, int]] = []
@@ -301,8 +360,11 @@ class FakeTelegramClient:
     def iter_messages(
         self, entity: Any, *, limit: int = 100, offset_id: int = 0
     ) -> AsyncIterator[FakeHistoryMessage]:
+        # An input peer, so `channel_id` — the walk is handed exactly what
+        # the session cache answered with, and nothing converts it.
+        channel_id = entity.channel_id
         index = len(self.windows)
-        self.windows.append((entity.id, offset_id, limit))
+        self.windows.append((channel_id, offset_id, limit))
         flood_seconds = self.flood_on_window.get(index)
 
         async def walk() -> AsyncIterator[FakeHistoryMessage]:
@@ -310,7 +372,14 @@ class FakeTelegramClient:
                 raise FloodWaitError(
                     request=self.flood_request, capture=flood_seconds
                 )
-            messages = self.histories.get(entity.id, [])
+            # Where a channel now turns out to be unreachable. The walk
+            # used to find out from the metadata request that opened it;
+            # with that gone, the first history request is what discovers
+            # a private or deleted channel — one request either way.
+            error = self.raises_for.get(channel_id, self.raises)
+            if error is not None:
+                raise error
+            messages = self.histories.get(channel_id, [])
             # offset_id 0 means "from the newest"; otherwise strictly
             # older than it, the way Telegram walks backwards.
             older = [m for m in messages if offset_id == 0 or m.id < offset_id]
@@ -353,20 +422,41 @@ class FakeTelegramClient:
         except KeyError:
             raise ValueError(f"no entity for id {key}") from None
 
-    async def get_input_entity(self, ref: Any) -> Any:
-        """The peer Telethon can answer from its session cache.
+    # Deliberately no `get_input_entity` on the client. Telethon's goes to
+    # the network on a cache miss, which is the request a history walk
+    # must never make — so production asks `client.session` instead, and
+    # a fake that offered the client method would quietly accept the
+    # mistake it exists to catch.
 
-        Recorded separately from ``resolved`` because the whole point of
-        the cached path is that it is *not* a `contacts.resolveUsername`;
-        a test that cannot tell the two apart cannot show the metadata
-        pass was skipped.
+    @property
+    def cached_peers(self) -> dict[str, Any]:
+        """What the session file holds. Settable: `= {}` is a cold cache."""
+        return self.session.cached_peers
+
+    @cached_peers.setter
+    def cached_peers(self, peers: dict[str, Any]) -> None:
+        self.session.cached_peers = peers
+
+    @property
+    def input_entities(self) -> list[Any]:
+        """Peer lookups, recorded apart from ``resolved``.
+
+        The whole point of the cached path is that it is *not* a
+        `contacts.resolveUsername`; a test that cannot tell the two apart
+        cannot show the walk stayed off the quota.
         """
-        self.input_entities.append(ref)
-        try:
-            return self.cached_peers[ref]
-        except KeyError:
-            raise ValueError(f"no cached peer for {ref}") from None
+        return self.session.lookups
 
     async def __call__(self, request: Any) -> Any:
         self.requests.append(request)
-        return self.full_channels[request.channel.id]
+        # `request.channel` is the input peer the caller passed straight
+        # through. Keying on `.id` would accept a resolved entity too,
+        # and accepting one is what production must no longer do.
+        channel_id = request.channel.channel_id
+
+        seconds = self.flood_on_request.get(channel_id)
+        if seconds is not None and channel_id not in self._flooded_requests:
+            self._flooded_requests.add(channel_id)
+            raise FloodWaitError(request=self.flood_request, capture=seconds)
+
+        return self.full_channels[channel_id]

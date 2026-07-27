@@ -13,8 +13,9 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `tg/payload.py` | Telethon objects → JSON-safe payloads; the only place that touches payload shape |
 | `tg/pacing.py` | How long to wait before a request; the only random source in the project |
 | `tg/floods.py` | Which method a rate limit named, and writing it down without endangering the run |
-| `tg/full_channel.py` | The per-channel metadata pass, and the linked chat it resolves |
-| `tg/backfill.py` | The history walk: pacing, resumption, FloodWait, failure classification |
+| `tg/full_channel.py` | One channel's extended information, and the linked chat it resolves |
+| `tg/metadata.py` | The metadata pass: which channels are due extended information, on its own quota budget |
+| `tg/backfill.py` | The history walk: pacing, resumption, FloodWait, failure classification. Spends no quota-bearing request |
 | `tg/resolve.py` | The resolution pass: username and title for channels found by reference |
 | `tg/` | MTProto collection: fetch and store raw payloads |
 | `derive/references.py` | Pure parsing of a payload into the channels it references |

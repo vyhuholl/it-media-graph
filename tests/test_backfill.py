@@ -532,9 +532,10 @@ async def test_channels_are_paced_and_sequential(
     # grouped, not interleaved.
     walked = [entity_id for entity_id, _, _ in telegram.windows]
     assert walked == sorted(walked)
-    # A gap before every request — the history windows, and the metadata
-    # request that opens each channel.
-    assert len(gaps) == len(telegram.windows) + 2
+    # A gap before every request, and a walk makes exactly one kind of
+    # request now. Getting hold of the peer reads the session file, so it
+    # is not paced — there is nothing on the other end to be polite to.
+    assert len(gaps) == len(telegram.windows)
     # Every one of them inside the band, and none of them the bare delay
     # repeated, which is what this used to assert.
     assert all(1.25 <= gap <= 3.75 for gap in gaps)
@@ -698,9 +699,12 @@ async def test_the_inventory_record_survives_a_failure(
 async def test_one_failure_does_not_stop_the_run(
     inventory: Database, slept: list[float]
 ) -> None:
-    telegram = client(histories={JOBS.id: history(2, newest_id=500)})
-    # Only the first channel is unreachable.
-    del telegram.entities["example_notes"]
+    telegram = client(
+        histories={JOBS.id: history(2, newest_id=500)},
+        # Only the first channel is unreachable, and it says so when its
+        # history is asked for — the walk has nothing else to ask.
+        raises_for={NOTES.id: ChannelPrivateError(request=None)},
+    )
 
     summary = await run(inventory, telegram)
 
@@ -980,88 +984,77 @@ async def test_a_skipped_channel_costs_no_pause(
     assert slept == []
 
 
-# --- the conditional metadata pass -------------------------------------
+# --- a walk spends nothing scarce --------------------------------------
 
 
-async def test_a_recent_payload_is_not_refetched(
+async def test_a_walk_spends_no_quota_bearing_request(
     inventory: Database, slept: list[float]
 ) -> None:
-    """The least cacheable request in the walk, skipped when it is not due.
+    """The invariant the whole change exists to establish.
 
-    Two hundred channels re-read every run is two hundred quota-bearing
-    requests spent to learn that a description has not changed.
+    Nothing here has ever stored extended information, so this is the
+    cold case — the one that used to cost two rationed requests per
+    channel before a single message arrived. It now costs none: the peer
+    comes out of the session file, and history is all that is asked for.
     """
-    first = client(histories={NOTES.id: history(2)})
-    await run(inventory, first, limit=1)
-    assert len(first.requests) == 1
+    telegram = client(
+        histories={NOTES.id: history(2), JOBS.id: history(2, newest_id=500)}
+    )
 
-    second = client(histories={NOTES.id: history(2, newest_id=900)})
-    await run(inventory, second, cutoff=DEEPER, limit=1)
+    summary = await run(inventory, telegram)
 
-    # No GetFullChannelRequest, and no username resolution either: the
-    # peer came out of the session's own cache.
-    assert second.requests == []
-    assert second.resolved == []
-    assert second.input_entities == ["example_notes"]
-    # And the walk still happened.
-    assert second.windows
+    # `contacts.resolveUsername` — the tightest daily quota in the
+    # project, and the method the flood log named.
+    assert telegram.resolved == []
+    # `channels.getFullChannel` — rationed too, and no longer a
+    # precondition of walking anything.
+    assert telegram.requests == []
+    # The peer came from the session file, once per channel.
+    assert telegram.input_entities == ["example_notes", "example_jobs"]
+    # And the history still arrived.
+    assert summary.completed == 2
+    assert telegram.windows
 
 
-async def test_a_stale_payload_is_refreshed(
+async def test_a_cold_cache_is_a_skip_not_a_failure(
     inventory: Database, slept: list[float]
 ) -> None:
-    first = client(histories={NOTES.id: history(2)})
-    await run(inventory, first, limit=1)
+    """A session that cannot supply the peer costs nothing and retires nothing.
 
-    # Age the stored payload past the freshness window.
-    async with inventory.session() as session:
-        await session.execute(
-            text(
-                "UPDATE raw_channels SET fetched_at = now() - interval "
-                "'400 days' WHERE channel_id = :cid"
-            ),
-            {"cid": NOTES.id},
-        )
-        await session.commit()
+    Resolving the username here would spend the request this walk is
+    forbidden to make. Recording a failure would be worse still: the
+    underlying error is a bare `ValueError`, `classify` calls that
+    permanent, and `channels_in_scope` drops a permanently failed channel
+    for good — retiring a live channel over a session file that can be
+    rebuilt in one command.
+    """
+    telegram = client(
+        histories={NOTES.id: history(2), JOBS.id: history(2, newest_id=500)}
+    )
+    del telegram.cached_peers["example_notes"]
 
-    second = client(histories={NOTES.id: history(2, newest_id=900)})
-    await run(inventory, second, cutoff=DEEPER, limit=1)
+    summary = await run(inventory, telegram)
 
-    assert len(second.requests) == 1
-
-
-async def test_the_skip_falls_back_rather_than_failing(
-    inventory: Database, slept: list[float]
-) -> None:
-    """A session that cannot supply the peer must not turn a skip into a
-    failure — the fallback is the path that already worked."""
-    first = client(histories={NOTES.id: history(2)})
-    await run(inventory, first, limit=1)
-
-    second = client(histories={NOTES.id: history(2, newest_id=900)})
-    second.cached_peers = {}
-
-    summary = await run(inventory, second, cutoff=DEEPER, limit=1)
-
+    # Two: this one, and the inventory's channel that has no username at
+    # all. Both are skips for the same reason — there is nothing to ask
+    # with — and neither is a failure.
+    assert summary.skipped == 2
     assert summary.failed == 0
-    # Asked the cache, was refused, ran the full pass instead.
-    assert second.input_entities == ["example_notes"]
-    assert len(second.requests) == 1
-    assert second.windows
+    assert telegram.resolved == []
 
+    state = await state_of(inventory, NOTES.id)
+    assert state is not None
+    assert state.status is BackfillStatus.SKIPPED
+    # Nothing permanent: this is the field that decides whether the
+    # channel is ever looked at again.
+    assert state.failure_kind is None
 
-async def test_a_refresh_can_be_demanded(
-    inventory: Database, slept: list[float]
-) -> None:
-    first = client(histories={NOTES.id: history(2)})
-    await run(inventory, first, limit=1)
+    # And it is not retired — a later run with a warm cache walks it.
+    later = client(histories={NOTES.id: history(2, newest_id=900)})
+    again = await run(inventory, later, cutoff=DEEPER)
 
-    second = client(histories={NOTES.id: history(2, newest_id=900)})
-    await run(inventory, second, cutoff=DEEPER, limit=1, refresh_metadata=True)
-
-    assert len(second.requests) == 1
-    # The cached path was not even consulted.
-    assert second.input_entities == []
+    assert again.completed == 2
+    assert NOTES.id in {entity_id for entity_id, _, _ in later.windows}
 
 
 # --- halting on a long FloodWait ---------------------------------------

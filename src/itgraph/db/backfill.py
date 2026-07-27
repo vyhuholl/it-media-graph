@@ -1,15 +1,22 @@
-"""Which channels to walk, how far each got, and why one stopped.
+"""Which channels a networked pass may touch, how far each got, and why
+one stopped.
 
 Every write here is small and deliberate, because the cursor is the one
 piece of state that must never run ahead of the rows it describes: a
 cursor past the last stored message is a window of history that no later
 run will ever ask for again.
+
+The scope predicates are shared rather than restated. Two passes now
+select over the inventory — the history walk and the metadata pass — and
+they must agree on what is in scope down to the last condition. A second
+copy of "accepted, not a chat, not permanently gone" is how a collector
+eventually starts reading something nobody agreed to collect.
 """
 
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,11 +26,14 @@ from itgraph.db.models import (
     Channel,
     ChannelStatus,
     FailureKind,
+    RawChannel,
 )
 
 __all__ = [
     "channels_in_scope",
+    "channels_needing_metadata",
     "count_deferred_chats",
+    "count_stale_metadata",
     "load_state",
     "record_complete",
     "record_failure",
@@ -34,13 +44,41 @@ __all__ = [
 ]
 
 
-async def channels_in_scope(session: AsyncSession) -> Sequence[Channel]:
-    """The channels a backfill run may touch, and no others.
+def _in_scope() -> tuple[ColumnElement[bool], ...]:
+    """What every networked pass over the inventory is allowed to touch.
 
     Three predicates, and never a fourth: the channel was reviewed and
     accepted, it is not a discussion chat, and no previous run found it
-    permanently gone. Widening this is how a collector starts reading
-    something nobody agreed to collect.
+    permanently gone. Returned rather than written out at each call site
+    so the two passes cannot drift apart — the failure mode is silent and
+    the thing it lets through is collection nobody consented to.
+
+    The ``BackfillState`` condition assumes the caller has joined that
+    table; both callers below do.
+    """
+    return (
+        Channel.status == ChannelStatus.SEED,
+        Channel.is_chat.is_(False),
+        BackfillState.failure_kind.is_distinct_from(FailureKind.PERMANENT),
+    )
+
+
+def _metadata_is_due(max_age: timedelta) -> ColumnElement[bool]:
+    """Extended information that is absent or past its freshness window.
+
+    Absent and stale are the same decision but not the same fact, which
+    is why they are spelled out separately rather than collapsed into a
+    coalesce: a channel nothing has ever asked about reads differently
+    from one whose description has gone quiet for a year.
+    """
+    return or_(
+        RawChannel.fetched_at.is_(None),
+        RawChannel.fetched_at < datetime.now(UTC) - max_age,
+    )
+
+
+async def channels_in_scope(session: AsyncSession) -> Sequence[Channel]:
+    """The channels a backfill run may touch, and no others.
 
     Ordered by id so a run interrupted and restarted covers the same
     channels in the same order, which is what makes ``--limit`` mean
@@ -49,14 +87,64 @@ async def channels_in_scope(session: AsyncSession) -> Sequence[Channel]:
     statement = (
         select(Channel)
         .outerjoin(BackfillState, BackfillState.channel_id == Channel.tg_id)
-        .where(
-            Channel.status == ChannelStatus.SEED,
-            Channel.is_chat.is_(False),
-            BackfillState.failure_kind.is_distinct_from(FailureKind.PERMANENT),
-        )
+        .where(*_in_scope())
         .order_by(Channel.tg_id)
     )
     return (await session.scalars(statement)).all()
+
+
+async def channels_needing_metadata(
+    session: AsyncSession,
+    *,
+    max_age: timedelta,
+    limit: int | None = None,
+    refresh: bool = False,
+) -> Sequence[Channel]:
+    """In-scope channels whose extended information is absent or stale.
+
+    ``metadata_age`` answers this one channel at a time, which is the
+    right shape for a walk deciding about the channel in front of it and
+    the wrong shape for a pass that has to know its whole queue before it
+    spends the first request.
+
+    ``refresh`` drops the freshness condition and returns everything in
+    scope — the operator saying they know the stored payloads are wrong.
+
+    Ordered by id for the same reason as ``channels_in_scope``: a bounded
+    run has to mean something across sittings.
+    """
+    statement = (
+        select(Channel)
+        .outerjoin(BackfillState, BackfillState.channel_id == Channel.tg_id)
+        .outerjoin(RawChannel, RawChannel.channel_id == Channel.tg_id)
+        .where(*_in_scope())
+        .order_by(Channel.tg_id)
+    )
+    if not refresh:
+        statement = statement.where(_metadata_is_due(max_age))
+    if limit is not None:
+        statement = statement.limit(limit)
+    return (await session.scalars(statement)).all()
+
+
+async def count_stale_metadata(
+    session: AsyncSession, *, max_age: timedelta
+) -> int:
+    """How many in-scope channels are waiting on the metadata pass.
+
+    Read by a backfill run, which no longer fetches any of it. Counting
+    costs one query and no request, and it is the whole answer to the one
+    real objection to a separate command: that an operator will forget it
+    exists.
+    """
+    statement = (
+        select(func.count())
+        .select_from(Channel)
+        .outerjoin(BackfillState, BackfillState.channel_id == Channel.tg_id)
+        .outerjoin(RawChannel, RawChannel.channel_id == Channel.tg_id)
+        .where(*_in_scope(), _metadata_is_due(max_age))
+    )
+    return await session.scalar(statement) or 0
 
 
 async def count_deferred_chats(session: AsyncSession) -> int:

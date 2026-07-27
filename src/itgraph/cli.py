@@ -254,22 +254,15 @@ def backfill(
             ),
         ),
     ] = None,
-    refresh_metadata: Annotated[
-        bool,
-        typer.Option(
-            "--refresh-metadata",
-            help=(
-                "Re-fetch channel descriptions and linked chats even when "
-                "the stored ones are still fresh."
-            ),
-        ),
-    ] = False,
 ) -> None:
     """Fetch channel history into the raw layer. Resumable, and slow.
 
     A first run over the whole inventory is hours of requests. Start with
     `--limit` on a few channels and watch what happens before letting it
     loose on everything.
+
+    Descriptions and linked chats are not touched here — see
+    `itgraph metadata`, which spends the quota-bearing request they cost.
     """
     from itgraph.db.session import Database
     from itgraph.tg.backfill import backfill_channels
@@ -302,8 +295,62 @@ def backfill(
                     batch_size=batch_size,
                     request_delay=delay,
                     max_messages=max_messages,
-                    refresh_metadata=refresh_metadata,
                     database=database,
+                )
+        finally:
+            await database.dispose()
+        typer.echo(summary.line())
+        _report_halt(summary.halt)
+
+    _run(run())
+
+
+@app.command()
+def metadata(
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", help="Fetch at most this many channels."),
+    ] = None,
+    delay: Annotated[
+        float | None,
+        typer.Option("--delay", help="Seconds between requests."),
+    ] = None,
+    refresh: Annotated[
+        bool,
+        typer.Option(
+            "--refresh",
+            help=(
+                "Re-fetch every in-scope channel, even ones whose stored "
+                "information is still fresh."
+            ),
+        ),
+    ] = False,
+) -> None:
+    """Fetch channel descriptions and linked discussion chats.
+
+    Split off from `backfill` because it is expensive in a way history is
+    not: `channels.getFullChannel` carries a per-day quota, and a
+    description changes on the order of months. Run it about monthly, and
+    use `--limit` to spread a first pass over several sittings — a halt
+    here costs nothing but the rest of this queue.
+
+    Channels the session file has no peer for are skipped rather than
+    resolved: `itgraph resolve` is the one command allowed to spend that.
+    """
+    from itgraph.db.session import Database
+    from itgraph.tg.client import connected
+    from itgraph.tg.metadata import refresh_metadata
+
+    async def run() -> None:
+        database = Database()
+        try:
+            async with connected() as client:
+                summary = await refresh_metadata(
+                    client,
+                    database,
+                    limit=limit,
+                    delay=delay,
+                    refresh=refresh,
                 )
         finally:
             await database.dispose()
