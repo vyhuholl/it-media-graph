@@ -39,6 +39,7 @@ from itgraph.db.channels import (
     record_channel_resolved,
 )
 from itgraph.db.edges import (
+    count_pending_mention_sources,
     delete_pending_mention,
     pending_mentions_to_resolve,
     record_pending_failure,
@@ -107,6 +108,7 @@ async def resolve_inventory(
     retry_failed: bool = False,
     delay: float | None = None,
     limit: int | None = None,
+    min_sources: int | None = None,
 ) -> ResolveSummary:
     """Work both resolution queues, paced and one request at a time.
 
@@ -115,6 +117,13 @@ async def resolve_inventory(
     can spend a fixed number of requests and stop. Every request is paced
     the same way the collector's are, and passes through the collector's
     FloodWait handling.
+
+    The username queue is worked most-mentioned first: it is the only part
+    of this project that spends ``contacts.resolveUsername``, which is
+    rationed by the day and cannot be batched, and the majority of a real
+    queue is mentioned by one channel apiece. ``min_sources`` bounds it by
+    evidence rather than by count — the head of the queue without having
+    to know how long the head is.
 
     A rate limit too long to sit through stops the whole run, both queues
     with it. What was resolved first is committed and reported.
@@ -146,11 +155,31 @@ async def resolve_inventory(
             # queue already spent, or `--limit` bounds each queue instead
             # of the run.
             pending = await pending_mentions_to_resolve(
-                session, retry_failed=retry_failed, limit=remaining
+                session,
+                retry_failed=retry_failed,
+                limit=remaining,
+                min_sources=min_sources,
             )
+            if pending and not await count_pending_mention_sources(session):
+                # No sources at all against a non-empty queue means
+                # derivation has not run since the table appeared — not
+                # that nothing mentions these. The two are identical in
+                # the ordering and opposite in meaning, so say which.
+                logger.warning(
+                    "no mention sources recorded: run `itgraph derive` to "
+                    "fill them, or this queue stays in arrival order"
+                )
             for mention in pending:
                 if remaining is not None and remaining <= 0:
                     break
+                # The count is what decided the order, so a reader of the
+                # log can see the priority rather than infer it.
+                logger.info(
+                    "resolving @%s (mentioned by %d channel%s)",
+                    mention.username,
+                    mention.sources,
+                    "" if mention.sources == 1 else "s",
+                )
                 await pace(pause)
                 await _resolve_pending(
                     client, session, mention.username, summary, recorder
@@ -173,7 +202,16 @@ async def _resolve_channel(
     summary: ResolveSummary,
     recorder: FloodRecorder,
 ) -> None:
-    """Resolve one channel by id, through the session's cached hash."""
+    """Resolve one channel by id, through the session's cached hash.
+
+    Clears any pending mention this resolution has just answered. A
+    channel found both ways — forwarded from in one message, named in
+    another — used to resolve by this cheap path and leave the expensive
+    path's row behind for good, because only ``_resolve_pending`` deleted
+    from that queue. Those rows survive as requests that can only return a
+    channel the inventory already has, and each one costs a
+    ``contacts.resolveUsername``.
+    """
     try:
         entity = await waiting_out_floods(
             lambda: client.get_entity(PeerChannel(tg_id)), recorder
@@ -201,6 +239,10 @@ async def _resolve_channel(
         title=identity.title,
         is_chat=identity.is_chat,
     )
+    if identity.username:
+        # Normalised the way the queue stores it, or the delete silently
+        # matches nothing for any channel Telegram spells with capitals.
+        await delete_pending_mention(session, identity.username.lower())
     await session.commit()
     summary.resolved += 1
 

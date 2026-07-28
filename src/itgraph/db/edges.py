@@ -1,8 +1,9 @@
-"""Reads and writes of the derived tables: ``edges`` and ``pending_mentions``.
+"""Reads and writes of the derived tables: ``edges``, ``pending_mentions``
+and the sources of those mentions.
 
-These two tables are disposable — everything in them is recomputable from
-the raw layer — which is what makes ``derive --rebuild`` able to truncate
-them without a second thought. Nothing here touches ``channels`` beyond
+All three are disposable — everything in them is recomputable from the raw
+layer — which is what makes ``derive --rebuild`` able to truncate them
+without a second thought. Nothing here touches ``channels`` beyond
 creating rows a reference discovered, and nothing here reads the network.
 """
 
@@ -10,7 +11,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, select, text, update
+from sqlalchemy import Select, delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,12 +21,16 @@ from itgraph.db.models import (
     Edge,
     EdgeKind,
     PendingMention,
+    PendingMentionSource,
 )
 
 __all__ = [
     "ChannelIndex",
     "EdgeRow",
+    "MentionSource",
+    "QueuedMention",
     "add_pending_mentions",
+    "count_pending_mention_sources",
     "create_discovered_channels",
     "delete_pending_mention",
     "insert_edges",
@@ -34,6 +39,35 @@ __all__ = [
     "record_pending_failure",
     "truncate_derived",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class MentionSource:
+    """One channel mentioning one username that is not yet a channel.
+
+    A pair rather than a tally, because derivation has to stay
+    re-runnable: a second pass over unchanged raw messages must write
+    nothing, and an increment always writes.
+    """
+
+    channel_id: int
+    username: str
+
+
+@dataclass(frozen=True, slots=True)
+class QueuedMention:
+    """A username due a lookup, and how much evidence is behind it.
+
+    Carries the count rather than leaving the caller to re-query it,
+    because the count is what decided the order and a run should be able
+    to say so in its log. Plain values rather than a mapped row: the
+    caller commits between lookups, which expires mapped instances, and
+    reading an attribute off an expired one is a lazy load an async
+    session cannot perform.
+    """
+
+    username: str
+    sources: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,24 +190,64 @@ async def insert_edges(session: AsyncSession, edges: Sequence[EdgeRow]) -> int:
 
 
 async def add_pending_mentions(
-    session: AsyncSession, usernames: Iterable[str]
+    session: AsyncSession, mentions: Iterable[MentionSource]
 ) -> int:
-    """Record usernames mentioned but not yet known as channels.
+    """Record usernames mentioned but not yet known as channels, and who
+    mentioned them.
 
-    ``ON CONFLICT DO NOTHING`` keeps the original ``first_seen_at`` and
-    any resolution attempts already made against a username seen before.
-    Returns how many were newly pending.
+    ``ON CONFLICT DO NOTHING`` on both inserts, which is what keeps
+    derivation re-runnable: the pending row keeps its original
+    ``first_seen_at`` and any resolution attempts already made against it,
+    and a source pair already recorded is not recorded twice however many
+    times the pass repeats.
+
+    Returns how many usernames were newly pending — the sources are
+    bookkeeping for the ordering, not work the operator asked about.
+
+    The pending rows go in first because the sources have a foreign key
+    onto them, and both are in the caller's one transaction.
     """
-    names = list(dict.fromkeys(usernames))
-    if not names:
+    pairs = {(item.username, item.channel_id) for item in mentions}
+    if not pairs:
         return 0
+
+    names = list(dict.fromkeys(username for username, _ in pairs))
     statement = (
         insert(PendingMention)
         .values([{"username": name} for name in names])
         .on_conflict_do_nothing(index_elements=[PendingMention.username])
         .returning(PendingMention.username)
     )
-    return len((await session.execute(statement)).all())
+    inserted = len((await session.execute(statement)).all())
+
+    sources = insert(PendingMentionSource).values(
+        [
+            {"username": username, "channel_id": channel_id}
+            for username, channel_id in sorted(pairs)
+        ]
+    )
+    await session.execute(
+        sources.on_conflict_do_nothing(
+            index_elements=[
+                PendingMentionSource.username,
+                PendingMentionSource.channel_id,
+            ]
+        )
+    )
+    return inserted
+
+
+async def count_pending_mention_sources(session: AsyncSession) -> int:
+    """How many source pairs are recorded at all.
+
+    Asked once per resolution run to tell "nothing mentions these" apart
+    from "derivation has not run since the sources table appeared". The
+    two look identical in the ordering and mean opposite things.
+    """
+    total = await session.scalar(
+        select(func.count()).select_from(PendingMentionSource)
+    )
+    return total or 0
 
 
 async def pending_mentions_to_resolve(
@@ -181,22 +255,75 @@ async def pending_mentions_to_resolve(
     *,
     retry_failed: bool = False,
     limit: int | None = None,
-) -> Sequence[PendingMention]:
-    """Pending usernames awaiting a public lookup.
+    min_sources: int | None = None,
+) -> Sequence[QueuedMention]:
+    """Pending usernames awaiting a public lookup, best evidence first.
+
+    Ordered by how many distinct channels mention each username. Every row
+    here costs one ``contacts.resolveUsername`` — the scarcest request in
+    the project, a couple of hundred a day and no batch form — and the
+    great majority of a real queue is mentioned by exactly one channel,
+    which resolves into a vertex of degree one. Arrival order spends the
+    day's quota on an arbitrary slice; this spends it on the references
+    more than one channel thought worth making.
+
+    ``first_seen_at`` survives as the tie-break, so a bounded run is still
+    deterministic within a sitting. Across sittings the order *can* move —
+    a later derivation may add a source and lift a username past others.
+    That is the point rather than a defect, but it does mean this queue
+    makes a weaker promise than the by-id one, which covers the same rows
+    in the same order every time.
+
+    ``min_sources`` bounds the queue by evidence where ``limit`` bounds it
+    by budget; they compose. A username with no recorded sources counts as
+    zero and sorts last.
+
+    A username whose channel already exists is left out entirely. Those
+    rows accumulate because the two resolution paths are asymmetric — a
+    channel resolved by id gets a username without anything clearing the
+    queue that was waiting on the same name — and requesting one can only
+    return a channel the inventory already has. At the observed rate they
+    were most of two days' quota spent to learn nothing.
 
     A username a previous run failed on is skipped by default and only
-    retried under ``retry_failed``. Ordered oldest-first so a bounded run
-    works through the backlog in the order it accrued.
+    retried under ``retry_failed``.
     """
-    statement = select(PendingMention)
+    # Grouped once rather than correlated per row, so the filter and the
+    # ordering read the same expression. The composite primary key already
+    # makes the count distinct, so `COUNT(*)` needs no `DISTINCT`.
+    sources = (
+        select(
+            PendingMentionSource.username.label("username"),
+            func.count().label("total"),
+        )
+        .group_by(PendingMentionSource.username)
+        .subquery()
+    )
+    total = func.coalesce(sources.c.total, 0)
+
+    statement: Select[tuple[str, int]] = select(
+        PendingMention.username, total.label("sources")
+    ).outerjoin(sources, sources.c.username == PendingMention.username)
+    # Case-insensitively: a pending username is stored normalised, a
+    # channel's is stored the way Telegram spells it.
+    statement = statement.where(
+        ~select(Channel.tg_id)
+        .where(func.lower(Channel.username) == PendingMention.username)
+        .exists()
+    )
     if not retry_failed:
         statement = statement.where(PendingMention.attempts == 0)
+    if min_sources is not None:
+        statement = statement.where(total >= min_sources)
     statement = statement.order_by(
-        PendingMention.first_seen_at, PendingMention.username
+        total.desc(), PendingMention.first_seen_at, PendingMention.username
     )
     if limit is not None:
         statement = statement.limit(limit)
-    return (await session.scalars(statement)).all()
+    return [
+        QueuedMention(username=username, sources=count)
+        for username, count in await session.execute(statement)
+    ]
 
 
 async def record_pending_failure(
@@ -229,5 +356,11 @@ async def truncate_derived(session: AsyncSession) -> None:
     must never reach ``channels`` — a channel discovered by reference is
     kept, so a rebuild re-derives its edges rather than losing it — nor
     the raw layer, which is the source of truth a rebuild reads from.
+
+    The three tables are named, not reached through ``CASCADE``. Postgres
+    would accept ``CASCADE`` and follow every foreign key that ever points
+    here, which is exactly the quiet reach the paragraph above forbids.
     """
-    await session.execute(text("TRUNCATE TABLE edges, pending_mentions"))
+    await session.execute(
+        text("TRUNCATE TABLE edges, pending_mentions, pending_mention_sources")
+    )

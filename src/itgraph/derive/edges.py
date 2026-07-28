@@ -34,6 +34,7 @@ from itgraph.config import settings
 from itgraph.db.edges import (
     ChannelIndex,
     EdgeRow,
+    MentionSource,
     add_pending_mentions,
     create_discovered_channels,
     insert_edges,
@@ -168,7 +169,9 @@ async def _flush(
     """
     discovered: set[int] = set()
     edge_rows: list[EdgeRow] = []
-    pending: list[str] = []
+    # Pairs, not names: which channel made the mention is what orders the
+    # resolution queue, and it is already in hand here.
+    pending: list[MentionSource] = []
 
     for channel_id, msg_id, payload in rows:
         published_at = _published_at(payload)
@@ -204,7 +207,12 @@ async def _flush(
             if reference.username is not None:
                 dst = index.username_to_id.get(reference.username)
                 if dst is None:
-                    pending.append(reference.username)
+                    pending.append(
+                        MentionSource(
+                            channel_id=channel_id,
+                            username=reference.username,
+                        )
+                    )
                 elif dst != channel_id:
                     # A channel mentioning itself is not a relationship
                     # between two channels, the same as a self-forward.

@@ -40,6 +40,7 @@ __all__ = [
     "FailureKind",
     "FloodEvent",
     "PendingMention",
+    "PendingMentionSource",
     "RawChannel",
     "RawMessage",
     "RejectReason",
@@ -520,6 +521,47 @@ class PendingMention(Base):
 
     def __repr__(self) -> str:
         return f"PendingMention(username={self.username!r})"
+
+
+class PendingMentionSource(Base):
+    """One channel that mentioned one pending username.
+
+    A set of pairs rather than a counter on ``PendingMention``, and the
+    reason is idempotence. Derivation must be re-runnable — a second pass
+    over unchanged raw messages writes nothing — and an increment always
+    writes. A pair inserted ``ON CONFLICT DO NOTHING`` cannot double-count
+    however many times the pass repeats, and the count falls out of a
+    ``COUNT(*)``: the composite primary key already makes it distinct, so
+    nothing has to ask for ``DISTINCT``.
+
+    What it buys is an ordering. Every pending username costs one
+    ``contacts.resolveUsername``, the scarcest request in the project, and
+    87% of them are mentioned by exactly one channel — degree-one vertices
+    in a graph about who talks to whom. Resolving by weight of evidence
+    spends a two-week queue's worth of quota on the two days that matter.
+
+    No foreign key onto ``channels``: those rows are never deleted, so the
+    constraint could never fire, and it would make truncation
+    order-dependent for nothing. The one onto ``pending_mentions`` earns
+    its place — that table *is* truncated, and its rows *are* deleted the
+    moment a username resolves.
+    """
+
+    __tablename__ = "pending_mention_sources"
+
+    username: Mapped[str] = mapped_column(
+        ForeignKey("pending_mentions.username", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    # The channel whose message carried the mention. Not a foreign key —
+    # see the class docstring.
+    channel_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+
+    def __repr__(self) -> str:
+        return (
+            f"PendingMentionSource(username={self.username!r}, "
+            f"channel_id={self.channel_id})"
+        )
 
 
 class FloodEvent(Base):

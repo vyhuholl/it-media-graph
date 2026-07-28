@@ -415,6 +415,16 @@ def resolve(
         float | None,
         typer.Option("--delay", help="Seconds between requests."),
     ] = None,
+    min_sources: Annotated[
+        int | None,
+        typer.Option(
+            "--min-sources",
+            help=(
+                "Only resolve usernames mentioned by at least this many "
+                "different channels."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Fill in username and title for channels discovered by reference.
 
@@ -423,10 +433,19 @@ def resolve(
     by forward (by id) and usernames left pending by a mention. Run
     `derive` again afterwards to write the mention edges the newly
     resolved channels unblock.
+
+    The username queue is worked most-mentioned first. It is also the only
+    place `contacts.resolveUsername` is spent — a couple of hundred a day,
+    no batching — so `--min-sources 2` is how a day's budget goes to the
+    references more than one channel thought worth making, rather than to
+    whatever arrived first.
     """
     from itgraph.db.session import Database
     from itgraph.tg.client import connected
     from itgraph.tg.resolve import resolve_inventory
+
+    if min_sources is not None and min_sources < 0:
+        raise typer.BadParameter("--min-sources cannot be negative")
 
     async def run() -> None:
         database = Database()
@@ -438,6 +457,7 @@ def resolve(
                     retry_failed=retry_failed,
                     delay=delay,
                     limit=limit,
+                    min_sources=min_sources,
                 )
         finally:
             await database.dispose()

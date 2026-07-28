@@ -25,6 +25,7 @@ from itgraph.db.models import (
     Edge,
     EdgeKind,
     PendingMention,
+    PendingMentionSource,
     RawMessage,
     RejectReason,
 )
@@ -980,3 +981,128 @@ async def test_rebuild_retains_channels_discovered_through_a_rejected_source(
     assert still is not None
     assert still.discovered_via is DiscoverySource.FORWARD
     assert still.status is ChannelStatus.CANDIDATE
+
+
+# --- who mentioned what ----------------------------------------------
+
+
+async def sources_of(database: Database, username: str) -> set[int]:
+    async with database.session() as session:
+        rows = await session.scalars(
+            select(PendingMentionSource.channel_id).where(
+                PendingMentionSource.username == username
+            )
+        )
+        return set(rows)
+
+
+async def test_a_pending_mention_records_the_channel_that_made_it(
+    inventory: Database,
+) -> None:
+    async with inventory.session() as session:
+        await seed(
+            session,
+            raw(
+                10,
+                message="see @newcomer",
+                entities=[mention_entity("newcomer", offset=4)],
+            ),
+        )
+
+    await derive_graph(inventory)
+
+    assert await sources_of(inventory, "newcomer") == {SRC}
+
+
+async def test_two_channels_mentioning_one_username_are_two_sources(
+    inventory: Database,
+) -> None:
+    """The count that matters is of channels, not of mentions."""
+    async with inventory.session() as session:
+        await add_channel(
+            session, CANDIDATE_SRC, username="other", status=ChannelStatus.SEED
+        )
+        await seed(
+            session,
+            raw(
+                10, message="@newcomer", entities=[mention_entity("newcomer")]
+            ),
+        )
+        await store_under(
+            session,
+            CANDIDATE_SRC,
+            raw(
+                20, message="@newcomer", entities=[mention_entity("newcomer")]
+            ),
+        )
+
+    await derive_graph(inventory)
+
+    assert await sources_of(inventory, "newcomer") == {SRC, CANDIDATE_SRC}
+
+
+async def test_one_channel_mentioning_repeatedly_is_one_source(
+    inventory: Database,
+) -> None:
+    """Repetition inside one channel is still one channel's opinion."""
+    async with inventory.session() as session:
+        await seed(
+            session,
+            raw(
+                10, message="@newcomer", entities=[mention_entity("newcomer")]
+            ),
+            raw(
+                11, message="@newcomer", entities=[mention_entity("newcomer")]
+            ),
+            raw(
+                12, message="@newcomer", entities=[mention_entity("newcomer")]
+            ),
+        )
+
+    await derive_graph(inventory)
+
+    assert await sources_of(inventory, "newcomer") == {SRC}
+
+
+async def test_re_derivation_adds_no_source(inventory: Database) -> None:
+    """Derivation stays re-runnable — the property a counter would break."""
+    async with inventory.session() as session:
+        await seed(
+            session,
+            raw(
+                10, message="@newcomer", entities=[mention_entity("newcomer")]
+            ),
+        )
+
+    await derive_graph(inventory)
+    before = await sources_of(inventory, "newcomer")
+    await derive_graph(inventory)
+
+    assert await sources_of(inventory, "newcomer") == before
+
+    async with inventory.session() as session:
+        total = await session.scalar(
+            select(func.count()).select_from(PendingMentionSource)
+        )
+    assert total == 1
+
+
+async def test_a_rebuild_clears_the_sources_and_the_next_pass_refills(
+    inventory: Database,
+) -> None:
+    async with inventory.session() as session:
+        await seed(
+            session,
+            raw(
+                10, message="@newcomer", entities=[mention_entity("newcomer")]
+            ),
+        )
+
+    await derive_graph(inventory)
+    assert await sources_of(inventory, "newcomer") == {SRC}
+
+    await derive_graph(inventory, rebuild=True)
+
+    # Truncated with the queue it belongs to, then written again from the
+    # raw layer in the same pass.
+    assert await sources_of(inventory, "newcomer") == {SRC}

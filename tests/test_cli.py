@@ -401,3 +401,40 @@ def test_resolve_reports_what_it_did(
 
     assert result.exit_code == 0, result.output
     assert "resolved 0" in result.output
+
+
+def test_resolve_passes_the_evidence_floor_through(
+    monkeypatch: pytest.MonkeyPatch,
+    inventory: None,
+    dialog_records: list[dict[str, Any]],
+) -> None:
+    """`--min-sources` has to reach the pass, not stop at the parser."""
+    seen: dict[str, Any] = {}
+
+    async def fake_resolve(client: Any, database: Any, **kwargs: Any) -> Any:
+        seen.update(kwargs)
+        from itgraph.tg.resolve import ResolveSummary
+
+        return ResolveSummary()
+
+    use_telegram(monkeypatch, collector_client(dialog_records, posts=1))
+    no_sleeping(monkeypatch)
+    monkeypatch.setattr("itgraph.tg.resolve.resolve_inventory", fake_resolve)
+
+    result = runner.invoke(app, ["resolve", "--min-sources", "2"])
+
+    assert result.exit_code == 0, result.output
+    assert seen["min_sources"] == 2
+
+
+def test_resolve_refuses_a_negative_evidence_floor(
+    monkeypatch: pytest.MonkeyPatch,
+    inventory: None,
+    dialog_records: list[dict[str, Any]],
+) -> None:
+    use_telegram(monkeypatch, collector_client(dialog_records, posts=1))
+    no_sleeping(monkeypatch)
+
+    result = runner.invoke(app, ["resolve", "--min-sources", "-1"])
+
+    assert result.exit_code != 0

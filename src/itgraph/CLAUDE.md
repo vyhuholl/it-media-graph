@@ -24,7 +24,7 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `db/session.py` | `Database`: engine + session factory |
 | `db/models.py` | SQLAlchemy models, `Base` |
 | `db/channels.py` | The channel inventory: upsert, review, listing, resolution state |
-| `db/edges.py` | The derived tables: `edges` and `pending_mentions` |
+| `db/edges.py` | The derived tables: `edges`, `pending_mentions` and the sources that order them |
 | `db/raw.py` | Writes into the raw layer; nothing here reads a payload |
 | `db/floods.py` | The record of rate limits: one row per wait, and the two questions asked of it |
 | `db/backfill.py` | Which channels to walk, how far each got, and why one stopped |
