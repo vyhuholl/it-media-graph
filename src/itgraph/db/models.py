@@ -27,9 +27,9 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 __all__ = [
-    "Base",
     "BackfillState",
     "BackfillStatus",
+    "Base",
     "Channel",
     "ChannelKind",
     "ChannelStatus",

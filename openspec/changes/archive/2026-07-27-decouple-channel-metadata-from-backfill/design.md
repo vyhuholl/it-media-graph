@@ -7,7 +7,9 @@ The mechanism is worth stating precisely, because the fix follows from it direct
 `fetch_full_channel` calls exactly that, once per channel, purely to obtain a peer for `GetFullChannelRequest`. And `GetFullChannelRequest.resolve` (`telethon/tl/functions/channels.py:805`) does:
 
 ```python
-self.channel = utils.get_input_channel(await client.get_input_entity(self.channel))
+self.channel = utils.get_input_channel(
+    await client.get_input_entity(self.channel)
+)
 ```
 
 So the request already resolves its own peer. Handing it a username makes `get_input_entity` fall through its cache lookups to `_get_entity_from_string` and out to the network (`users.py:444-446` → `users.py:563`). Handing it an `InputPeerChannel` short-circuits at the first line of `get_input_entity` (`users.py:419-422`) and costs nothing. The whole `resolveUsername` spend in `backfill` is one argument of the wrong type.

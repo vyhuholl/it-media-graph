@@ -11,7 +11,7 @@ not been collected. Including them makes every centrality measure meaningless.
 """
 
 import math
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import networkx as nx
 import psycopg
@@ -41,7 +41,7 @@ def decay(published_at: datetime, now: datetime) -> float:
 
 
 def main() -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     g = nx.DiGraph()
 
     with psycopg.connect(DSN) as conn:

@@ -175,6 +175,7 @@ def _verify(path: Path) -> int:
             stdin=archive,
             capture_output=True,
             text=True,
+            check=False,
         )
     if result.returncode != 0:
         raise BackupError(
@@ -230,6 +231,7 @@ def take_backup(
                 stdout=target,
                 stderr=subprocess.PIPE,
                 text=False,
+                check=False,
             )
         if result.returncode != 0:
             detail = result.stderr.decode("utf-8", "replace").strip()

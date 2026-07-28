@@ -19,7 +19,7 @@ from itgraph.db.floods import store_flood_event
 from itgraph.db.models import CollectionCommand
 from itgraph.db.session import Database
 
-__all__ = ["FloodRecorder", "UNKNOWN_METHOD", "method_name"]
+__all__ = ["UNKNOWN_METHOD", "FloodRecorder", "method_name"]
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +95,7 @@ class FloodRecorder:
     command: CollectionCommand
     channel_id: int | None = None
 
-    def for_channel(self, channel_id: int | None) -> "FloodRecorder":
+    def for_channel(self, channel_id: int | None) -> FloodRecorder:
         """The same recorder, attributing events to one channel."""
         return replace(self, channel_id=channel_id)
 

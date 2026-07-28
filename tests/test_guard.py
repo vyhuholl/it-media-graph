@@ -75,6 +75,7 @@ def _alembic(*args: str, **overrides: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         timeout=120,
+        check=False,
     )
 
 

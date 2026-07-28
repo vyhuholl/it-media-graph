@@ -45,7 +45,7 @@ def _run(body: Coroutine[Any, Any, None]) -> None:
         raise typer.Exit(1) from exc
 
 
-def _report_halt(halt: "FloodWaitTooLong | None") -> None:
+def _report_halt(halt: FloodWaitTooLong | None) -> None:
     """Report a rate-limit halt and fail the command.
 
     The summary printed just before this is real work that was committed,

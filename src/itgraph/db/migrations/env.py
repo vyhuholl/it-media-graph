@@ -3,12 +3,12 @@ import logging
 import os
 from logging.config import fileConfig
 
+from alembic import context
+from alembic.util import CommandError
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection, make_url
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from alembic import context
-from alembic.util import CommandError
 from itgraph.config import settings
 from itgraph.db.backup import BackupError, full_kind, run_backup
 from itgraph.db.guard import (

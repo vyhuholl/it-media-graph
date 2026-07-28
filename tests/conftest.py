@@ -23,16 +23,15 @@ os.environ.setdefault(
     "postgresql+asyncpg://itgraph:itgraph@localhost:5433/itgraph",
 )
 
-from sqlalchemy import text  # noqa: E402
-from sqlalchemy.engine import URL, make_url  # noqa: E402
-from sqlalchemy.exc import SQLAlchemyError  # noqa: E402
-from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
+from fakes import FakeTelegramClient
+from sqlalchemy import text
+from sqlalchemy.engine import URL, make_url
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import create_async_engine
 
-from fakes import FakeTelegramClient  # noqa: E402
-
-from itgraph.config import settings  # noqa: E402
-from itgraph.db.models import Base  # noqa: E402
-from itgraph.db.session import Database  # noqa: E402
+from itgraph.config import settings
+from itgraph.db.models import Base
+from itgraph.db.session import Database
 
 MAINTENANCE_DATABASE = "postgres"
 FIXTURES = Path(__file__).parent / "fixtures"

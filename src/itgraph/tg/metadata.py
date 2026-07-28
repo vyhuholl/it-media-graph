@@ -22,6 +22,7 @@ later, from the raw layer, by code that has to stay re-runnable.
 import logging
 from dataclasses import dataclass
 from datetime import timedelta
+from functools import partial
 
 from telethon import TelegramClient
 from telethon.errors import RPCError
@@ -122,7 +123,10 @@ async def refresh_metadata(
             await pace(pause)
             try:
                 metadata = await waiting_out_floods(
-                    lambda: fetch_full_channel(client, session, peer=peer),
+                    # Bound now, not on call: a lambda would close over
+                    # the loop variable and read whatever `peer` holds
+                    # when the retry fires.
+                    partial(fetch_full_channel, client, session, peer=peer),
                     recorder.for_channel(tg_id),
                 )
             except FloodWaitTooLong as exc:
