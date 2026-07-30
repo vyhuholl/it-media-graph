@@ -17,14 +17,17 @@ if TYPE_CHECKING:
     # Under `TYPE_CHECKING` because importing it for real would pull in
     # `settings`, and `itgraph --help` has to work before there is a
     # `.env` to read.
+    from itgraph.db.affiliation import CandidateRow
     from itgraph.tg.backfill import FloodWaitTooLong
 
 from itgraph import __version__
+from itgraph.affiliation.signals import DEFAULT_THRESHOLDS, DEFAULT_WEIGHTS
 from itgraph.db.models import (
     BackfillState,
     Channel,
     ChannelKind,
     ChannelStatus,
+    EdgeKind,
     RejectReason,
 )
 
@@ -648,6 +651,296 @@ def backup(
         )
 
 
+def _side(username: str | None, title: str | None, tg_id: int) -> str:
+    """One half of a candidate pair, as much of it as fits."""
+    handle = f"@{username}" if username else str(tg_id)
+    return f"{handle} {(title or '-')[:28]}"
+
+
+def _evidence(row: CandidateRow) -> str:
+    """Why this pair was proposed, in one column per signal that fired.
+
+    Printed rather than summarised into the score, because the score
+    alone is not reviewable: the operator is being asked whether these
+    two channels share an author, and the answer depends entirely on
+    which signal said so.
+    """
+    parts = []
+    if row.about_direction is not None:
+        parts.append(f"about:{row.about_direction}")
+    if row.shared_token is not None:
+        parts.append(f"token:{row.shared_token}/{row.shared_token_channels}")
+    if row.out_share is not None:
+        source = "a" if row.out_share_src == row.channel_a else "b"
+        parts.append(
+            f"share:{source}={row.out_share:.2f} of {row.out_share_edges}"
+        )
+    if row.edges_a_to_b is not None:
+        parts.append(f"mutual:{row.edges_a_to_b}/{row.edges_b_to_a}")
+    return "  ".join(parts)
+
+
+@app.command()
+def affiliates(
+    min_out_edges: Annotated[
+        int,
+        typer.Option(
+            "--min-out-edges",
+            help="Ignore concentration for channels with fewer out-edges.",
+        ),
+    ] = DEFAULT_THRESHOLDS.min_out_edges,
+    max_share: Annotated[
+        float,
+        typer.Option(
+            "--max-share",
+            help="Share of one channel's out-edges to one target.",
+        ),
+    ] = DEFAULT_THRESHOLDS.max_share_min,
+    min_token_length: Annotated[
+        int,
+        typer.Option("--min-token-length", help="Shortest username token."),
+    ] = DEFAULT_THRESHOLDS.min_token_length,
+    max_token_channels: Annotated[
+        int,
+        typer.Option(
+            "--max-token-channels",
+            help=(
+                "A token on more channels than this is a subject, not an "
+                "author."
+            ),
+        ),
+    ] = DEFAULT_THRESHOLDS.max_token_channels,
+    min_mutual_edges: Annotated[
+        int,
+        typer.Option(
+            "--min-mutual-edges", help="Edges needed each way to count."
+        ),
+    ] = DEFAULT_THRESHOLDS.min_mutual_edges,
+    weight_about: Annotated[
+        float, typer.Option("--weight-about", help="Weight of a description.")
+    ] = DEFAULT_WEIGHTS.about,
+    weight_share: Annotated[
+        float, typer.Option("--weight-share", help="Weight of concentration.")
+    ] = DEFAULT_WEIGHTS.share,
+    weight_token: Annotated[
+        float, typer.Option("--weight-token", help="Weight of a token.")
+    ] = DEFAULT_WEIGHTS.token,
+    weight_mutual: Annotated[
+        float, typer.Option("--weight-mutual", help="Weight of mutuality.")
+    ] = DEFAULT_WEIGHTS.mutual,
+    edge_kind: Annotated[
+        list[EdgeKind] | None,
+        typer.Option("--edge-kind", help="Count only these edge kinds."),
+    ] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", help="Show at most this many pairs."),
+    ] = None,
+    show_decided: Annotated[
+        bool,
+        typer.Option("--all", help="Include pairs already decided."),
+    ] = False,
+) -> None:
+    """Find channels that may share an author, and rank them for review.
+
+    Reads the inventory, the derived edges and the descriptions stored by
+    `itgraph metadata`. Makes no network request, so it is free to re-run
+    under different thresholds as often as you like — a re-run refreshes
+    every score and evidence column and never touches a decision you have
+    already made.
+
+    It proposes and never decides: no run of this command writes a family
+    link. Confirm a pair with `itgraph family`.
+
+    Four signals, and they rarely agree with each other, so any one of
+    them is enough to propose a pair and the weights mostly decide which
+    list you read first.
+    """
+    from itgraph.affiliation.detect import InvalidParameterError
+    from itgraph.affiliation.run import run_detection
+    from itgraph.affiliation.signals import Thresholds, Weights
+    from itgraph.db.session import Database
+
+    thresholds = Thresholds(
+        min_out_edges=min_out_edges,
+        max_share_min=max_share,
+        min_token_length=min_token_length,
+        max_token_channels=max_token_channels,
+        min_mutual_edges=min_mutual_edges,
+    )
+    weights = Weights(
+        about=weight_about,
+        share=weight_share,
+        token=weight_token,
+        mutual=weight_mutual,
+    )
+    kinds = list(edge_kind) if edge_kind else list(EdgeKind)
+    if limit is not None and limit < 1:
+        raise typer.BadParameter("--limit must be at least 1")
+
+    async def run() -> None:
+        database = Database()
+        try:
+            summary = await run_detection(
+                database,
+                thresholds=thresholds,
+                weights=weights,
+                edge_kinds=kinds,
+                limit=limit,
+                include_decided=show_decided,
+            )
+        finally:
+            await database.dispose()
+
+        for line in summary.coverage_lines():
+            typer.echo(line)
+        typer.echo(summary.line())
+        if not summary.rows:
+            return
+        typer.echo("")
+        for row in summary.rows:
+            typer.echo(
+                f"{row.score:>6.3f}  "
+                f"{_side(row.username_a, row.title_a, row.channel_a):<40}"
+                f"{row.status_a.value:<10} "
+                f"{_side(row.username_b, row.title_b, row.channel_b):<40}"
+                f"{row.status_b.value:<10} {_evidence(row)}"
+            )
+
+    try:
+        _run(run())
+    except InvalidParameterError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+@app.command()
+def family(
+    channel_refs: Annotated[
+        list[str],
+        typer.Argument(
+            metavar="CHANNEL...",
+            help="The two channels, by Telegram id or @username.",
+        ),
+    ],
+    canonical: Annotated[
+        str | None,
+        typer.Option(
+            "--canonical",
+            help="Which of the two is the family's main channel.",
+        ),
+    ] = None,
+    reject: Annotated[
+        bool,
+        typer.Option("--reject", help="Record that they are not affiliated."),
+    ] = False,
+    withdraw: Annotated[
+        bool,
+        typer.Option(
+            "--withdraw", help="Undo a decision and reopen the pair."
+        ),
+    ] = False,
+    note: Annotated[
+        str | None,
+        typer.Option(
+            "--note", help="Free-text note stored with the decision."
+        ),
+    ] = None,
+) -> None:
+    """Record that two channels share an author — or that they do not.
+
+    This is the only command that writes a family link. `itgraph
+    affiliates` proposes pairs and ranks them; nothing it finds becomes a
+    fact until it is confirmed here.
+
+    A confirmation needs `--canonical`, naming which of the two is the
+    family's main channel. The other one points at it, the same shape a
+    discussion chat points at its parent, and the family of any channel
+    is then the one it names or itself.
+
+    A rejection is stored too, and that is the point of storing it: it
+    stops the pair being proposed at every subsequent run. Use
+    `--withdraw` to undo either.
+
+    A pair no signal proposed can be confirmed directly — you may simply
+    know. It is recorded as having come from you rather than from a
+    signal.
+    """
+    from itgraph.db.channels import (
+        confirm_affiliation,
+        recanonicalize_family,
+        reject_affiliation,
+        withdraw_affiliation,
+    )
+    from itgraph.db.session import Database
+
+    if reject and withdraw:
+        raise typer.BadParameter("give at most one of --reject, --withdraw")
+    if reject and canonical is not None:
+        raise typer.BadParameter("a rejection has no canonical channel")
+
+    # One channel with `--canonical` is the re-canonicalize form: it
+    # names the member to promote and needs no second reference.
+    promoting = len(channel_refs) == 1
+    if promoting:
+        if reject or withdraw or note is not None:
+            raise typer.BadParameter(
+                "promoting one channel to canonical takes no other options"
+            )
+    elif len(channel_refs) != 2:
+        raise typer.BadParameter(
+            "give two channels, or one with --canonical to promote it"
+        )
+    elif not reject and not withdraw and canonical is None:
+        raise typer.BadParameter(
+            "--canonical must name which of the two is the main channel"
+        )
+
+    async def run() -> None:
+        database = Database()
+        try:
+            async with database.session() as session:
+                if promoting:
+                    counts = await recanonicalize_family(
+                        session, _channel_ref(channel_refs[0])
+                    )
+                    typer.echo(
+                        f"{channel_refs[0]} is now canonical for "
+                        f"{counts.channels} channels"
+                    )
+                    return
+
+                first, second = (_channel_ref(ref) for ref in channel_refs)
+                if withdraw:
+                    pair = await withdraw_affiliation(session, first, second)
+                    typer.echo(f"{pair[0]} and {pair[1]}: decision withdrawn")
+                elif reject:
+                    pair = await reject_affiliation(
+                        session, first, second, note=note
+                    )
+                    typer.echo(f"{pair[0]} and {pair[1]}: not affiliated")
+                else:
+                    assert canonical is not None
+                    link = await confirm_affiliation(
+                        session,
+                        first,
+                        second,
+                        canonical=_channel_ref(canonical),
+                        note=note,
+                    )
+                    typer.echo(
+                        f"{link.member} now belongs to the family of "
+                        f"{link.canonical}"
+                    )
+        finally:
+            await database.dispose()
+
+    try:
+        _run(run())
+    except ValueError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from exc
+
+
 def _row(channel: Channel) -> str:
     """One inventory line: id, username, title, status, kind."""
     username = f"@{channel.username}" if channel.username else "-"
@@ -680,26 +973,60 @@ def channels(
         ChannelStatus | None,
         typer.Option("--status", help="Show only this status."),
     ] = None,
+    family_ref: Annotated[
+        str | None,
+        typer.Option(
+            "--family",
+            metavar="CHANNEL",
+            help="Show one family: any channel in it, by id or @username.",
+        ),
+    ] = None,
     backfill_state: Annotated[
         bool,
         typer.Option("--backfill", help="Show how far collection got."),
     ] = False,
 ) -> None:
     """List the inventory, or summarise review progress."""
-    from itgraph.db.channels import count_by_status, list_channels
+    from itgraph.db.channels import (
+        count_by_status,
+        count_families,
+        find_channel,
+        list_channels,
+    )
     from itgraph.db.session import Database
 
     async def run() -> None:
         database = Database()
         try:
             async with database.session() as session:
-                if status is None:
+                family_key: int | None = None
+                if family_ref is not None:
+                    named = await find_channel(
+                        session, _channel_ref(family_ref)
+                    )
+                    # Any member names the family; the key is the same
+                    # expression the analysis uses.
+                    family_key = named.operator_id or named.tg_id
+
+                if status is None and family_key is None:
                     counts = await count_by_status(session)
                     for name, total in counts.items():
                         typer.echo(f"{name.value:<10} {total}")
+                    families = await count_families(session)
+                    typer.echo(
+                        f"{'families':<10} {families.families} "
+                        f"({families.channels} channels)"
+                    )
                     typer.echo("")
-                for channel in await list_channels(session, status=status):
+
+                for channel in await list_channels(
+                    session, status=status, family=family_key
+                ):
                     line = _row(channel)
+                    if family_key is not None:
+                        line = f"{line:<100} " + (
+                            "member" if channel.operator_id else "canonical"
+                        )
                     if backfill_state:
                         state = await session.get(BackfillState, channel.tg_id)
                         line = f"{line:<100} {_backfill_column(state)}"

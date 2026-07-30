@@ -20,12 +20,17 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `tg/backfill.py` | The history walk: pacing, resumption, FloodWait, failure classification. Spends no quota-bearing request |
 | `tg/resolve.py` | The resolution pass: username and title for channels found by reference |
 | `tg/` | MTProto collection: fetch and store raw payloads |
-| `derive/references.py` | Pure parsing of a payload into the channels it references |
+| `derive/references.py` | Pure parsing of a payload — or of plain text — into the channels it references |
 | `derive/edges.py` | The derivation pass: raw messages → edges; touches no network |
 | `derive/` | Deriving graph data from the raw layer |
+| `affiliation/signals.py` | The four signals that suggest two channels share an author; pure functions over mappings |
+| `affiliation/detect.py` | Merging the signals into one ranked candidate list; the parameters and their validation |
+| `affiliation/run.py` | The detection pass: load, score, store, report. Touches no network |
+| `affiliation/` | Recognizing that several channels have one author. Proposes; never decides |
 | `db/session.py` | `Database`: engine + session factory |
 | `db/models.py` | SQLAlchemy models, `Base` |
-| `db/channels.py` | The channel inventory: upsert, review, listing, resolution state |
+| `db/channels.py` | The channel inventory: upsert, review, listing, resolution state, and the family link — the only writer of `operator_id` |
+| `db/affiliation.py` | The affiliation tables: detection runs, candidate pairs and their evidence |
 | `db/edges.py` | The derived tables: `edges`, `pending_mentions` and the sources that order them |
 | `db/raw.py` | Writes into the raw layer; nothing here reads a payload |
 | `db/floods.py` | The record of rate limits: one row per wait, and the two questions asked of it |

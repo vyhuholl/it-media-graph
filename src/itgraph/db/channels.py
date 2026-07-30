@@ -12,7 +12,11 @@ from sqlalchemy import Boolean, func, literal_column, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from itgraph.affiliation.signals import Pair, ordered
 from itgraph.db.models import (
+    AffiliationCandidate,
+    AffiliationDecision,
+    CandidateOrigin,
     Channel,
     ChannelKind,
     ChannelStatus,
@@ -25,18 +29,25 @@ __all__ = [
     "ChannelLookupError",
     "ChannelNotFoundError",
     "DiscoveredChannel",
+    "FamilyCounts",
+    "FamilyLink",
     "UpsertCounts",
     "channels_awaiting_resolution",
+    "confirm_affiliation",
     "count_by_status",
+    "count_families",
     "create_resolved_channel",
     "existing_usernames",
     "find_channel",
     "link_discussion_chat",
     "list_channels",
     "mark_channel",
+    "recanonicalize_family",
     "record_channel_resolve_failure",
     "record_channel_resolved",
+    "reject_affiliation",
     "upsert_channels",
+    "withdraw_affiliation",
 ]
 
 # A channel is addressed either by Telegram id or by username without
@@ -98,6 +109,22 @@ class UpsertCounts:
 
     inserted: int
     updated: int
+
+
+@dataclass(frozen=True, slots=True)
+class FamilyLink:
+    """A confirmed affiliation: who is canonical, and who now names them."""
+
+    canonical: int
+    member: int
+
+
+@dataclass(frozen=True, slots=True)
+class FamilyCounts:
+    """How many families, and how many channels sit in one."""
+
+    families: int
+    channels: int
 
 
 async def upsert_channels(
@@ -272,13 +299,252 @@ async def mark_channel(
 
 
 async def list_channels(
-    session: AsyncSession, *, status: ChannelStatus | None = None
+    session: AsyncSession,
+    *,
+    status: ChannelStatus | None = None,
+    family: int | None = None,
 ) -> Sequence[Channel]:
-    """The inventory, optionally narrowed to one status."""
+    """The inventory, optionally narrowed to one status or one family.
+
+    The family filter uses ``COALESCE(operator_id, tg_id)`` — the same
+    expression the analysis uses to decide whether an edge stays inside
+    one author's channels — so the canonical channel comes back with its
+    members rather than being the one row a naive
+    ``operator_id = :family`` would miss.
+    """
     statement = select(Channel).order_by(Channel.status, Channel.tg_id)
     if status is not None:
         statement = statement.where(Channel.status == status)
+    if family is not None:
+        statement = statement.where(
+            func.coalesce(Channel.operator_id, Channel.tg_id) == family
+        )
     return (await session.scalars(statement)).all()
+
+
+async def count_families(session: AsyncSession) -> FamilyCounts:
+    """How many families are recorded, and how many channels are in one.
+
+    A family is counted by its canonical channel, so the number is
+    families and not memberships. A channel in no family is in neither
+    count — it is its own family of one, which is true and not worth
+    reporting.
+    """
+    members = (
+        await session.scalar(
+            select(func.count()).where(Channel.operator_id.is_not(None))
+        )
+    ) or 0
+    canonical = (
+        await session.scalar(
+            select(func.count(func.distinct(Channel.operator_id))).where(
+                Channel.operator_id.is_not(None)
+            )
+        )
+    ) or 0
+    # The canonical channels belong to their families too, and they are
+    # exactly the ones `operator_id IS NOT NULL` never counts.
+    return FamilyCounts(families=canonical, channels=members + canonical)
+
+
+async def confirm_affiliation(
+    session: AsyncSession,
+    first: ChannelRef,
+    second: ChannelRef,
+    *,
+    canonical: ChannelRef,
+    note: str | None = None,
+) -> FamilyLink:
+    """Record that two channels share an author. The only write of
+    ``operator_id`` in the project.
+
+    Detection may never reach this: it proposes, and a human decides. So
+    everything the column's invariants need is checked here, because here
+    is the one place they can be.
+
+    **Depth is exactly one.** ``operator_id`` must name a channel that is
+    itself canonical, or ``COALESCE(operator_id, tg_id)`` would need
+    transitive closure to answer correctly and every consumer of the
+    family key would quietly get a wrong answer. A ``CHECK`` cannot see
+    another row and a trigger would be this project's first, on its
+    most-written table; this function being the sole write path is what
+    makes enforcing it here honest rather than merely convenient.
+
+    Two channels already in *different* families are refused. Merging two
+    families is a decision about four or more channels, and it should
+    read as one — not fall out of confirming a pair.
+    """
+    left = await find_channel(session, first)
+    right = await find_channel(session, second)
+    if left.tg_id == right.tg_id:
+        raise ValueError("a channel cannot be affiliated with itself")
+
+    head = await find_channel(session, canonical)
+    if head.tg_id not in (left.tg_id, right.tg_id):
+        raise ValueError(
+            f"the canonical channel must be one of the two: "
+            f"{head.tg_id} is neither {left.tg_id} nor {right.tg_id}"
+        )
+    member = right if head.tg_id == left.tg_id else left
+
+    left_family = left.operator_id or left.tg_id
+    right_family = right.operator_id or right.tg_id
+    if (
+        left.operator_id is not None
+        and right.operator_id is not None
+        and left_family != right_family
+    ):
+        raise ValueError(
+            f"{left.tg_id} is already in family {left_family} and "
+            f"{right.tg_id} in family {right_family}; "
+            "merging two families is a separate decision"
+        )
+    if head.operator_id is not None:
+        raise ValueError(
+            f"{head.tg_id} is itself in family {head.operator_id}; "
+            "name that channel as canonical instead, or re-canonicalize "
+            "the family first"
+        )
+
+    member.operator_id = head.tg_id
+    await _record_decision(
+        session,
+        pair=ordered(left.tg_id, right.tg_id),
+        decision=AffiliationDecision.CONFIRMED,
+        canonical_id=head.tg_id,
+        note=note,
+    )
+    return FamilyLink(canonical=head.tg_id, member=member.tg_id)
+
+
+async def reject_affiliation(
+    session: AsyncSession,
+    first: ChannelRef,
+    second: ChannelRef,
+    *,
+    note: str | None = None,
+) -> Pair:
+    """Record that two channels do not share an author.
+
+    Writes no ``operator_id``. The row is what stops the same pair being
+    proposed at every subsequent run, which is the only reason a
+    rejection is stored at all — so it is kept and never deleted.
+    """
+    left = await find_channel(session, first)
+    right = await find_channel(session, second)
+    if left.tg_id == right.tg_id:
+        raise ValueError("a channel cannot be affiliated with itself")
+
+    pair = ordered(left.tg_id, right.tg_id)
+    await _record_decision(
+        session,
+        pair=pair,
+        decision=AffiliationDecision.REJECTED,
+        canonical_id=None,
+        note=note,
+    )
+    return pair
+
+
+async def withdraw_affiliation(
+    session: AsyncSession, first: ChannelRef, second: ChannelRef
+) -> Pair:
+    """Undo a decision: clear the family link and reopen the pair.
+
+    Clears ``operator_id`` on whichever side carries it, so a
+    confirmation made in error costs one command rather than a hand-written
+    ``UPDATE``.
+    """
+    left = await find_channel(session, first)
+    right = await find_channel(session, second)
+    pair = ordered(left.tg_id, right.tg_id)
+
+    for channel, other in ((left, right), (right, left)):
+        if channel.operator_id == other.tg_id:
+            channel.operator_id = None
+
+    await session.execute(
+        update(AffiliationCandidate)
+        .where(
+            AffiliationCandidate.channel_a == pair[0],
+            AffiliationCandidate.channel_b == pair[1],
+        )
+        .values(
+            decision=AffiliationDecision.PENDING,
+            canonical_id=None,
+            decided_at=None,
+            decision_note=None,
+        )
+    )
+    return pair
+
+
+async def recanonicalize_family(
+    session: AsyncSession, new_canonical: ChannelRef
+) -> FamilyCounts:
+    """Make this channel the canonical one of the family it is in.
+
+    Every member — including the channel that was canonical before —
+    ends up naming it, and its own pointer is cleared. Done in one
+    statement pair so no member is ever left naming a channel that is no
+    longer canonical, which is the state the depth-one rule forbids.
+    """
+    head = await find_channel(session, new_canonical)
+    family = head.operator_id or head.tg_id
+    if family == head.tg_id:
+        raise ValueError(f"{head.tg_id} is already the canonical channel")
+
+    moved = await session.execute(
+        update(Channel)
+        .where(func.coalesce(Channel.operator_id, Channel.tg_id) == family)
+        .where(Channel.tg_id != head.tg_id)
+        .values(operator_id=head.tg_id)
+        .returning(Channel.tg_id)
+    )
+    head.operator_id = None
+    return FamilyCounts(families=1, channels=len(moved.all()) + 1)
+
+
+async def _record_decision(
+    session: AsyncSession,
+    *,
+    pair: Pair,
+    decision: AffiliationDecision,
+    canonical_id: int | None,
+    note: str | None,
+) -> None:
+    """Write the review outcome onto the candidate, creating it if new.
+
+    A pair no signal ever proposed is still recordable — the operator may
+    simply know two channels share an author. Such a row is marked as
+    having come from the operator rather than from a signal, so "how much
+    did detection actually catch" stays answerable.
+    """
+    values = {
+        "channel_a": pair[0],
+        "channel_b": pair[1],
+        "score": 0.0,
+        "origin": CandidateOrigin.OPERATOR,
+        "decision": decision,
+        "canonical_id": canonical_id,
+        "decided_at": datetime.now(UTC),
+        "decision_note": note,
+    }
+    statement = insert(AffiliationCandidate).values([values])
+    await session.execute(
+        statement.on_conflict_do_update(
+            index_elements=[
+                AffiliationCandidate.channel_a,
+                AffiliationCandidate.channel_b,
+            ],
+            set_={
+                "decision": statement.excluded.decision,
+                "canonical_id": statement.excluded.canonical_id,
+                "decided_at": statement.excluded.decided_at,
+                "decision_note": statement.excluded.decision_note,
+            },
+        )
+    )
 
 
 async def channels_awaiting_resolution(

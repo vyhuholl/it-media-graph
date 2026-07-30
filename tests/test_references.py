@@ -14,6 +14,7 @@ from itgraph.derive.references import (
     Forward,
     Reference,
     extract_references,
+    extract_text_references,
     forward_target,
     normalize_username,
     parse_tme_link,
@@ -349,3 +350,88 @@ def test_a_too_short_handle_is_refused() -> None:
 
 def test_a_handle_starting_with_a_digit_is_refused() -> None:
     assert normalize_username("123abc") is None
+
+
+# --- plain text, the shape a channel description arrives in -----------
+#
+# `ChannelFull.about` carries no entities, so the entity reader above
+# finds nothing in it however many links it holds. Measured over real
+# descriptions the `@mention` is the dominant form — 155 against 34
+# `t.me`-shaped substrings — which is why it leads here.
+
+
+def test_a_mention_in_a_description() -> None:
+    assert extract_text_references("Подкаст: @example_podcast") == [
+        Reference(username="example_podcast")
+    ]
+
+
+def test_a_bare_link_in_a_description() -> None:
+    assert extract_text_references("см. t.me/example_podcast") == [
+        Reference(username="example_podcast")
+    ]
+
+
+def test_a_description_holding_both_forms() -> None:
+    assert extract_text_references(
+        "Основной канал @example_main, подкаст https://t.me/example_podcast"
+    ) == [
+        Reference(username="example_podcast"),
+        Reference(username="example_main"),
+    ]
+
+
+def test_a_link_ending_a_sentence_keeps_its_channel() -> None:
+    """The full stop belongs to the sentence, not to the username."""
+    assert extract_text_references("Читайте t.me/example_podcast.") == [
+        Reference(username="example_podcast")
+    ]
+
+
+def test_a_link_in_brackets_keeps_its_channel() -> None:
+    assert extract_text_references("Подкаст (t.me/example_podcast)") == [
+        Reference(username="example_podcast")
+    ]
+
+
+def test_a_link_naming_a_post_carries_it() -> None:
+    assert extract_text_references("t.me/example_main/42") == [
+        Reference(username="example_main", msg_id=42)
+    ]
+
+
+def test_an_invite_link_in_a_description_references_nothing() -> None:
+    assert extract_text_references("Чат: t.me/+AbCdEfGhIjK") == []
+
+
+def test_a_service_path_in_a_description_references_nothing() -> None:
+    assert extract_text_references("Папка: t.me/addlist/AbCdEf") == []
+
+
+def test_a_service_word_written_as_a_mention_references_nothing() -> None:
+    assert extract_text_references("@addstickers") == []
+
+
+def test_a_non_telegram_link_references_nothing() -> None:
+    assert extract_text_references("Сайт: https://example.com/example") == []
+
+
+def test_a_description_with_nothing_in_it() -> None:
+    assert extract_text_references("Просто описание без ссылок") == []
+
+
+def test_an_empty_description() -> None:
+    assert extract_text_references("") == []
+
+
+def test_a_mention_too_short_to_be_a_username() -> None:
+    assert extract_text_references("@ab") == []
+
+
+def test_the_same_channel_twice_is_two_references() -> None:
+    """Deduplication is the caller's job, exactly as for the entity
+    reader — one channel referenced twice is two references here."""
+    assert extract_text_references("@example_main и t.me/example_main") == [
+        Reference(username="example_main"),
+        Reference(username="example_main"),
+    ]

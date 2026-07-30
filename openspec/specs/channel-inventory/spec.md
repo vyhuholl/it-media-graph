@@ -21,7 +21,7 @@ The system SHALL connect to Telegram using an existing Telethon session file and
 
 ### Requirement: Channel Record
 
-The system SHALL store one record per Telegram channel or chat, keyed by its Telegram id.
+The system SHALL store one record per Telegram channel or chat, keyed by its Telegram id. A record MAY name the canonical channel of the family it belongs to; that field is written only by a confirmed review decision.
 
 #### Scenario: Identity is recorded
 - **WHEN** a channel record is created
@@ -41,6 +41,15 @@ The system SHALL store one record per Telegram channel or chat, keyed by its Tel
 
 #### Scenario: Rejection cannot be reasonless
 - **WHEN** a record is written with status `rejected` and no rejection reason
+- **THEN** the write is refused at the database level
+
+#### Scenario: A new record belongs to no family
+- **WHEN** a channel record is created
+- **THEN** its family pointer is empty
+- **AND** no import, resolution or metadata pass writes it
+
+#### Scenario: The family pointer names a channel in the inventory
+- **WHEN** a record's family pointer is written naming a channel the inventory does not hold
 - **THEN** the write is refused at the database level
 
 ### Requirement: Subscription Import
@@ -145,6 +154,16 @@ progress is visible.
 #### Scenario: Progress summary
 - **WHEN** the command runs without a filter
 - **THEN** a count per status is reported
+
+#### Scenario: Listing one family
+- **WHEN** the command runs filtered to one family
+- **THEN** every channel belonging to it is listed, canonical channel included
+- **AND** which of them is canonical is visible
+
+#### Scenario: Families are visible in the summary
+- **WHEN** the command runs without a filter
+- **THEN** it reports how many families are recorded
+- **AND** how many channels belong to one
 
 ### Requirement: Manual Addition
 

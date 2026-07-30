@@ -612,3 +612,401 @@ def test_add_writes_no_failure_file_after_a_clean_run(
 
     assert result.exit_code == 0, result.output
     assert not failures.exists()
+
+
+# --- affiliation ------------------------------------------------------
+
+
+def seed_affiliation_fixture(url: str) -> None:
+    """Two channels named alike, with edges and a description between.
+
+    Written directly rather than collected: the signals read the
+    inventory, the derived edges and stored descriptions, and building
+    those through the collector would test the collector.
+    """
+    import asyncio
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    async def build() -> None:
+        # A plain engine, not `Database`: the tests monkeypatch that name
+        # to a zero-argument factory, and a fixture builder must work
+        # whichever side of the patch it is called from.
+        engine = create_async_engine(url)
+        try:
+            async with (
+                async_sessionmaker(engine)() as session,
+                session.begin(),
+            ):
+                await session.execute(
+                    text(
+                        "INSERT INTO channels "
+                        "(tg_id, username, title, discovered_via, status) "
+                        "VALUES "
+                        "(:a, 'fake_gonzo_main', 'Main', 'manual', 'seed'), "
+                        "(:b, 'fake_gonzo_pod', 'Pod', 'manual', 'seed')"
+                    ),
+                    {"a": KNOWN, "b": KNOWN + 1},
+                )
+                await session.execute(
+                    text(
+                        "INSERT INTO raw_channels (channel_id, payload) "
+                        "VALUES (:a, :payload)"
+                    ),
+                    {
+                        "a": KNOWN,
+                        "payload": (
+                            '{"full_chat": {"about": '
+                            '"\\u041f\\u043e\\u0434\\u043a\\u0430\\u0441\\u0442'
+                            ' @fake_gonzo_pod"}}'
+                        ),
+                    },
+                )
+                for index in range(25):
+                    await session.execute(
+                        text(
+                            "INSERT INTO edges (src_channel_id, "
+                            "dst_channel_id, kind, msg_id, published_at) "
+                            "VALUES (:a, :b, 'forward', :msg, now())"
+                        ),
+                        {"a": KNOWN, "b": KNOWN + 1, "msg": index},
+                    )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(build())
+
+
+def test_affiliates_ranks_pairs_and_shows_its_evidence(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    seed_affiliation_fixture(database_url)
+
+    result = runner.invoke(app, ["affiliates"])
+
+    assert result.exit_code == 0, result.output
+    assert "candidate pairs proposed" in result.output
+    assert "@fake_gonzo_main" in result.output
+    # The evidence is on screen, not folded into the score: the operator
+    # is being asked which signal said so.
+    assert "token:gonzo" in result.output
+    assert "about:a_to_b" in result.output
+    assert "share:a=1.00 of 25" in result.output
+
+
+def test_affiliates_reports_description_coverage(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    """A short list over 40% coverage is not a small problem."""
+    use_test_database(monkeypatch, database_url)
+    seed_affiliation_fixture(database_url)
+
+    result = runner.invoke(app, ["affiliates"])
+
+    assert "descriptions: 1 of 2 channels have one, 1 do not" in result.output
+
+
+def test_affiliates_writes_no_family_link(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    """The one thing detection may never do, whatever the scores."""
+    import asyncio
+
+    from sqlalchemy import text
+
+    from itgraph.db.session import Database
+
+    use_test_database(monkeypatch, database_url)
+    seed_affiliation_fixture(database_url)
+
+    result = runner.invoke(app, ["affiliates"])
+    assert result.exit_code == 0, result.output
+
+    async def read() -> list[Any]:
+        database = Database(database_url)
+        try:
+            async with database.session() as session:
+                rows = await session.execute(
+                    text("SELECT operator_id FROM channels")
+                )
+                return list(rows.scalars().all())
+        finally:
+            await database.dispose()
+
+    assert asyncio.run(read()) == [None, None]
+
+
+def test_affiliates_needs_no_telegram_session(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    """Every input was collected by an earlier pass, so this makes no
+    request and must not even ask for a session."""
+
+    def refuse() -> None:
+        raise AssertionError("affiliates must not connect to Telegram")
+
+    monkeypatch.setattr(tg_client, "connected", refuse)
+    use_test_database(monkeypatch, database_url)
+    seed_affiliation_fixture(database_url)
+
+    result = runner.invoke(app, ["affiliates"])
+
+    assert result.exit_code == 0, result.output
+
+
+def test_affiliates_thresholds_reach_the_signals(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    seed_affiliation_fixture(database_url)
+
+    result = runner.invoke(
+        app,
+        [
+            "affiliates",
+            "--min-out-edges",
+            "500",
+            "--max-token-channels",
+            "2",
+            "--min-token-length",
+            "40",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    # The token and share signals are now out of reach; only the
+    # description reference is left.
+    assert "token:" not in result.output
+    assert "share:" not in result.output
+    assert "about:a_to_b" in result.output
+
+
+def test_affiliates_limit_bounds_the_output(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    seed_affiliation_fixture(database_url)
+
+    result = runner.invoke(app, ["affiliates", "--limit", "1"])
+
+    assert result.exit_code == 0, result.output
+    assert result.output.count("@fake_gonzo_main") == 1
+
+
+def test_affiliates_refuses_a_share_outside_its_range(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    seed_affiliation_fixture(database_url)
+
+    result = runner.invoke(app, ["affiliates", "--max-share", "1.5"])
+
+    assert result.exit_code != 0
+    assert "max_share_min" in result.output
+
+
+def test_affiliates_refuses_a_token_cap_below_two(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    seed_affiliation_fixture(database_url)
+
+    result = runner.invoke(app, ["affiliates", "--max-token-channels", "1"])
+
+    assert result.exit_code != 0
+    assert "max_token_channels" in result.output
+
+
+def test_family_confirms_and_the_listing_shows_it(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    seed_affiliation_fixture(database_url)
+
+    confirmed = runner.invoke(
+        app,
+        [
+            "family",
+            "@fake_gonzo_main",
+            "@fake_gonzo_pod",
+            "--canonical",
+            "@fake_gonzo_main",
+        ],
+    )
+    listing = runner.invoke(app, ["channels", "--family", "@fake_gonzo_pod"])
+    summary = runner.invoke(app, ["channels"])
+
+    assert confirmed.exit_code == 0, confirmed.output
+    assert "belongs to the family of" in confirmed.output
+    # Asked by the member, the answer is the whole family.
+    assert "@fake_gonzo_main" in listing.output
+    assert "canonical" in listing.output
+    assert "member" in listing.output
+    assert "families   1 (2 channels)" in summary.output
+
+
+def test_family_rejects_and_the_pair_leaves_the_review_list(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    seed_affiliation_fixture(database_url)
+
+    runner.invoke(app, ["affiliates"])
+    rejected = runner.invoke(
+        app,
+        [
+            "family",
+            "@fake_gonzo_main",
+            "@fake_gonzo_pod",
+            "--reject",
+            "--note",
+            "different people",
+        ],
+    )
+    pending = runner.invoke(app, ["affiliates"])
+    everything = runner.invoke(app, ["affiliates", "--all"])
+
+    assert rejected.exit_code == 0, rejected.output
+    assert "not affiliated" in rejected.output
+    assert "@fake_gonzo_main" not in pending.output
+    # Kept, not deleted: the rejection is what stops it being proposed.
+    assert "@fake_gonzo_main" in everything.output
+
+
+def test_family_withdraws_a_confirmation(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    seed_affiliation_fixture(database_url)
+
+    runner.invoke(
+        app,
+        [
+            "family",
+            str(KNOWN),
+            str(KNOWN + 1),
+            "--canonical",
+            str(KNOWN),
+        ],
+    )
+    result = runner.invoke(
+        app, ["family", str(KNOWN), str(KNOWN + 1), "--withdraw"]
+    )
+    summary = runner.invoke(app, ["channels"])
+
+    assert result.exit_code == 0, result.output
+    assert "decision withdrawn" in result.output
+    assert "families   0" in summary.output
+
+
+def test_family_promotes_another_member_to_canonical(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    seed_affiliation_fixture(database_url)
+
+    runner.invoke(
+        app, ["family", str(KNOWN), str(KNOWN + 1), "--canonical", str(KNOWN)]
+    )
+    result = runner.invoke(
+        app, ["family", str(KNOWN + 1), "--canonical", str(KNOWN + 1)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "is now canonical for 2 channels" in result.output
+
+
+def test_family_needs_a_canonical_channel(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    seed_affiliation_fixture(database_url)
+
+    result = runner.invoke(app, ["family", str(KNOWN), str(KNOWN + 1)])
+
+    assert result.exit_code != 0
+    assert "--canonical" in result.output
+
+
+def test_family_refuses_a_chain(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    seed_affiliation_fixture(database_url)
+    third = KNOWN + 2
+
+    import asyncio
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    async def add_third() -> None:
+        engine = create_async_engine(database_url)
+        try:
+            async with (
+                async_sessionmaker(engine)() as session,
+                session.begin(),
+            ):
+                await session.execute(
+                    text(
+                        "INSERT INTO channels (tg_id, username, "
+                        "discovered_via, status) VALUES "
+                        "(:c, 'fake_gonzo_third', 'manual', 'seed')"
+                    ),
+                    {"c": third},
+                )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(add_third())
+
+    runner.invoke(
+        app, ["family", str(KNOWN), str(KNOWN + 1), "--canonical", str(KNOWN)]
+    )
+    result = runner.invoke(
+        app,
+        ["family", str(KNOWN + 1), str(third), "--canonical", str(KNOWN + 1)],
+    )
+
+    assert result.exit_code == 1
+    assert "itself in family" in result.output
+
+
+def test_family_refuses_a_rejection_with_a_canonical_channel(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    seed_affiliation_fixture(database_url)
+
+    result = runner.invoke(
+        app,
+        [
+            "family",
+            str(KNOWN),
+            str(KNOWN + 1),
+            "--reject",
+            "--canonical",
+            str(KNOWN),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "canonical" in result.output
+
+
+def test_affiliates_stops_proposing_a_confirmed_pair(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    seed_affiliation_fixture(database_url)
+
+    runner.invoke(app, ["affiliates"])
+    runner.invoke(
+        app, ["family", str(KNOWN), str(KNOWN + 1), "--canonical", str(KNOWN)]
+    )
+    result = runner.invoke(app, ["affiliates"])
+
+    assert result.exit_code == 0, result.output
+    assert "0 candidate pairs proposed" in result.output

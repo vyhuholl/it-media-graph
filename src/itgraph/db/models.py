@@ -9,10 +9,12 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
+    ARRAY,
     BigInteger,
     CheckConstraint,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -27,9 +29,14 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 __all__ = [
+    "AboutDirection",
+    "AffiliationCandidate",
+    "AffiliationDecision",
+    "AffiliationRun",
     "BackfillState",
     "BackfillStatus",
     "Base",
+    "CandidateOrigin",
     "Channel",
     "ChannelKind",
     "ChannelStatus",
@@ -190,6 +197,46 @@ class FailureKind(enum.StrEnum):
     TRANSIENT = "transient"
 
 
+class AffiliationDecision(enum.StrEnum):
+    """What the operator decided about a proposed pair.
+
+    ``PENDING`` is the state detection leaves a pair in, and the only one
+    it may write. The other two are reachable solely through the
+    confirmation command — the whole point of splitting the two.
+    """
+
+    PENDING = "pending"
+    CONFIRMED = "confirmed"
+    REJECTED = "rejected"
+
+
+class CandidateOrigin(enum.StrEnum):
+    """Whether a signal proposed this pair or the operator asserted it.
+
+    A pair no signal fired on is still recordable: the operator may
+    simply know. Keeping the two apart is what stops such a row from
+    reading as evidence the detection found — and what makes "how much
+    did the signals actually catch" answerable later.
+    """
+
+    SIGNAL = "signal"
+    OPERATOR = "operator"
+
+
+class AboutDirection(enum.StrEnum):
+    """Which way a description reference was found, between two channels.
+
+    Named against the pair's stored order — ``A_TO_B`` means the channel
+    in ``channel_a`` names the one in ``channel_b`` — because the pair
+    itself is unordered and sorted by id, so "source" and "target" would
+    mean nothing without the anchor.
+    """
+
+    A_TO_B = "a_to_b"
+    B_TO_A = "b_to_a"
+    MUTUAL = "mutual"
+
+
 def _pg_enum(members: type[enum.Enum], name: str) -> Enum:
     """A Postgres enum storing member *values*, not member names."""
     return Enum(
@@ -215,6 +262,10 @@ class Channel(Base):
         CheckConstraint(
             "(status = 'rejected') = (reject_reason IS NOT NULL)",
             name="rejected_has_reason",
+        ),
+        CheckConstraint(
+            "operator_id IS NULL OR operator_id <> tg_id",
+            name="operator_is_another_channel",
         ),
     )
 
@@ -256,6 +307,30 @@ class Channel(Base):
     )
 
     linked_to: Mapped[int | None] = mapped_column(
+        ForeignKey("channels.tg_id", ondelete="SET NULL"), nullable=True
+    )
+
+    # The canonical channel of the family this one belongs to — one
+    # author's several channels, established by hand and never guessed.
+    # Shaped like `linked_to`: the members point at the canonical one and
+    # it points at nobody, so **null means two things** — no family
+    # recorded, or this *is* the canonical channel of one. Both read the
+    # same way, which is the point: the family of any channel is
+    #
+    #     COALESCE(operator_id, tg_id)
+    #
+    # correct for a member, for a canonical channel, and for a channel
+    # with no family at all — a solo channel is its own family of one. An
+    # edge is inside a family exactly when its endpoints' keys are equal,
+    # so the analysis that drops self-reposts needs no special case for
+    # the unaffiliated majority.
+    #
+    # Depth is exactly one: this must name a channel whose own
+    # `operator_id` is null, or the expression above would need
+    # transitive closure to be right. A CHECK cannot see another row, so
+    # `db/channels.py` enforces it at the single write path — see
+    # `confirm_affiliation`.
+    operator_id: Mapped[int | None] = mapped_column(
         ForeignKey("channels.tg_id", ondelete="SET NULL"), nullable=True
     )
 
@@ -570,6 +645,187 @@ class PendingMentionSource(Base):
         return (
             f"PendingMentionSource(username={self.username!r}, "
             f"channel_id={self.channel_id})"
+        )
+
+
+class AffiliationRun(Base):
+    """One affiliation detection run, and the parameters it used.
+
+    Every threshold and weight is a column here rather than on each
+    candidate, because a run produces on the order of a hundred pairs and
+    copying eleven numbers onto each of them stores the same fact a
+    hundred times. A candidate points back at the run it was last
+    measured by, which is what makes "under which thresholds was this
+    proposed" answerable without re-running detection — and what
+    distinguishes a proposal from before a threshold changed from one
+    after.
+
+    The coverage columns are here for the same reason they are printed: a
+    signal that could speak about 40% of the inventory and found little
+    is not the same result as one that looked everywhere and found
+    little, and only the denominator tells them apart.
+    """
+
+    __tablename__ = "affiliation_runs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    ran_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    # Thresholds, in the order the signals are described in the spec.
+    min_out_edges: Mapped[int] = mapped_column(Integer)
+    max_share_min: Mapped[float] = mapped_column(Float)
+    min_token_length: Mapped[int] = mapped_column(Integer)
+    max_token_channels: Mapped[int] = mapped_column(Integer)
+    min_mutual_edges: Mapped[int] = mapped_column(Integer)
+
+    # Which edge kinds the two edge-based signals counted. Text rather
+    # than the enum: an array of a Postgres enum is awkward to migrate,
+    # and this column is read by a human, not joined on.
+    edge_kinds: Mapped[list[str]] = mapped_column(ARRAY(Text))
+
+    weight_about: Mapped[float] = mapped_column(Float)
+    weight_token: Mapped[float] = mapped_column(Float)
+    weight_share: Mapped[float] = mapped_column(Float)
+    weight_mutual: Mapped[float] = mapped_column(Float)
+
+    # What the run could see. `refs_outside_inventory` counts handles
+    # parsed out of descriptions that name no channel the inventory
+    # holds — mostly an author's uncollected channels and personal
+    # accounts, and a discovery lead rather than a failure.
+    channels_scored: Mapped[int] = mapped_column(Integer)
+    with_description: Mapped[int] = mapped_column(Integer)
+    refs_outside_inventory: Mapped[int] = mapped_column(Integer)
+
+    def __repr__(self) -> str:
+        return f"AffiliationRun(id={self.id}, ran_at={self.ran_at!r})"
+
+
+class AffiliationCandidate(Base):
+    """Two channels that may share an author, and why anyone thinks so.
+
+    A proposal, never a conclusion. Detection writes rows here and may
+    write nothing else; only the confirmation command turns one into a
+    family by writing ``channels.operator_id``. That split is the whole
+    design — no threshold on this data separates an author's second
+    channel from a close collaborator, so the ranking exists to order a
+    human's attention, not to replace it.
+
+    The pair is unordered and stored once, with ``channel_a <
+    channel_b``. Sorting by id rather than by whichever signal fired
+    first is what makes the primary key do the deduplication: two signals
+    reaching the same pair from opposite directions produce one row
+    whatever order they run in.
+
+    Evidence gets one nullable column per signal rather than a JSONB
+    document. The raw layer is where documents belong; everything derived
+    here has explicit columns, as ``edges`` does. A fifth signal costs a
+    migration, which is the same trade ``EdgeKind`` makes and for the
+    same reason — a new signal is a deliberate change and can afford one.
+
+    Re-running detection refreshes ``score``, every evidence column and
+    ``run_id``, and touches none of the decision columns. That is what
+    lets a threshold be re-tried as often as the operator likes without
+    ever costing a review already done.
+    """
+
+    __tablename__ = "affiliation_candidates"
+    __table_args__ = (
+        # The unordered pair, made canonical. Without this a pair could
+        # be stored twice, once each way round, and the primary key
+        # would deduplicate neither.
+        CheckConstraint("channel_a < channel_b", name="pair_is_ordered"),
+        # A decision is exactly as timestamped as it is made: pending
+        # rows carry no date, decided ones must.
+        CheckConstraint(
+            "(decision = 'pending') = (decided_at IS NULL)",
+            name="decided_has_timestamp",
+        ),
+        # `canonical_id` records which side the operator judged the main
+        # channel, at the moment they judged it. Re-canonicalizing a
+        # family later rewrites `channels.operator_id` for every member;
+        # without this it would be unrecoverable which one was chosen
+        # first. It is meaningful only for a confirmation.
+        CheckConstraint(
+            "(canonical_id IS NOT NULL) = (decision = 'confirmed')",
+            name="canonical_only_when_confirmed",
+        ),
+        # The ranking is the table's one access path.
+        Index("ix_affiliation_candidates_score", "score"),
+    )
+
+    channel_a: Mapped[int] = mapped_column(
+        ForeignKey("channels.tg_id", ondelete="CASCADE"),
+        primary_key=True,
+        autoincrement=False,
+    )
+    channel_b: Mapped[int] = mapped_column(
+        ForeignKey("channels.tg_id", ondelete="CASCADE"),
+        primary_key=True,
+        autoincrement=False,
+    )
+
+    score: Mapped[float] = mapped_column(Float)
+    run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("affiliation_runs.id", ondelete="SET NULL")
+    )
+
+    # --- evidence, one group per signal; null means it did not fire ---
+
+    # Which channel's description named which. `MUTUAL` is the strongest
+    # single piece of evidence in the whole design and also the rarest —
+    # a reference found one way is not weakened by a return link that
+    # could not be checked, because most targets have no stored
+    # description to check.
+    about_direction: Mapped[AboutDirection | None] = mapped_column(
+        _pg_enum(AboutDirection, "about_direction")
+    )
+
+    # The shared username token and how many channels carry it. The count
+    # travels with the token because it is what decides the strength: a
+    # token on two channels is an author, on eleven it is a subject.
+    shared_token: Mapped[str | None] = mapped_column(Text)
+    shared_token_channels: Mapped[int | None] = mapped_column(Integer)
+
+    # The concentration signal: what share of one channel's outgoing
+    # edges went to the other, the denominator that share was taken over,
+    # and which of the two was the concentrated one — the signal is
+    # directional even though the pair is not.
+    out_share: Mapped[float | None] = mapped_column(Float)
+    out_share_edges: Mapped[int | None] = mapped_column(Integer)
+    out_share_src: Mapped[int | None] = mapped_column(BigInteger)
+
+    # Edge counts each way, against the pair's stored order.
+    edges_a_to_b: Mapped[int | None] = mapped_column(Integer)
+    edges_b_to_a: Mapped[int | None] = mapped_column(Integer)
+
+    # --- the review ---
+
+    decision: Mapped[AffiliationDecision] = mapped_column(
+        _pg_enum(AffiliationDecision, "affiliation_decision"),
+        server_default=AffiliationDecision.PENDING.value,
+    )
+    origin: Mapped[CandidateOrigin] = mapped_column(
+        _pg_enum(CandidateOrigin, "candidate_origin"),
+        server_default=CandidateOrigin.SIGNAL.value,
+    )
+    canonical_id: Mapped[int | None] = mapped_column(
+        ForeignKey("channels.tg_id", ondelete="SET NULL")
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    decision_note: Mapped[str | None] = mapped_column(Text)
+
+    detected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"AffiliationCandidate(a={self.channel_a}, b={self.channel_b}, "
+            f"score={self.score:.3f}, decision={self.decision.value!r})"
         )
 
 
