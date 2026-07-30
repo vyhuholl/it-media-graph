@@ -189,6 +189,29 @@ The system SHALL propose a pair when **any** signal fires, and rank the proposal
 - **WHEN** detection runs
 - **THEN** no candidate pairing them is shown for review
 
+#### Scenario: A pair with no channel in scope is not shown
+- **GIVEN** a pair in which neither channel has been accepted into scope
+- **WHEN** detection runs
+- **THEN** it is not shown among the candidates awaiting review
+- **AND** it is still computed and stored
+- **AND** it can be shown on request
+
+#### Scenario: One channel in scope is enough to be shown
+- **GIVEN** a pair in which exactly one channel has been accepted into scope
+- **WHEN** detection runs
+- **THEN** the pair is shown among the candidates awaiting review
+
+#### Scenario: A channel accepted later needs no recomputation
+- **GIVEN** a stored pair that was hidden because neither channel was in scope
+- **WHEN** one of the two is accepted into scope
+- **THEN** the pair is shown among the candidates awaiting review
+- **AND** the signals are not recomputed for it to appear
+
+#### Scenario: What is hidden is reported, not silently dropped
+- **GIVEN** a run in which some proposals are not shown
+- **WHEN** the run reports its result
+- **THEN** the number of pairs proposed and the number awaiting review are both stated
+
 ### Requirement: Candidate Evidence Is Stored
 
 The system SHALL store, with every proposed pair, the per-signal evidence that produced it and the score it received, so a proposal can be read back and checked without re-running detection.

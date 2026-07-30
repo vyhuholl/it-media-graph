@@ -15,7 +15,7 @@ this module may only ever propose.
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -255,12 +255,29 @@ async def list_candidates(
     *,
     limit: int | None = None,
     include_decided: bool = False,
+    seeds_only: bool = True,
 ) -> list[CandidateRow]:
     """Candidates ranked strongest first, with both channels' identity.
 
     Decided pairs are hidden by default and kept, never deleted — a
     rejection is the record that stops the same pair being proposed
     again, and it is only useful while it can still be read.
+
+    ``seeds_only`` hides a pair in which neither channel is a seed. It
+    filters the *reading*, not the detection: the pairs are still
+    computed and still stored, because a channel accepted next week turns
+    its pair into one worth reviewing without anything needing to be
+    recomputed.
+
+    It costs three of the four signals nothing at all, and that is
+    structural rather than lucky. Edges exist only for channels backfill
+    walked, and backfill walks seeds; descriptions exist only for
+    channels the metadata pass fetched, and it runs on seeds. So
+    concentration, mutual density and description references always have
+    a seed on at least one side already. Measured on the real inventory,
+    every one of the 72 pairs this hides came from the shared-token
+    signal alone — 24 of them naming a channel already rejected, which
+    is the least actionable row the ranking can produce.
     """
     side_a = aliased(Channel)
     side_b = aliased(Channel)
@@ -272,6 +289,13 @@ async def list_candidates(
     if not include_decided:
         query = query.where(
             AffiliationCandidate.decision == AffiliationDecision.PENDING
+        )
+    if seeds_only:
+        query = query.where(
+            or_(
+                side_a.status == ChannelStatus.SEED,
+                side_b.status == ChannelStatus.SEED,
+            )
         )
     # Ties break on the pair, so a bounded run is reproducible rather
     # than dependent on physical row order.

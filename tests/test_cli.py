@@ -1010,3 +1010,76 @@ def test_affiliates_stops_proposing_a_confirmed_pair(
 
     assert result.exit_code == 0, result.output
     assert "0 candidate pairs proposed" in result.output
+
+
+def test_affiliates_hides_a_pair_with_no_seed_in_it(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    import asyncio
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    use_test_database(monkeypatch, database_url)
+    seed_affiliation_fixture(database_url)
+
+    async def unreview() -> None:
+        engine = create_async_engine(database_url)
+        try:
+            async with (
+                async_sessionmaker(engine)() as session,
+                session.begin(),
+            ):
+                await session.execute(
+                    text("UPDATE channels SET status = 'candidate'")
+                )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(unreview())
+
+    hidden = runner.invoke(app, ["affiliates"])
+    shown = runner.invoke(app, ["affiliates", "--any-status"])
+
+    assert hidden.exit_code == 0, hidden.output
+    assert "@fake_gonzo_main" not in hidden.output
+    # Computed and stored either way — only the reading is narrowed.
+    assert "1 candidate pairs proposed" in hidden.output
+    assert "0 awaiting review" in hidden.output
+    assert "@fake_gonzo_main" in shown.output
+
+
+def test_affiliates_shows_a_pair_with_one_seed_in_it(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    import asyncio
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    use_test_database(monkeypatch, database_url)
+    seed_affiliation_fixture(database_url)
+
+    async def unreview_one() -> None:
+        engine = create_async_engine(database_url)
+        try:
+            async with (
+                async_sessionmaker(engine)() as session,
+                session.begin(),
+            ):
+                await session.execute(
+                    text(
+                        "UPDATE channels SET status = 'candidate' "
+                        "WHERE tg_id = :b"
+                    ),
+                    {"b": KNOWN + 1},
+                )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(unreview_one())
+
+    result = runner.invoke(app, ["affiliates"])
+
+    assert result.exit_code == 0, result.output
+    assert "@fake_gonzo_main" in result.output

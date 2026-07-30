@@ -740,6 +740,13 @@ def affiliates(
         bool,
         typer.Option("--all", help="Include pairs already decided."),
     ] = False,
+    any_status: Annotated[
+        bool,
+        typer.Option(
+            "--any-status",
+            help="Also show pairs in which neither channel is a seed.",
+        ),
+    ] = False,
 ) -> None:
     """Find channels that may share an author, and rank them for review.
 
@@ -755,6 +762,12 @@ def affiliates(
     Four signals, and they rarely agree with each other, so any one of
     them is enough to propose a pair and the weights mostly decide which
     list you read first.
+
+    Only pairs with at least one seed in them are shown; the rest are
+    still computed and stored, and `--any-status` shows them. Nothing is
+    lost by the default — edges and descriptions exist only for channels
+    the collector walked, and it walks seeds, so three of the four
+    signals always have a seed on one side anyway.
     """
     from itgraph.affiliation.detect import InvalidParameterError
     from itgraph.affiliation.run import run_detection
@@ -788,6 +801,7 @@ def affiliates(
                 edge_kinds=kinds,
                 limit=limit,
                 include_decided=show_decided,
+                seeds_only=not any_status,
             )
         finally:
             await database.dispose()

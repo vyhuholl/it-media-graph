@@ -36,7 +36,14 @@ C = 1003
 BOTH_KINDS = [EdgeKind.FORWARD, EdgeKind.MENTION]
 
 
-async def seed(database: Database) -> None:
+async def seed(database: Database, *, in_scope: bool = True) -> None:
+    """Three channels, seeds by default.
+
+    The listing hides a pair in which neither channel is a seed, so a
+    fixture of unreviewed candidates would be invisible to every
+    assertion below for a reason that has nothing to do with what is
+    being tested.
+    """
     async with database.session() as session:
         await upsert_channels(
             session,
@@ -51,6 +58,8 @@ async def seed(database: Database) -> None:
             ],
             discovered_via=DiscoverySource.OWN_SUBSCRIPTIONS,
         )
+        if in_scope:
+            await session.execute(text("UPDATE channels SET status = 'seed'"))
 
 
 def a_detection(refs_outside: int = 0) -> Detection:
@@ -311,3 +320,48 @@ async def test_the_inventory_load_lowercases_usernames(
         inventory = await load_inventory(session, edge_kinds=BOTH_KINDS)
 
     assert inventory.usernames[A] == "mixedcase"
+
+
+async def test_a_pair_with_no_seed_in_it_is_not_shown(
+    database: Database,
+) -> None:
+    """Reviewing two channels neither of which is in scope answers a
+    question nobody has asked yet."""
+    await seed(database, in_scope=False)
+    await store(database, [Candidate(pair=(A, B), score=1.4)])
+
+    async with database.session() as session:
+        rows = await list_candidates(session)
+
+    assert rows == []
+
+
+async def test_one_seed_is_enough_to_show_a_pair(database: Database) -> None:
+    await seed(database, in_scope=False)
+    await store(database, [Candidate(pair=(A, B), score=1.4)])
+
+    async with database.session() as session:
+        await session.execute(
+            text("UPDATE channels SET status = 'seed' WHERE tg_id = :a"),
+            {"a": A},
+        )
+
+    async with database.session() as session:
+        rows = await list_candidates(session)
+
+    assert [row.channel_b for row in rows] == [B]
+
+
+async def test_the_hidden_pair_is_stored_and_reachable(
+    database: Database,
+) -> None:
+    """Hidden from the reading, not dropped from the table: a channel
+    accepted next week turns its pair into one worth reviewing without
+    anything being recomputed."""
+    await seed(database, in_scope=False)
+    await store(database, [Candidate(pair=(A, B), score=1.4)])
+
+    async with database.session() as session:
+        rows = await list_candidates(session, seeds_only=False)
+
+    assert [row.channel_b for row in rows] == [B]

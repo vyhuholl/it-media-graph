@@ -44,16 +44,24 @@ class DetectionSummary:
     """
 
     proposed: int
+    awaiting_review: int
     channels_scored: int
     with_description: int
     refs_outside_inventory: int
     rows: list[CandidateRow]
 
     def line(self) -> str:
-        return (
+        line = (
             f"{self.proposed} candidate pairs proposed over "
             f"{self.channels_scored} channels"
         )
+        # The two numbers diverge for two different reasons — pairs
+        # already decided, and pairs between channels not in scope — and
+        # a reader who sees only the second would think the run found
+        # less than it did.
+        if self.awaiting_review != self.proposed:
+            line += f", {self.awaiting_review} awaiting review"
+        return line
 
     def coverage_lines(self) -> list[str]:
         without = self.channels_scored - self.with_description
@@ -87,12 +95,17 @@ async def run_detection(
     edge_kinds: list[EdgeKind],
     limit: int | None = None,
     include_decided: bool = False,
+    seeds_only: bool = True,
 ) -> DetectionSummary:
     """Score every pair the signals propose, store them, read them back.
 
     Parameters are validated before anything is loaded, so a typo costs
     an error message rather than a run and a table full of proposals
     computed under a threshold nobody meant.
+
+    ``seeds_only`` narrows what is *shown*, never what is computed or
+    stored: a pair between two channels neither of which is in scope yet
+    is still worth having on disk for the week one of them is accepted.
     """
     validate_parameters(
         thresholds, weights, [kind.value for kind in edge_kinds]
@@ -119,12 +132,18 @@ async def run_detection(
         await upsert_candidates(session, detection.candidates, run_id=run_id)
 
     async with database.session() as session:
-        rows = await list_candidates(
-            session, limit=limit, include_decided=include_decided
+        # Unbounded first, so the count reported is what is reviewable
+        # rather than what `--limit` happened to show.
+        reviewable = await list_candidates(
+            session,
+            include_decided=include_decided,
+            seeds_only=seeds_only,
         )
+        rows = reviewable[:limit] if limit is not None else reviewable
 
     return DetectionSummary(
         proposed=len(detection.candidates),
+        awaiting_review=len(reviewable),
         channels_scored=detection.channels_scored,
         with_description=detection.with_description,
         refs_outside_inventory=detection.refs_outside_inventory,
