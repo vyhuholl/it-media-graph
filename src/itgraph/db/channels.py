@@ -29,6 +29,7 @@ __all__ = [
     "channels_awaiting_resolution",
     "count_by_status",
     "create_resolved_channel",
+    "existing_usernames",
     "find_channel",
     "link_discussion_chat",
     "list_channels",
@@ -208,6 +209,34 @@ async def find_channel(session: AsyncSession, ref: ChannelRef) -> Channel:
     return matches[0]
 
 
+async def existing_usernames(
+    session: AsyncSession, usernames: Sequence[str]
+) -> set[str]:
+    """Which of these usernames the inventory already holds, lowercased.
+
+    One statement for the whole list, not one per name: a hand-written
+    list of a hundred channels would otherwise be a hundred round trips
+    to learn what a single query answers.
+
+    Matched case-insensitively, the way :func:`find_channel` matches,
+    because the inventory stores a username as Telegram spells it and a
+    list typed by hand will not. Returned lowercased so the caller can
+    compare against a parsed entry without normalising twice.
+
+    Answers "is this username known", which is not quite "is this channel
+    known": a channel discovered by forward and never resolved has an id
+    and no username, so it is absent here and its row is found only by
+    the write that lands on it.
+    """
+    if not usernames:
+        return set()
+    lowered = [name.lower() for name in usernames]
+    statement = select(func.lower(Channel.username)).where(
+        func.lower(Channel.username).in_(lowered)
+    )
+    return set((await session.scalars(statement)).all())
+
+
 async def mark_channel(
     session: AsyncSession,
     ref: ChannelRef,
@@ -334,7 +363,7 @@ async def create_resolved_channel(
     *,
     channel: DiscoveredChannel,
     discovered_via: DiscoverySource,
-) -> None:
+) -> bool:
     """Create — or refresh — a channel whose identity is already known.
 
     Used when a pending mention resolves: the lookup returned a full
@@ -342,6 +371,12 @@ async def create_resolved_channel(
     queued to resolve itself. A channel that already exists (discovered by
     an earlier forward, say) keeps its provenance, status and first-seen
     time; only its identity and resolved state are refreshed.
+
+    Returns whether the row was created. A caller that may review what it
+    adds needs that answer and cannot get it beforehand: a channel known
+    only by id carries no username to look for, so "not in the inventory
+    by name" and "not in the inventory" are different questions and only
+    the write knows which one was being asked.
     """
     now = datetime.now(UTC)
     statement = insert(Channel).values(
@@ -353,7 +388,10 @@ async def create_resolved_channel(
         resolved_at=now,
         resolve_last_attempt_at=now,
     )
-    await session.execute(
+    # `xmax = 0` distinguishes the insert path from the update path; see
+    # `upsert_channels`, which reads it the same way.
+    was_inserted = literal_column("xmax = 0", Boolean).label("inserted")
+    inserted = await session.scalar(
         statement.on_conflict_do_update(
             index_elements=[Channel.tg_id],
             set_={
@@ -364,8 +402,9 @@ async def create_resolved_channel(
                 "resolve_last_attempt_at": statement.excluded.resolve_last_attempt_at,
                 "resolve_last_error": None,
             },
-        )
+        ).returning(was_inserted)
     )
+    return bool(inserted)
 
 
 async def count_by_status(session: AsyncSession) -> dict[ChannelStatus, int]:

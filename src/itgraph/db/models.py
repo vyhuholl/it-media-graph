@@ -140,19 +140,28 @@ class EdgeKind(enum.StrEnum):
 class CollectionCommand(enum.StrEnum):
     """Which networked command a recorded rate limit came from.
 
-    Each command now owns the quota-bearing method it spends:
+    Each command owns the quota-bearing method it spends:
     ``contacts.resolveUsername`` belongs to resolution,
     ``channels.getFullChannel`` to the metadata pass, and a history walk
-    is meant to spend neither. That near one-to-one mapping is exactly
-    why the column is still worth its width — it is what makes the
-    mapping *checkable*. A `ResolveUsernameRequest` filed under
-    ``BACKFILL`` is not a curiosity, it is the regression this table
-    exists to catch, and the method name alone could never report it.
+    is meant to spend neither. That mapping is exactly why the column is
+    still worth its width — it is what makes the mapping *checkable*. A
+    `ResolveUsernameRequest` filed under ``BACKFILL`` is not a curiosity,
+    it is the regression this table exists to catch, and the method name
+    alone could never report it.
+
+    ``ADD`` is the one legitimate overlap: it spends
+    ``contacts.resolveUsername`` too, because resolving a username is the
+    whole of what it does. So that method now reads as expected under two
+    commands and as a regression under the other two, and the question
+    the column answers changes from "which command spends this method" to
+    "which of the two spent today's quota" — which is the question worth
+    asking once both are running against the same daily ceiling.
     """
 
     BACKFILL = "backfill"
     RESOLVE = "resolve"
     METADATA = "metadata"
+    ADD = "add"
 
 
 class BackfillStatus(enum.StrEnum):

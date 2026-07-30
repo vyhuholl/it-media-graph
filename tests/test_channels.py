@@ -9,6 +9,8 @@ from itgraph.db.channels import (
     ChannelNotFoundError,
     DiscoveredChannel,
     count_by_status,
+    create_resolved_channel,
+    existing_usernames,
     find_channel,
     list_channels,
     mark_channel,
@@ -280,3 +282,124 @@ async def test_counts_cover_every_status(database: Database) -> None:
         ChannelStatus.MAYBE: 0,
         ChannelStatus.REJECTED: 0,
     }
+
+
+# --- what an addition by username has to ask ---------------------------
+
+
+async def test_known_usernames_are_reported_case_insensitively(
+    database: Database,
+) -> None:
+    await seed_inventory(database)
+    async with database.session() as session:
+        known = await existing_usernames(
+            session, ["EXAMPLE_0", "example_1", "not_in_the_inventory"]
+        )
+
+    assert known == {"example_0", "example_1"}
+
+
+async def test_an_empty_list_asks_nothing(database: Database) -> None:
+    async with database.session() as session:
+        assert await existing_usernames(session, []) == set()
+
+
+async def test_creating_a_resolved_channel_reports_the_insert(
+    database: Database,
+) -> None:
+    async with database.session() as session:
+        inserted = await create_resolved_channel(
+            session,
+            channel=DiscoveredChannel(
+                tg_id=KNOWN,
+                username="fake_new",
+                title="Fake New",
+                is_chat=False,
+            ),
+            discovered_via=DiscoverySource.MANUAL,
+        )
+
+    assert inserted is True
+
+
+async def test_refreshing_an_existing_channel_reports_no_insert(
+    database: Database,
+) -> None:
+    await seed_inventory(database)
+    async with database.session() as session:
+        inserted = await create_resolved_channel(
+            session,
+            channel=DiscoveredChannel(
+                tg_id=KNOWN,
+                username="example_0",
+                title="Renamed",
+                is_chat=False,
+            ),
+            discovered_via=DiscoverySource.MANUAL,
+        )
+
+    assert inserted is False
+
+
+async def test_a_channel_known_only_by_id_is_an_update_not_an_insert(
+    database: Database,
+) -> None:
+    # The case the username query cannot see: a row discovered by forward
+    # carries an id and no name, so it is absent from the skip set and
+    # only the write knows it was already there.
+    async with database.session() as session:
+        await upsert_channels(
+            session,
+            [
+                DiscoveredChannel(
+                    tg_id=KNOWN, username=None, title=None, is_chat=False
+                )
+            ],
+            discovered_via=DiscoverySource.FORWARD,
+        )
+
+    async with database.session() as session:
+        assert await existing_usernames(session, ["fake_named"]) == set()
+        inserted = await create_resolved_channel(
+            session,
+            channel=DiscoveredChannel(
+                tg_id=KNOWN,
+                username="fake_named",
+                title="Fake Named",
+                is_chat=False,
+            ),
+            discovered_via=DiscoverySource.MANUAL,
+        )
+
+    assert inserted is False
+
+
+async def test_a_refreshed_channel_keeps_its_provenance(
+    database: Database,
+) -> None:
+    await seed_inventory(database)
+    async with database.session() as session:
+        await mark_channel(
+            session,
+            KNOWN,
+            status=ChannelStatus.REJECTED,
+            reject_reason=RejectReason.NOT_IT,
+        )
+
+    async with database.session() as session:
+        await create_resolved_channel(
+            session,
+            channel=DiscoveredChannel(
+                tg_id=KNOWN,
+                username="example_0",
+                title="Example 0",
+                is_chat=False,
+            ),
+            discovered_via=DiscoverySource.MANUAL,
+        )
+
+    async with database.session() as session:
+        channel = await find_channel(session, KNOWN)
+
+    assert channel.discovered_via is DiscoverySource.OWN_SUBSCRIPTIONS
+    assert channel.status is ChannelStatus.REJECTED

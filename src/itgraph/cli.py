@@ -8,6 +8,7 @@ import asyncio
 import logging
 from collections.abc import Coroutine
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
@@ -138,6 +139,143 @@ def dump_dialogs() -> None:
             f"inserted {counts.inserted}, updated {counts.updated}, "
             f"skipped {counts.skipped} private",
         )
+
+    _run(run())
+
+
+@app.command()
+def add(
+    usernames: Annotated[
+        list[str] | None,
+        typer.Argument(
+            metavar="[USERNAME]...",
+            help="Channels to add: @name, name, or a t.me link.",
+        ),
+    ] = None,
+    from_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--from-file",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Read usernames from a file, one per line.",
+        ),
+    ] = None,
+    seed: Annotated[
+        bool,
+        typer.Option("--seed", help="Mark what is added as in scope."),
+    ] = False,
+    kind: Annotated[
+        ChannelKind | None,
+        typer.Option("--kind", help="What the channels are. With --seed."),
+    ] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", help="Make at most this many requests."),
+    ] = None,
+    delay: Annotated[
+        float | None,
+        typer.Option("--delay", help="Seconds between requests."),
+    ] = None,
+    failures_out: Annotated[
+        Path | None,
+        typer.Option(
+            "--failures-out",
+            dir_okay=False,
+            writable=True,
+            help="Write the usernames that failed, as the next run's input.",
+        ),
+    ] = None,
+) -> None:
+    """Add channels to the inventory by username, without subscribing.
+
+    Resolves each name and records it. Nothing is joined and no dialog
+    list is read — which is the point: subscribing from a client and
+    re-importing would spend the same `contacts.resolveUsername` and add
+    a `channels.joinChannel` on top of it.
+
+    That lookup is rationed by the day and cannot be batched, so a name
+    already in the inventory costs no request: re-run the same file and
+    the work continues where it stopped. `--limit` counts requests, not
+    lines.
+
+    `--seed` is refused with `--from-file`. A list nobody has re-read is
+    where a typo gets accepted into scope unseen; run `itgraph channels
+    --status candidate` and `itgraph mark` instead.
+    """
+    from itgraph.db.session import Database
+    from itgraph.tg.client import connected
+    from itgraph.tg.manual import Review, add_channels
+    from itgraph.usernames import EntryError, parse_entries, read_entries
+
+    if bool(usernames) == bool(from_file):
+        raise typer.BadParameter(
+            "give usernames or --from-file, not both and not neither"
+        )
+    if from_file is not None and (seed or kind is not None):
+        raise typer.BadParameter(
+            "--seed and --kind only apply to usernames given as arguments; "
+            "review a list with `itgraph channels --status candidate` and "
+            "`itgraph mark` once you have seen what it resolved to"
+        )
+    if kind is not None and not seed:
+        raise typer.BadParameter("--kind needs --seed")
+    if limit is not None and limit < 1:
+        raise typer.BadParameter("--limit must be at least 1")
+
+    try:
+        names = (
+            read_entries(from_file)
+            if from_file is not None
+            else parse_entries(usernames or [])
+        )
+    except EntryError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    if not names:
+        typer.echo("Nothing to add.")
+        return
+
+    review = (
+        Review(
+            status=ChannelStatus.SEED,
+            # `personal` is the explicit default, the same way `mark`
+            # spells it: an empty kind has to keep meaning "not looked at".
+            kind=kind or ChannelKind.PERSONAL,
+        )
+        if seed
+        else None
+    )
+
+    async def run() -> None:
+        database = Database()
+        try:
+            async with connected() as client:
+                summary = await add_channels(
+                    client,
+                    database,
+                    usernames=names,
+                    review=review,
+                    delay=delay,
+                    limit=limit,
+                )
+        finally:
+            await database.dispose()
+
+        typer.echo(summary.line())
+        for username, reason in summary.failures:
+            typer.echo(f"  @{username}: {reason}")
+        if failures_out is not None and summary.failures:
+            failures_out.write_text(
+                "".join(
+                    f"{username}  # {reason}\n"
+                    for username, reason in summary.failures
+                ),
+                encoding="utf-8",
+            )
+            typer.echo(f"failures written to {failures_out}")
+        _report_halt(summary.halt)
 
     _run(run())
 

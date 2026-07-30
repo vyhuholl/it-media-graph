@@ -438,3 +438,177 @@ def test_resolve_refuses_a_negative_evidence_floor(
     result = runner.invoke(app, ["resolve", "--min-sources", "-1"])
 
     assert result.exit_code != 0
+
+
+# --- add ---------------------------------------------------------------
+
+
+def adding_client(**entities: int) -> FakeTelegramClient:
+    """A client that resolves the given names to fresh channels."""
+    from fakes import tl_channel
+
+    return FakeTelegramClient(
+        entities={
+            name: tl_channel(tg_id, username=name, title=name.title())
+            for name, tg_id in entities.items()
+        }
+    )
+
+
+def test_add_records_a_channel_by_username(
+    monkeypatch: pytest.MonkeyPatch, inventory: None
+) -> None:
+    use_telegram(monkeypatch, adding_client(fake_new=3000000001))
+
+    result = runner.invoke(app, ["add", "@fake_new", "--delay", "0"])
+
+    assert result.exit_code == 0, result.output
+    assert "added 1" in result.output
+
+
+def test_add_reaches_the_pass_with_every_option(
+    monkeypatch: pytest.MonkeyPatch, inventory: None
+) -> None:
+    telegram = adding_client(fake_new=3000000001, fake_other=3000000002)
+    use_telegram(monkeypatch, telegram)
+
+    result = runner.invoke(
+        app,
+        [
+            "add",
+            "fake_new",
+            "fake_other",
+            "--limit",
+            "1",
+            "--delay",
+            "0",
+            "--seed",
+            "--kind",
+            "media",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    # `--limit 1` reached the pass: only the first name was looked up.
+    assert telegram.resolved == ["fake_new"]
+    listing = runner.invoke(app, ["channels", "--status", "seed"])
+    assert "fake_new" in listing.output
+
+
+def test_add_refuses_seed_with_a_file(
+    monkeypatch: pytest.MonkeyPatch, inventory: None, tmp_path: Any
+) -> None:
+    """The load-bearing refusal: a list nobody re-read, accepted unseen."""
+    telegram = adding_client(fake_new=3000000001)
+    use_telegram(monkeypatch, telegram)
+    listing = tmp_path / "channels.txt"
+    listing.write_text("fake_new\n")
+
+    result = runner.invoke(app, ["add", "--from-file", str(listing), "--seed"])
+
+    assert result.exit_code != 0
+    assert "--seed" in result.output
+    # Refused before connecting: nothing was looked up.
+    assert telegram.resolved == []
+
+
+def test_add_refuses_neither_usernames_nor_a_file(
+    monkeypatch: pytest.MonkeyPatch, inventory: None
+) -> None:
+    telegram = adding_client()
+    use_telegram(monkeypatch, telegram)
+
+    result = runner.invoke(app, ["add"])
+
+    assert result.exit_code != 0
+    assert telegram.resolved == []
+
+
+def test_add_refuses_both_usernames_and_a_file(
+    monkeypatch: pytest.MonkeyPatch, inventory: None, tmp_path: Any
+) -> None:
+    telegram = adding_client(fake_new=3000000001)
+    use_telegram(monkeypatch, telegram)
+    listing = tmp_path / "channels.txt"
+    listing.write_text("fake_other\n")
+
+    result = runner.invoke(
+        app, ["add", "fake_new", "--from-file", str(listing)]
+    )
+
+    assert result.exit_code != 0
+    assert telegram.resolved == []
+
+
+def test_add_refuses_a_bad_entry_before_spending_anything(
+    monkeypatch: pytest.MonkeyPatch, inventory: None, tmp_path: Any
+) -> None:
+    telegram = adding_client(fake_new=3000000001)
+    use_telegram(monkeypatch, telegram)
+    listing = tmp_path / "channels.txt"
+    listing.write_text("fake_new\nt.me/+AbCdEf\n")
+
+    result = runner.invoke(app, ["add", "--from-file", str(listing)])
+
+    assert result.exit_code != 0
+    assert "line 2" in result.output
+    assert telegram.resolved == []
+
+
+def test_add_reads_a_file(
+    monkeypatch: pytest.MonkeyPatch, inventory: None, tmp_path: Any
+) -> None:
+    telegram = adding_client(fake_new=3000000001, fake_other=3000000002)
+    use_telegram(monkeypatch, telegram)
+    listing = tmp_path / "channels.txt"
+    listing.write_text("# a list\nfake_new\n\n@fake_other\n")
+
+    result = runner.invoke(
+        app, ["add", "--from-file", str(listing), "--delay", "0"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "added 2" in result.output
+    assert telegram.resolved == ["fake_new", "fake_other"]
+
+
+def test_add_writes_the_failures_as_the_next_runs_input(
+    monkeypatch: pytest.MonkeyPatch, inventory: None, tmp_path: Any
+) -> None:
+    use_telegram(monkeypatch, adding_client(fake_new=3000000001))
+    failures = tmp_path / "failed.txt"
+
+    result = runner.invoke(
+        app,
+        [
+            "add",
+            "fake_new",
+            "fake_missing",
+            "--delay",
+            "0",
+            "--failures-out",
+            str(failures),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    written = failures.read_text()
+    assert written.startswith("fake_missing  # ")
+    # The form `--from-file` reads: the reason is a comment.
+    assert written.count("\n") == 1
+
+
+def test_add_writes_no_failure_file_after_a_clean_run(
+    monkeypatch: pytest.MonkeyPatch, inventory: None, tmp_path: Any
+) -> None:
+    """An empty file would have to be interpreted; absence does not."""
+    use_telegram(monkeypatch, adding_client(fake_new=3000000001))
+    failures = tmp_path / "failed.txt"
+
+    result = runner.invoke(
+        app,
+        ["add", "fake_new", "--delay", "0", "--failures-out", str(failures)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert not failures.exists()
