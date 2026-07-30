@@ -42,6 +42,7 @@ from itgraph.db.models import (
 )
 from itgraph.db.session import Database
 from itgraph.tg.backfill import FloodWaitTooLong, waiting_out_floods
+from itgraph.tg.client import persist_peers
 from itgraph.tg.floods import FloodRecorder
 from itgraph.tg.pacing import pace
 from itgraph.tg.resolve import channel_identity
@@ -248,6 +249,10 @@ async def _add_one(
         )
         summary.known += 1
 
+    # Before the database commit, never after: see `persist_peers`. This
+    # is what makes an added channel walkable by a later `backfill`
+    # rather than merely present in the inventory.
+    await persist_peers(client)
     await session.commit()
 
 

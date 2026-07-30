@@ -5,10 +5,16 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from telethon import TelegramClient
+from telethon.utils import maybe_async
 
 from itgraph.config import settings
 
-__all__ = ["NotAuthorizedError", "build_client", "connected"]
+__all__ = [
+    "NotAuthorizedError",
+    "build_client",
+    "connected",
+    "persist_peers",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +39,29 @@ def build_client() -> TelegramClient:
         # banned.
         flood_sleep_threshold=settings.flood_sleep_threshold,
     )
+
+
+async def persist_peers(client: TelegramClient) -> None:
+    """Commit what the session has learned. Call before the database commit.
+
+    Telethon writes a learned entity into the session's SQLite without
+    committing it — ``process_entities`` inserts and returns, and the
+    commit happens in the keepalive loop once a minute and again on
+    disconnect. That is a sensible default for a long-lived client and a
+    bad one here: an ``access_hash`` is what makes a channel reachable at
+    all, and a pass that records a channel as resolved in Postgres while
+    the session file never commits the hash leaves a channel the
+    inventory believes in and no session can walk. ``backfill`` then
+    skips it on every run, for good, because a missing peer is
+    deliberately not a permanent failure.
+
+    Hence the ordering, which is the whole point of calling this by hand:
+    **session first, database second**. A crash between the two leaves a
+    warm session and a row that was never marked resolved — which the
+    next run simply redoes. The other order is what produced the six
+    channels this exists to stop happening again.
+    """
+    await maybe_async(client.session.save())
 
 
 @asynccontextmanager

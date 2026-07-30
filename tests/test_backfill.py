@@ -1010,7 +1010,13 @@ async def test_a_walk_spends_no_quota_bearing_request(
     # precondition of walking anything.
     assert telegram.requests == []
     # The peer came from the session file, once per channel.
-    assert telegram.input_entities == ["example_notes", "example_jobs"]
+    # Asked for by id: the entity table is keyed by it, and its
+    # username column is empty for a channel whose handle lives in
+    # the newer multiple-usernames list.
+    assert [peer.channel_id for peer in telegram.input_entities] == [
+        NOTES.id,
+        JOBS.id,
+    ]
     # And the history still arrived.
     assert summary.completed == 2
     assert telegram.windows
@@ -1031,7 +1037,7 @@ async def test_a_cold_cache_is_a_skip_not_a_failure(
     telegram = client(
         histories={NOTES.id: history(2), JOBS.id: history(2, newest_id=500)}
     )
-    del telegram.cached_peers["example_notes"]
+    del telegram.cached_peers[NOTES.id]
 
     summary = await run(inventory, telegram)
 

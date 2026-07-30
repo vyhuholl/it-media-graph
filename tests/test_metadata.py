@@ -186,14 +186,20 @@ async def test_the_pass_resolves_no_username(
     await refresh_metadata(telegram, inventory, delay=0)
 
     assert telegram.resolved == []
-    assert telegram.input_entities == ["example_notes", "example_jobs"]
+    # Asked for by id: the entity table is keyed by it, and its
+    # username column is empty for a channel whose handle lives in
+    # the newer multiple-usernames list.
+    assert [peer.channel_id for peer in telegram.input_entities] == [
+        NOTES.id,
+        JOBS.id,
+    ]
 
 
 async def test_a_channel_with_no_cached_peer_is_skipped(
     inventory: Database, slept: list[float]
 ) -> None:
     telegram = client()
-    del telegram.cached_peers["example_notes"]
+    del telegram.cached_peers[NOTES.id]
 
     summary = await refresh_metadata(telegram, inventory, delay=0)
 

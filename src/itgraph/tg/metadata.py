@@ -112,7 +112,9 @@ async def refresh_metadata(
                 continue
 
             try:
-                peer = await cached_peer(client, username)
+                peer = await cached_peer(
+                    client, tg_id=tg_id, username=username
+                )
             except PeerNotCached as exc:
                 # Resolving it here would spend the one budget this pass
                 # is not allowed to touch. It is `resolve`'s to spend.

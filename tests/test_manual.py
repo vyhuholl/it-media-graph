@@ -506,3 +506,61 @@ async def test_no_recent_limit_is_reported_when_there_is_none(
         await add_channels(client, inventory, usernames=["fake_new"], delay=0)
 
     assert "rate-limited" not in caplog.text
+
+
+# --- durability of what the lookup learned ----------------------------
+
+
+async def test_adding_a_channel_commits_the_session(
+    inventory: Database, slept: list[float]
+) -> None:
+    """The access_hash has to outlive the process, not just the run.
+
+    Telethon commits learned entities once a minute and on disconnect;
+    a channel recorded as added while the session never committed its
+    peer is one `backfill` skips forever.
+    """
+    client = FakeTelegramClient(
+        entities={"fake_new": tl_channel(NEW, username="fake_new")}
+    )
+
+    await add_channels(client, inventory, usernames=["fake_new"], delay=0)
+
+    assert client.session.saves == 1
+
+
+async def test_the_session_is_committed_before_the_database(
+    inventory: Database, slept: list[float], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ordering is the point, not the saving.
+
+    Session first: a crash in between leaves a warm session and a row
+    that was never marked resolved, which the next run simply redoes.
+    The other order is what strands a channel.
+    """
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    async def failing_commit(self: AsyncSession) -> None:
+        raise RuntimeError("database went away")
+
+    monkeypatch.setattr(AsyncSession, "commit", failing_commit)
+    client = FakeTelegramClient(
+        entities={"fake_new": tl_channel(NEW, username="fake_new")}
+    )
+
+    with pytest.raises(RuntimeError, match="database went away"):
+        await add_channels(client, inventory, usernames=["fake_new"], delay=0)
+
+    # The peer was durable before the write that would have claimed it.
+    assert client.session.saves == 1
+
+
+async def test_a_failed_lookup_commits_nothing(
+    inventory: Database, slept: list[float]
+) -> None:
+    """Nothing was learned, so there is nothing to make durable."""
+    client = FakeTelegramClient(entities={})
+
+    await add_channels(client, inventory, usernames=["fake_missing"], delay=0)
+
+    assert client.session.saves == 0

@@ -154,18 +154,42 @@ class FakeSession:
     Synchronous, like Telethon's bundled SQLite session — the caller
     wraps it in ``maybe_async``, so both shapes work and this is the one
     the real code meets.
+
+    **Keyed by channel id**, like the real entity table, whose username
+    column is nullable and empty for any channel that publishes its
+    handle through the newer multiple-usernames list. A fake keyed by
+    name would answer lookups the real session cannot, which is exactly
+    the regression that stranded six channels.
     """
 
-    def __init__(self, cached_peers: dict[str, Any]) -> None:
+    def __init__(self, cached_peers: dict[int, Any]) -> None:
         self.cached_peers = cached_peers
         self.lookups: list[Any] = []
+        self.saves = 0
 
     def get_input_entity(self, ref: Any) -> Any:
         self.lookups.append(ref)
+        if isinstance(ref, str):
+            # The real session can answer by name; production deliberately
+            # no longer asks that way, so answering here would hide a
+            # regression rather than model one.
+            raise TypeError(
+                "the session is keyed by channel id, not by username"
+            )
+        key = ref if isinstance(ref, int) else ref.channel_id
         try:
-            return self.cached_peers[ref]
+            return self.cached_peers[key]
         except KeyError:
-            raise ValueError(f"no cached peer for {ref}") from None
+            raise ValueError(f"no cached peer for {key}") from None
+
+    def save(self) -> None:
+        """Commit the learned entities. Counted, so a test can prove it ran.
+
+        Synchronous, like Telethon's bundled SQLite session — production
+        wraps it in ``maybe_async``, so both shapes work and this is the
+        one the real code meets.
+        """
+        self.saves += 1
 
 
 class FakeInputPeer:
@@ -306,7 +330,7 @@ class FakeTelegramClient:
         resolve_floods: dict[str | int, int] | None = None,
         raises: BaseException | None = None,
         raises_for: dict[int, BaseException] | None = None,
-        cached_peers: dict[str, Any] | None = None,
+        cached_peers: dict[int, Any] | None = None,
         flood_request: Any = None,
     ) -> None:
         # What a raised FloodWaitError names as its cause. `None` is the
@@ -320,8 +344,8 @@ class FakeTelegramClient:
         # case; pass `{}` for a session that has never seen the channel.
         self.session = FakeSession(
             {
-                name: FakeInputPeer(channel)
-                for name, channel in (entities or {}).items()
+                channel.id: FakeInputPeer(channel)
+                for channel in (entities or {}).values()
             }
             if cached_peers is None
             else cached_peers
@@ -429,12 +453,12 @@ class FakeTelegramClient:
     # mistake it exists to catch.
 
     @property
-    def cached_peers(self) -> dict[str, Any]:
-        """What the session file holds. Settable: `= {}` is a cold cache."""
+    def cached_peers(self) -> dict[int, Any]:
+        """What the session file holds, by channel id. `= {}` is cold."""
         return self.session.cached_peers
 
     @cached_peers.setter
-    def cached_peers(self, peers: dict[str, Any]) -> None:
+    def cached_peers(self, peers: dict[int, Any]) -> None:
         self.session.cached_peers = peers
 
     @property

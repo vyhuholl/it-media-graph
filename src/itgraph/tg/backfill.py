@@ -39,6 +39,7 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError, RPCError
+from telethon.tl.types import PeerChannel
 from telethon.utils import maybe_async
 
 from itgraph.config import settings
@@ -283,13 +284,17 @@ class PeerNotCached(RuntimeError):
     Its own class is what keeps that unreachable.
     """
 
-    def __init__(self, username: str) -> None:
+    def __init__(self, tg_id: int, username: str | None = None) -> None:
+        self.tg_id = tg_id
         self.username = username
-        super().__init__(f"@{username} is not in the session's entity cache")
+        named = f"@{username}" if username else str(tg_id)
+        super().__init__(f"{named} is not in the session's entity cache")
 
 
-async def cached_peer(client: TelegramClient, username: str) -> Any:
-    """The peer for a username, out of the session file and nowhere else.
+async def cached_peer(
+    client: TelegramClient, *, tg_id: int, username: str | None = None
+) -> Any:
+    """The peer for a channel, out of the session file and nowhere else.
 
     Asks the *session* rather than the client, and the distinction is the
     whole point. ``client.get_input_entity`` consults the same cache, but
@@ -304,14 +309,30 @@ async def cached_peer(client: TelegramClient, username: str) -> Any:
     Two hundred channels on a rebuilt session is what this prevents: a
     day's resolution budget gone before a single message arrived.
 
+    **Keyed by id, not by username.** Telethon's entity table is keyed by
+    id and carries the username as a nullable column, filled from the
+    entity's legacy ``username`` field — which is empty for a channel
+    that publishes its handle through the newer multiple-usernames list.
+    Six channels in this inventory are exactly that: a valid
+    ``access_hash`` cached under a null name, found by id and invisible
+    by name. Measured across every seed channel, the name index finds
+    nothing the id index does not, so asking by id is never worse and is
+    sometimes the only thing that works. A channel that renames is the
+    same argument again: the id is its primary key here and in Telegram.
+
+    ``username`` is carried only so the miss can name the channel the way
+    the operator does.
+
     ``maybe_async`` because a session may implement the lookup either
     way; the bundled SQLite one is synchronous, and Telethon wraps it the
     same way at its own call site.
     """
     try:
-        return await maybe_async(client.session.get_input_entity(username))
+        return await maybe_async(
+            client.session.get_input_entity(PeerChannel(tg_id))
+        )
     except (ValueError, TypeError) as exc:
-        raise PeerNotCached(username) from exc
+        raise PeerNotCached(tg_id, username) from exc
 
 
 async def backfill_channel(
@@ -372,7 +393,7 @@ async def backfill_channel(
 
     # No pacing before this one: it reads the session file, not the
     # network, so there is nothing to be polite to.
-    entity = await cached_peer(client, username)
+    entity = await cached_peer(client, tg_id=channel_id, username=username)
 
     # 0 means "from the newest message"; a stored cursor means "carry on
     # from where the last run stopped".

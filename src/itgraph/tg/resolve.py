@@ -47,6 +47,7 @@ from itgraph.db.edges import (
 from itgraph.db.models import CollectionCommand, DiscoverySource
 from itgraph.db.session import Database
 from itgraph.tg.backfill import FloodWaitTooLong, waiting_out_floods
+from itgraph.tg.client import persist_peers
 from itgraph.tg.floods import FloodRecorder
 from itgraph.tg.pacing import pace
 
@@ -243,6 +244,8 @@ async def _resolve_channel(
         # Normalised the way the queue stores it, or the delete silently
         # matches nothing for any channel Telegram spells with capitals.
         await delete_pending_mention(session, identity.username.lower())
+    # Before the database commit, never after: see `persist_peers`.
+    await persist_peers(client)
     await session.commit()
     summary.resolved += 1
 
@@ -291,5 +294,7 @@ async def _resolve_pending(
         discovered_via=DiscoverySource.MENTION,
     )
     await delete_pending_mention(session, username)
+    # Before the database commit, never after: see `persist_peers`.
+    await persist_peers(client)
     await session.commit()
     summary.discovered += 1
