@@ -3,6 +3,7 @@
 Exploratory tooling: not part of the package, not spec'd, not tested. Look at
 the picture, change the constants, look again, throw it away.
 
+    uv sync --group data
     uv run notebooks/export_graph.py
 
 Only seed -> seed edges are exported. Channels discovered by reference have no
