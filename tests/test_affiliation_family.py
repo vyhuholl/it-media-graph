@@ -309,3 +309,41 @@ async def test_families_are_counted_not_memberships(
 
     assert counts.families == 1
     assert counts.channels == 3
+
+
+async def test_confirming_an_existing_family_names_the_promote_command(
+    database: Database,
+) -> None:
+    """The error that sent a real operator to ask what was wrong.
+
+    Confirming the pair again with the other side as canonical is the
+    natural thing to type, and "re-canonicalize first" is a remedy
+    nobody can act on without the syntax.
+    """
+    await seed(database)
+    async with database.session() as session:
+        await confirm_affiliation(session, A, B, canonical=A)
+
+    with pytest.raises(ValueError, match="already one family") as caught:
+        async with database.session() as session:
+            await confirm_affiliation(session, A, B, canonical=B)
+
+    message = str(caught.value)
+    assert "itgraph family" in message
+    # Pasteable, not retyped off a listing.
+    assert "@example_1002 --canonical @example_1002" in message
+
+
+async def test_the_two_family_error_still_names_both(
+    database: Database,
+) -> None:
+    """The other branch keeps its own message — merging is a different
+    problem from re-canonicalizing."""
+    await seed(database)
+    async with database.session() as session:
+        await confirm_affiliation(session, A, B, canonical=A)
+        await confirm_affiliation(session, C, D, canonical=C)
+
+    with pytest.raises(ValueError, match="merging two families"):
+        async with database.session() as session:
+            await confirm_affiliation(session, B, D, canonical=B)

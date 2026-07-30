@@ -900,6 +900,17 @@ def family(
             raise typer.BadParameter(
                 "promoting one channel to canonical takes no other options"
             )
+        # The single argument is the channel being promoted, so a
+        # `--canonical` naming a different one contradicts it. Refusing
+        # beats picking a winner: silently promoting the argument would
+        # do the opposite of what the flag says.
+        if canonical is not None and _channel_ref(canonical) != _channel_ref(
+            channel_refs[0]
+        ):
+            raise typer.BadParameter(
+                f"promoting {channel_refs[0]} but --canonical names "
+                f"{canonical}; give one channel, or two to confirm a pair"
+            )
     elif len(channel_refs) != 2:
         raise typer.BadParameter(
             "give two channels, or one with --canonical to promote it"

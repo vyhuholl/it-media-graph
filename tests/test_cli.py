@@ -1083,3 +1083,65 @@ def test_affiliates_shows_a_pair_with_one_seed_in_it(
 
     assert result.exit_code == 0, result.output
     assert "@fake_gonzo_main" in result.output
+
+
+def test_family_promotes_the_channel_named_by_canonical(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    """`--canonical` naming a different channel than the argument used to
+    be ignored, promoting the argument — the opposite of what was asked."""
+    use_test_database(monkeypatch, database_url)
+    seed_affiliation_fixture(database_url)
+
+    runner.invoke(
+        app, ["family", str(KNOWN), str(KNOWN + 1), "--canonical", str(KNOWN)]
+    )
+    result = runner.invoke(
+        app, ["family", str(KNOWN + 1), "--canonical", str(KNOWN)]
+    )
+
+    assert result.exit_code != 0
+    assert "--canonical names" in result.output
+
+
+def test_family_promoting_accepts_a_matching_canonical(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    seed_affiliation_fixture(database_url)
+
+    runner.invoke(
+        app, ["family", str(KNOWN), str(KNOWN + 1), "--canonical", str(KNOWN)]
+    )
+    by_username = runner.invoke(
+        app,
+        ["family", "@fake_gonzo_pod", "--canonical", "@fake_gonzo_pod"],
+    )
+
+    assert by_username.exit_code == 0, by_username.output
+    assert "is now canonical for 2 channels" in by_username.output
+
+
+def test_family_confirming_an_existing_family_says_what_to_run(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    seed_affiliation_fixture(database_url)
+
+    runner.invoke(
+        app, ["family", str(KNOWN), str(KNOWN + 1), "--canonical", str(KNOWN)]
+    )
+    result = runner.invoke(
+        app,
+        [
+            "family",
+            "@fake_gonzo_main",
+            "@fake_gonzo_pod",
+            "--canonical",
+            "@fake_gonzo_pod",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "already one family" in result.output
+    assert "@fake_gonzo_pod --canonical @fake_gonzo_pod" in result.output

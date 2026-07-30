@@ -60,6 +60,16 @@ def _spelled(ref: ChannelRef) -> str:
     return str(ref) if isinstance(ref, int) else f"@{ref}"
 
 
+def _identity(channel: Channel) -> str:
+    """A channel as it can be typed back into a command.
+
+    Its username where it has one, its id otherwise — so an error that
+    suggests a command suggests one that can be pasted rather than
+    retyped from a listing.
+    """
+    return f"@{channel.username}" if channel.username else str(channel.tg_id)
+
+
 class ChannelLookupError(LookupError):
     """A reference did not resolve to exactly one channel."""
 
@@ -400,10 +410,23 @@ async def confirm_affiliation(
             "merging two families is a separate decision"
         )
     if head.operator_id is not None:
+        if left_family == right_family:
+            # The pair is already one family and the operator is asking
+            # to flip which side leads it. That is a re-canonicalization,
+            # not a confirmation — and the whole family's pointers move,
+            # not just this pair's — so it stays a separate command. The
+            # error therefore has to name that command: "re-canonicalize
+            # first" is a remedy nobody can act on without the syntax.
+            raise ValueError(
+                f"{left.tg_id} and {right.tg_id} are already one family; "
+                f"to make {_identity(head)} its canonical channel run "
+                f"`itgraph family {_identity(head)} "
+                f"--canonical {_identity(head)}`"
+            )
         raise ValueError(
             f"{head.tg_id} is itself in family {head.operator_id}; "
-            "name that channel as canonical instead, or re-canonicalize "
-            "the family first"
+            f"either name {_identity(await session.get(Channel, head.operator_id) or head)} "
+            "as canonical, or promote this one within its own family first"
         )
 
     member.operator_id = head.tg_id
