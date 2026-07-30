@@ -55,6 +55,7 @@ Test fixtures are synthetic or anonymized. There is no such thing as a "small re
 ## Workflow
 - Standard / infrastructure tasks (collector, schema, API, bot): write an OpenSpec change proposal first, then implement.
 - Exploratory analytics (clustering, edge weights, engagement baselines): no spec. Iterate in `notebooks/`, promote to `src/` only once the approach is settled.
+- **Commit to `master`. Never create a branch unless asked for one.** One person works on this repository, so a branch buys no review and costs a merge on every change. If something is risky enough to want isolating, say so and ask — do not decide it by branching.
 
 ## Style
 - ruff and mypy settings are deliberate. Do not loosen config or sprinkle `# type: ignore` to make an error disappear — fix the code, or ask.

@@ -56,15 +56,6 @@ Three automatic sources of candidates:
 
 PageRank is only meaningful where both endpoints of an edge have measured outgoing links. Channels discovered by reference have none until their own history is collected, so authority must be computed over the collected subgraph, never over the full one.
 
-**Where AI genuinely helps** — not in the decision, but in preparing it:
-
-- Build a candidate queue sorted by score. For each: a 2–3 line summary of the last 20 posts, sample posts, and who referenced it.
-- Accept / reject / maybe, **with a reason for rejection** (not IT / ads / dead / wrong crowd).
-- After 100–200 labelled channels there is a dataset. From there — **embeddings, not an LLM**: `multilingual-e5` or `rubert-tiny2` over concatenated recent posts, plus logreg/catboost on those labels. Far cheaper, faster and more accurate than an LLM classifier, because it learns the *project's* definition of "the IT crowd" rather than a generic one.
-- Leave the LLM to what it is irreplaceable for: triage summaries, name normalization, working out what a channel is even about.
-
-Build the triage queue as a minimal UI right away (FastAPI + htmx, half a day of work) — labelling through a CLI does not happen in practice.
-
 ## Channel roles
 
 Volume and variety are different measurements, and the first question the analytics must answer depends on separating them.
@@ -114,7 +105,7 @@ Repost activity across the wider chat ecosystem — beyond the channels collecte
 | Weeks | What | Artifact |
 |---|---|---|
 | 1–2 | Collector + schema + backfill of seed channels | Forward graph v0 |
-| 3–4 | Candidates + classifier | 300–500 channels |
+| 3–4 | Candidates | 300–500 channels |
 | 5–6 | Clustering + role metrics + visualization | **First useful result** |
 | 7–8 | Post-level virality + metric snapshots + alert bot | Working notifications |
 | 9–10 | Comments (the heavy phase) | Commenter graph |
