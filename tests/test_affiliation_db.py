@@ -20,7 +20,11 @@ from itgraph.db.affiliation import (
     record_run,
     upsert_candidates,
 )
-from itgraph.db.channels import DiscoveredChannel, upsert_channels
+from itgraph.db.channels import (
+    DiscoveredChannel,
+    confirm_affiliation,
+    upsert_channels,
+)
 from itgraph.db.models import (
     AboutDirection,
     AffiliationDecision,
@@ -198,10 +202,9 @@ async def test_a_recorded_decision_survives_a_rerun(
         await session.execute(
             text(
                 "UPDATE affiliation_candidates SET decision = 'confirmed', "
-                "canonical_id = :canonical, decided_at = :now, "
-                "decision_note = 'same author'"
+                "decided_at = :now, decision_note = 'same author'"
             ),
-            {"canonical": A, "now": datetime.now(UTC)},
+            {"now": datetime.now(UTC)},
         )
 
     await store(database, [Candidate(pair=(A, B), score=1.9)])
@@ -210,13 +213,13 @@ async def test_a_recorded_decision_survives_a_rerun(
         row = (
             await session.execute(
                 text(
-                    "SELECT decision::text, canonical_id, decision_note, score "
+                    "SELECT decision::text, decision_note, score "
                     "FROM affiliation_candidates"
                 )
             )
         ).one()
 
-    assert row == ("confirmed", A, "same author", 1.9)
+    assert row == ("confirmed", "same author", 1.9)
 
 
 async def test_a_decided_pair_leaves_the_review_list_but_stays_readable(
@@ -285,22 +288,31 @@ async def test_a_pair_stored_the_wrong_way_round_is_refused(
 async def test_the_inventory_load_builds_the_family_key(
     database: Database,
 ) -> None:
+    """Detection compares two keys, so every channel needs one — the
+    unaffiliated ones answering with themselves."""
     await seed(database)
     async with database.session() as session:
-        await session.execute(
-            text("UPDATE channels SET operator_id = :a WHERE tg_id = :b"),
-            {"a": A, "b": B},
-        )
+        await confirm_affiliation(session, [A, B])
 
     async with database.session() as session:
         inventory = await load_inventory(session, edge_kinds=BOTH_KINDS)
 
-    # A member answers with the canonical channel, a solo channel with
-    # itself — the same expression the analysis uses.
-    assert inventory.family_of[B] == A
-    assert inventory.family_of[A] == A
+    assert inventory.family_of[A] == inventory.family_of[B]
     assert inventory.family_of[C] == C
     assert inventory.known_channels == frozenset({A, B, C})
+
+
+async def test_the_inventory_load_sees_a_group_of_three(
+    database: Database,
+) -> None:
+    await seed(database)
+    async with database.session() as session:
+        await confirm_affiliation(session, [A, B, C])
+
+    async with database.session() as session:
+        inventory = await load_inventory(session, edge_kinds=BOTH_KINDS)
+
+    assert len(set(inventory.family_of.values())) == 1
 
 
 async def test_the_inventory_load_lowercases_usernames(

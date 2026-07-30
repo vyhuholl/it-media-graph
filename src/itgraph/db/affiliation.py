@@ -7,15 +7,15 @@ operator's decision about each. A candidate points back at the run that
 last measured it, which is what makes "under which thresholds was this
 proposed" answerable without re-running anything.
 
-Nothing here writes ``channels.operator_id``. Recording that two channels
-share an author is a review decision and lives in ``db/channels.py``;
-this module may only ever propose.
+Nothing here records that two channels share an author — that is a review
+decision and lives in ``db/channels.py``. This module may only ever
+propose, and read back what the confirmations imply.
 """
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import BigInteger, column, func, or_, select, table
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -36,6 +36,8 @@ from itgraph.db.models import (
 __all__ = [
     "CandidateRow",
     "count_candidates_by_decision",
+    "family_keys",
+    "family_of",
     "list_candidates",
     "load_inventory",
     "record_run",
@@ -73,10 +75,41 @@ class CandidateRow:
     edges_b_to_a: int | None
 
 
+async def family_keys(session: AsyncSession) -> dict[int, int]:
+    """Which family each channel belongs to, for the channels in one.
+
+    Read from the ``channel_families`` view — the connected components of
+    the confirmed pairs, computed rather than stored, so it cannot
+    disagree with the pairs it comes from. A channel absent from the
+    result is its own family of one; callers wanting that spelled out use
+    :func:`family_of`.
+
+    The key is the smallest channel id in the set. A label for the
+    component, not a channel with any standing: families have no main
+    channel, which is the whole point of reading them this way.
+    """
+    rows = await session.execute(
+        select(
+            column("channel_id", BigInteger), column("family_key", BigInteger)
+        ).select_from(table("channel_families"))
+    )
+    return {channel_id: key for channel_id, key in rows.all()}
+
+
+def family_of(keys: Mapping[int, int], channel_id: int) -> int:
+    """The family of one channel: its key, or itself when it has none.
+
+    The one place ``COALESCE(family_key, tg_id)`` is spelled in Python,
+    so "a solo channel is its own family of one" is stated once rather
+    than assumed at every call site.
+    """
+    return keys.get(channel_id, channel_id)
+
+
 async def load_inventory(
     session: AsyncSession, *, edge_kinds: Sequence[EdgeKind]
 ) -> Inventory:
-    """Everything detection reads, in four queries.
+    """Everything detection reads, in five queries.
 
     Fetched whole rather than queried per pair: 504 channels is 127 000
     pairs, and the signals emit pairs instead of being asked about them.
@@ -95,20 +128,14 @@ async def load_inventory(
     """
     channel_rows = (
         await session.execute(
-            select(
-                Channel.tg_id,
-                Channel.username,
-                Channel.linked_to,
-                Channel.operator_id,
-            )
+            select(Channel.tg_id, Channel.username, Channel.linked_to)
         )
     ).all()
 
     usernames: dict[int, str] = {}
     linked_to: dict[int, int] = {}
-    family_of: dict[int, int] = {}
     known: set[int] = set()
-    for tg_id, username, linked, operator in channel_rows:
+    for tg_id, username, linked in channel_rows:
         known.add(tg_id)
         if username:
             # Lowercased to agree with `normalize_username`, so a handle
@@ -116,9 +143,12 @@ async def load_inventory(
             usernames[tg_id] = username.lower()
         if linked is not None:
             linked_to[tg_id] = linked
-        # The family key, the same expression the analysis uses: the
-        # channel the pointer names, or the channel itself.
-        family_of[tg_id] = operator if operator is not None else tg_id
+
+    # The family of every channel, spelled out for all of them: detection
+    # compares two keys and a channel in no family has to answer with
+    # itself rather than with nothing.
+    keys = await family_keys(session)
+    families = {tg_id: family_of(keys, tg_id) for tg_id in known}
 
     description_rows = (
         await session.execute(
@@ -147,7 +177,7 @@ async def load_inventory(
         edges=edges,
         known_channels=frozenset(known),
         linked_to=linked_to,
-        family_of=family_of,
+        family_of=families,
     )
 
 

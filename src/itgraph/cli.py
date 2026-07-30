@@ -833,16 +833,9 @@ def family(
         list[str],
         typer.Argument(
             metavar="CHANNEL...",
-            help="The two channels, by Telegram id or @username.",
+            help="The channels, by Telegram id or @username.",
         ),
     ],
-    canonical: Annotated[
-        str | None,
-        typer.Option(
-            "--canonical",
-            help="Which of the two is the family's main channel.",
-        ),
-    ] = None,
     reject: Annotated[
         bool,
         typer.Option("--reject", help="Record that they are not affiliated."),
@@ -860,28 +853,29 @@ def family(
         ),
     ] = None,
 ) -> None:
-    """Record that two channels share an author — or that they do not.
+    """Record that channels share an author — or that two do not.
 
-    This is the only command that writes a family link. `itgraph
-    affiliates` proposes pairs and ranks them; nothing it finds becomes a
-    fact until it is confirmed here.
+    This is the only command that records a family. `itgraph affiliates`
+    proposes pairs and ranks them; nothing it finds becomes a fact until
+    it is confirmed here.
 
-    A confirmation needs `--canonical`, naming which of the two is the
-    family's main channel. The other one points at it, the same shape a
-    discussion chat points at its parent, and the family of any channel
-    is then the one it names or itself.
+    A family is a set with no main channel. Name two channels or twenty —
+    the statement is the same, and every pair among them is recorded. The
+    order does not matter, and neither does which pairs detection
+    happened to find: confirming a pair that bridges two families merges
+    them, which is what saying "these share an author" means.
 
-    A rejection is stored too, and that is the point of storing it: it
-    stops the pair being proposed at every subsequent run. Use
-    `--withdraw` to undo either.
+    A rejection takes exactly two channels — it is a statement about a
+    pair — and it is stored so that pair stops being proposed at every
+    subsequent run. `--withdraw` undoes either; a withdrawn pair splits
+    its family only if nothing else was connecting the two sides.
 
-    A pair no signal proposed can be confirmed directly — you may simply
-    know. It is recorded as having come from you rather than from a
-    signal.
+    Channels no signal ever paired can be confirmed directly — you may
+    simply know. Those pairs are recorded as having come from you rather
+    than from a signal.
     """
     from itgraph.db.channels import (
         confirm_affiliation,
-        recanonicalize_family,
         reject_affiliation,
         withdraw_affiliation,
     )
@@ -889,72 +883,35 @@ def family(
 
     if reject and withdraw:
         raise typer.BadParameter("give at most one of --reject, --withdraw")
-    if reject and canonical is not None:
-        raise typer.BadParameter("a rejection has no canonical channel")
+    if len(channel_refs) < 2:
+        raise typer.BadParameter("name at least two channels")
+    if (reject or withdraw) and len(channel_refs) != 2:
+        # Rejecting or withdrawing says something about one pair. A group
+        # form would have to invent which pairs it meant.
+        raise typer.BadParameter(
+            "--reject and --withdraw take exactly two channels"
+        )
 
-    # One channel with `--canonical` is the re-canonicalize form: it
-    # names the member to promote and needs no second reference.
-    promoting = len(channel_refs) == 1
-    if promoting:
-        if reject or withdraw or note is not None:
-            raise typer.BadParameter(
-                "promoting one channel to canonical takes no other options"
-            )
-        # The single argument is the channel being promoted, so a
-        # `--canonical` naming a different one contradicts it. Refusing
-        # beats picking a winner: silently promoting the argument would
-        # do the opposite of what the flag says.
-        if canonical is not None and _channel_ref(canonical) != _channel_ref(
-            channel_refs[0]
-        ):
-            raise typer.BadParameter(
-                f"promoting {channel_refs[0]} but --canonical names "
-                f"{canonical}; give one channel, or two to confirm a pair"
-            )
-    elif len(channel_refs) != 2:
-        raise typer.BadParameter(
-            "give two channels, or one with --canonical to promote it"
-        )
-    elif not reject and not withdraw and canonical is None:
-        raise typer.BadParameter(
-            "--canonical must name which of the two is the main channel"
-        )
+    refs = [_channel_ref(ref) for ref in channel_refs]
 
     async def run() -> None:
         database = Database()
         try:
             async with database.session() as session:
-                if promoting:
-                    counts = await recanonicalize_family(
-                        session, _channel_ref(channel_refs[0])
-                    )
-                    typer.echo(
-                        f"{channel_refs[0]} is now canonical for "
-                        f"{counts.channels} channels"
-                    )
-                    return
-
-                first, second = (_channel_ref(ref) for ref in channel_refs)
                 if withdraw:
-                    pair = await withdraw_affiliation(session, first, second)
+                    pair = await withdraw_affiliation(session, *refs)
                     typer.echo(f"{pair[0]} and {pair[1]}: decision withdrawn")
                 elif reject:
-                    pair = await reject_affiliation(
-                        session, first, second, note=note
-                    )
+                    pair = await reject_affiliation(session, *refs, note=note)
                     typer.echo(f"{pair[0]} and {pair[1]}: not affiliated")
                 else:
-                    assert canonical is not None
-                    link = await confirm_affiliation(
-                        session,
-                        first,
-                        second,
-                        canonical=_channel_ref(canonical),
-                        note=note,
-                    )
+                    group = await confirm_affiliation(session, refs, note=note)
+                    # The family can be larger than what was named, when a
+                    # pair bridged two of them. Saying so is what keeps a
+                    # merge from being silent.
                     typer.echo(
-                        f"{link.member} now belongs to the family of "
-                        f"{link.canonical}"
+                        f"{group.pairs} pairs recorded; "
+                        f"family of {group.channels} channels"
                     )
         finally:
             await database.dispose()
@@ -1012,6 +969,7 @@ def channels(
     ] = False,
 ) -> None:
     """List the inventory, or summarise review progress."""
+    from itgraph.db.affiliation import family_keys, family_of
     from itgraph.db.channels import (
         count_by_status,
         count_families,
@@ -1029,9 +987,12 @@ def channels(
                     named = await find_channel(
                         session, _channel_ref(family_ref)
                     )
-                    # Any member names the family; the key is the same
-                    # expression the analysis uses.
-                    family_key = named.operator_id or named.tg_id
+                    # Any member names the family, and the answer is the
+                    # same set whichever one is given — there is no main
+                    # channel to have to know.
+                    family_key = family_of(
+                        await family_keys(session), named.tg_id
+                    )
 
                 if status is None and family_key is None:
                     counts = await count_by_status(session)
@@ -1048,10 +1009,6 @@ def channels(
                     session, status=status, family=family_key
                 ):
                     line = _row(channel)
-                    if family_key is not None:
-                        line = f"{line:<100} " + (
-                            "member" if channel.operator_id else "canonical"
-                        )
                     if backfill_state:
                         state = await session.get(BackfillState, channel.tg_id)
                         line = f"{line:<100} {_backfill_column(state)}"

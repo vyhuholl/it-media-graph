@@ -30,6 +30,12 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from itgraph.config import settings
+
+# Imported for its side effect: it attaches the view DDL to
+# `Base.metadata`, so `create_all` below builds it the way a migration
+# would. Without this the test schema is missing `channel_families` and
+# every family query fails on a database that looks otherwise complete.
+from itgraph.db import views as _views  # noqa: F401
 from itgraph.db.models import Base
 from itgraph.db.session import Database
 

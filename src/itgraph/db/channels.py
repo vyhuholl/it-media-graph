@@ -7,12 +7,23 @@ manual review.
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
-from sqlalchemy import Boolean, func, literal_column, select, update
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    column,
+    func,
+    literal_column,
+    select,
+    table,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from itgraph.affiliation.signals import Pair, ordered
+from itgraph.db.affiliation import family_keys, family_of
 from itgraph.db.models import (
     AffiliationCandidate,
     AffiliationDecision,
@@ -28,9 +39,9 @@ __all__ = [
     "AmbiguousUsernameError",
     "ChannelLookupError",
     "ChannelNotFoundError",
+    "ConfirmedGroup",
     "DiscoveredChannel",
     "FamilyCounts",
-    "FamilyLink",
     "UpsertCounts",
     "channels_awaiting_resolution",
     "confirm_affiliation",
@@ -42,7 +53,6 @@ __all__ = [
     "link_discussion_chat",
     "list_channels",
     "mark_channel",
-    "recanonicalize_family",
     "record_channel_resolve_failure",
     "record_channel_resolved",
     "reject_affiliation",
@@ -68,6 +78,23 @@ def _identity(channel: Channel) -> str:
     retyped from a listing.
     """
     return f"@{channel.username}" if channel.username else str(channel.tg_id)
+
+
+def _families_subquery() -> Any:
+    """The ``channel_families`` view, as something a query can join.
+
+    Not a model: nothing maps to a view, and giving it one would invite
+    `create_all` to try building it as a table. Declared inline instead,
+    in the one place both readers of it need.
+    """
+    return (
+        select(
+            column("channel_id", BigInteger).label("channel_id"),
+            column("family_key", BigInteger).label("family_key"),
+        )
+        .select_from(table("channel_families"))
+        .subquery("families")
+    )
 
 
 class ChannelLookupError(LookupError):
@@ -122,11 +149,19 @@ class UpsertCounts:
 
 
 @dataclass(frozen=True, slots=True)
-class FamilyLink:
-    """A confirmed affiliation: who is canonical, and who now names them."""
+class ConfirmedGroup:
+    """What a confirmation established.
 
-    canonical: int
-    member: int
+    ``pairs`` is what was written; ``channels`` is how large the family
+    ended up. They differ whenever a confirmation bridged two families,
+    which is now an ordinary outcome rather than a refusal — and the
+    difference is exactly what the operator should see, so a merge is
+    never silent.
+    """
+
+    pairs: int
+    family: int
+    channels: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -316,18 +351,23 @@ async def list_channels(
 ) -> Sequence[Channel]:
     """The inventory, optionally narrowed to one status or one family.
 
-    The family filter uses ``COALESCE(operator_id, tg_id)`` — the same
-    expression the analysis uses to decide whether an edge stays inside
-    one author's channels — so the canonical channel comes back with its
-    members rather than being the one row a naive
-    ``operator_id = :family`` would miss.
+    The family filter takes a *key*, not a member: resolve a channel
+    reference to its family with :func:`family_keys` first. It joins the
+    ``channel_families`` view rather than reading a column, and falls
+    back to the channel's own id, so a channel in no family is its own
+    family of one and comes back when asked for by itself.
     """
-    statement = select(Channel).order_by(Channel.status, Channel.tg_id)
+    families = _families_subquery()
+    statement = (
+        select(Channel)
+        .outerjoin(families, families.c.channel_id == Channel.tg_id)
+        .order_by(Channel.status, Channel.tg_id)
+    )
     if status is not None:
         statement = statement.where(Channel.status == status)
     if family is not None:
         statement = statement.where(
-            func.coalesce(Channel.operator_id, Channel.tg_id) == family
+            func.coalesce(families.c.family_key, Channel.tg_id) == family
         )
     return (await session.scalars(statement)).all()
 
@@ -335,109 +375,83 @@ async def list_channels(
 async def count_families(session: AsyncSession) -> FamilyCounts:
     """How many families are recorded, and how many channels are in one.
 
-    A family is counted by its canonical channel, so the number is
-    families and not memberships. A channel in no family is in neither
-    count — it is its own family of one, which is true and not worth
-    reporting.
+    Counted over the view, so the numbers are families and memberships
+    rather than pointers. A channel in no family is in neither count — it
+    is its own family of one, which is true and not worth reporting.
     """
-    members = (
+    families = _families_subquery()
+    channels = (
+        await session.scalar(select(func.count()).select_from(families))
+    ) or 0
+    distinct = (
         await session.scalar(
-            select(func.count()).where(Channel.operator_id.is_not(None))
+            select(func.count(func.distinct(families.c.family_key)))
         )
     ) or 0
-    canonical = (
-        await session.scalar(
-            select(func.count(func.distinct(Channel.operator_id))).where(
-                Channel.operator_id.is_not(None)
-            )
-        )
-    ) or 0
-    # The canonical channels belong to their families too, and they are
-    # exactly the ones `operator_id IS NOT NULL` never counts.
-    return FamilyCounts(families=canonical, channels=members + canonical)
+    return FamilyCounts(families=distinct, channels=channels)
 
 
 async def confirm_affiliation(
     session: AsyncSession,
-    first: ChannelRef,
-    second: ChannelRef,
+    channels: Sequence[ChannelRef],
     *,
-    canonical: ChannelRef,
     note: str | None = None,
-) -> FamilyLink:
-    """Record that two channels share an author. The only write of
-    ``operator_id`` in the project.
+) -> ConfirmedGroup:
+    """Record that these channels share an author.
 
-    Detection may never reach this: it proposes, and a human decides. So
-    everything the column's invariants need is checked here, because here
-    is the one place they can be.
+    Two or more, and the statement is the same for any number of them:
+    these are one author's. There is no canonical channel to name — a
+    family is a set, and none of an author's channels is the main one.
 
-    **Depth is exactly one.** ``operator_id`` must name a channel that is
-    itself canonical, or ``COALESCE(operator_id, tg_id)`` would need
-    transitive closure to answer correctly and every consumer of the
-    family key would quietly get a wrong answer. A ``CHECK`` cannot see
-    another row and a trigger would be this project's first, on its
-    most-written table; this function being the sole write path is what
-    makes enforcing it here honest rather than merely convenient.
+    **Every pair among them is recorded, not a chain.** Four channels are
+    six pairs. A chain would be three rows and a different claim:
+    withdrawing its middle link would split a family the operator
+    asserted as whole, and which pairs existed would depend on the order
+    the channels were typed in.
 
-    Two channels already in *different* families are refused. Merging two
-    families is a decision about four or more channels, and it should
-    read as one — not fall out of confirming a pair.
+    What used to live here and does not any more: the check that the
+    canonical channel was one of the two, the depth-one rule, and the
+    refusal when the sides were in different families. **Merging is now
+    what confirming a bridging pair means**, and it needs no code — the
+    row is written and the components join. Splitting needs none either;
+    see :func:`withdraw_affiliation`.
     """
-    left = await find_channel(session, first)
-    right = await find_channel(session, second)
-    if left.tg_id == right.tg_id:
-        raise ValueError("a channel cannot be affiliated with itself")
+    resolved = [await find_channel(session, ref) for ref in channels]
+    if len(resolved) < 2:
+        raise ValueError("name at least two channels")
 
-    head = await find_channel(session, canonical)
-    if head.tg_id not in (left.tg_id, right.tg_id):
+    ids = [channel.tg_id for channel in resolved]
+    if len(set(ids)) != len(ids):
         raise ValueError(
-            f"the canonical channel must be one of the two: "
-            f"{head.tg_id} is neither {left.tg_id} nor {right.tg_id}"
-        )
-    member = right if head.tg_id == left.tg_id else left
-
-    left_family = left.operator_id or left.tg_id
-    right_family = right.operator_id or right.tg_id
-    if (
-        left.operator_id is not None
-        and right.operator_id is not None
-        and left_family != right_family
-    ):
-        raise ValueError(
-            f"{left.tg_id} is already in family {left_family} and "
-            f"{right.tg_id} in family {right_family}; "
-            "merging two families is a separate decision"
-        )
-    if head.operator_id is not None:
-        if left_family == right_family:
-            # The pair is already one family and the operator is asking
-            # to flip which side leads it. That is a re-canonicalization,
-            # not a confirmation — and the whole family's pointers move,
-            # not just this pair's — so it stays a separate command. The
-            # error therefore has to name that command: "re-canonicalize
-            # first" is a remedy nobody can act on without the syntax.
-            raise ValueError(
-                f"{left.tg_id} and {right.tg_id} are already one family; "
-                f"to make {_identity(head)} its canonical channel run "
-                f"`itgraph family {_identity(head)} "
-                f"--canonical {_identity(head)}`"
-            )
-        raise ValueError(
-            f"{head.tg_id} is itself in family {head.operator_id}; "
-            f"either name {_identity(await session.get(Channel, head.operator_id) or head)} "
-            "as canonical, or promote this one within its own family first"
+            "a channel cannot be affiliated with itself; "
+            "the same channel is named more than once"
         )
 
-    member.operator_id = head.tg_id
-    await _record_decision(
-        session,
-        pair=ordered(left.tg_id, right.tg_id),
-        decision=AffiliationDecision.CONFIRMED,
-        canonical_id=head.tg_id,
-        note=note,
+    pairs = [
+        ordered(first, second)
+        for index, first in enumerate(ids)
+        for second in ids[index + 1 :]
+    ]
+    for pair in pairs:
+        await _record_decision(
+            session,
+            pair=pair,
+            decision=AffiliationDecision.CONFIRMED,
+            note=note,
+        )
+
+    # Read the family back rather than predicting it: a bridging pair
+    # merges whole families, so the group the operator named can be
+    # smaller than the family they just created, and the difference is
+    # the thing worth showing them.
+    await session.flush()
+    keys = await family_keys(session)
+    key = family_of(keys, ids[0])
+    return ConfirmedGroup(
+        pairs=len(pairs),
+        family=key,
+        channels=sum(1 for value in keys.values() if value == key) or 1,
     )
-    return FamilyLink(canonical=head.tg_id, member=member.tg_id)
 
 
 async def reject_affiliation(
@@ -449,9 +463,15 @@ async def reject_affiliation(
 ) -> Pair:
     """Record that two channels do not share an author.
 
-    Writes no ``operator_id``. The row is what stops the same pair being
-    proposed at every subsequent run, which is the only reason a
-    rejection is stored at all — so it is kept and never deleted.
+    A statement about a pair, which is why it takes exactly two: there is
+    no reading of "reject this group" that says anything definite.
+
+    The row is what stops the same pair being proposed at every
+    subsequent run, which is the only reason a rejection is stored — so
+    it is kept and never deleted. It says "this pair is not evidence",
+    not "these two are not family": if other confirmed pairs connect them
+    anyway, they stay in one family and the rejection keeps doing its
+    only job.
     """
     left = await find_channel(session, first)
     right = await find_channel(session, second)
@@ -463,7 +483,6 @@ async def reject_affiliation(
         session,
         pair=pair,
         decision=AffiliationDecision.REJECTED,
-        canonical_id=None,
         note=note,
     )
     return pair
@@ -472,19 +491,19 @@ async def reject_affiliation(
 async def withdraw_affiliation(
     session: AsyncSession, first: ChannelRef, second: ChannelRef
 ) -> Pair:
-    """Undo a decision: clear the family link and reopen the pair.
+    """Undo a decision: the pair goes back to awaiting review.
 
-    Clears ``operator_id`` on whichever side carries it, so a
-    confirmation made in error costs one command rather than a hand-written
-    ``UPDATE``.
+    Nothing else happens, and nothing else needs to. The family is the
+    connected components of the confirmed pairs, so removing one either
+    changes nothing — because another chain still connects the two — or
+    splits the family in exactly the place the withdrawn pair was
+    holding together. Both outcomes fall out of the derivation rather
+    than being implemented, which is most of the reason the family stopped
+    being a stored pointer.
     """
     left = await find_channel(session, first)
     right = await find_channel(session, second)
     pair = ordered(left.tg_id, right.tg_id)
-
-    for channel, other in ((left, right), (right, left)):
-        if channel.operator_id == other.tg_id:
-            channel.operator_id = None
 
     await session.execute(
         update(AffiliationCandidate)
@@ -494,7 +513,6 @@ async def withdraw_affiliation(
         )
         .values(
             decision=AffiliationDecision.PENDING,
-            canonical_id=None,
             decided_at=None,
             decision_note=None,
         )
@@ -502,38 +520,11 @@ async def withdraw_affiliation(
     return pair
 
 
-async def recanonicalize_family(
-    session: AsyncSession, new_canonical: ChannelRef
-) -> FamilyCounts:
-    """Make this channel the canonical one of the family it is in.
-
-    Every member — including the channel that was canonical before —
-    ends up naming it, and its own pointer is cleared. Done in one
-    statement pair so no member is ever left naming a channel that is no
-    longer canonical, which is the state the depth-one rule forbids.
-    """
-    head = await find_channel(session, new_canonical)
-    family = head.operator_id or head.tg_id
-    if family == head.tg_id:
-        raise ValueError(f"{head.tg_id} is already the canonical channel")
-
-    moved = await session.execute(
-        update(Channel)
-        .where(func.coalesce(Channel.operator_id, Channel.tg_id) == family)
-        .where(Channel.tg_id != head.tg_id)
-        .values(operator_id=head.tg_id)
-        .returning(Channel.tg_id)
-    )
-    head.operator_id = None
-    return FamilyCounts(families=1, channels=len(moved.all()) + 1)
-
-
 async def _record_decision(
     session: AsyncSession,
     *,
     pair: Pair,
     decision: AffiliationDecision,
-    canonical_id: int | None,
     note: str | None,
 ) -> None:
     """Write the review outcome onto the candidate, creating it if new.
@@ -549,7 +540,6 @@ async def _record_decision(
         "score": 0.0,
         "origin": CandidateOrigin.OPERATOR,
         "decision": decision,
-        "canonical_id": canonical_id,
         "decided_at": datetime.now(UTC),
         "decision_note": note,
     }
@@ -562,7 +552,6 @@ async def _record_decision(
             ],
             set_={
                 "decision": statement.excluded.decision,
-                "canonical_id": statement.excluded.canonical_id,
                 "decided_at": statement.excluded.decided_at,
                 "decision_note": statement.excluded.decision_note,
             },

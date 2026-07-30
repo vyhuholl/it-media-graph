@@ -263,10 +263,6 @@ class Channel(Base):
             "(status = 'rejected') = (reject_reason IS NOT NULL)",
             name="rejected_has_reason",
         ),
-        CheckConstraint(
-            "operator_id IS NULL OR operator_id <> tg_id",
-            name="operator_is_another_channel",
-        ),
     )
 
     tg_id: Mapped[int] = mapped_column(
@@ -310,29 +306,17 @@ class Channel(Base):
         ForeignKey("channels.tg_id", ondelete="SET NULL"), nullable=True
     )
 
-    # The canonical channel of the family this one belongs to — one
-    # author's several channels, established by hand and never guessed.
-    # Shaped like `linked_to`: the members point at the canonical one and
-    # it points at nobody, so **null means two things** — no family
-    # recorded, or this *is* the canonical channel of one. Both read the
-    # same way, which is the point: the family of any channel is
-    #
-    #     COALESCE(operator_id, tg_id)
-    #
-    # correct for a member, for a canonical channel, and for a channel
-    # with no family at all — a solo channel is its own family of one. An
-    # edge is inside a family exactly when its endpoints' keys are equal,
-    # so the analysis that drops self-reposts needs no special case for
-    # the unaffiliated majority.
-    #
-    # Depth is exactly one: this must name a channel whose own
-    # `operator_id` is null, or the expression above would need
-    # transitive closure to be right. A CHECK cannot see another row, so
-    # `db/channels.py` enforces it at the single write path — see
-    # `confirm_affiliation`.
-    operator_id: Mapped[int | None] = mapped_column(
-        ForeignKey("channels.tg_id", ondelete="SET NULL"), nullable=True
-    )
+    # No family column. Which channels share an author is the transitive
+    # closure of the confirmed pairs in `affiliation_candidates`, read
+    # through the `channel_families` view — see `db/affiliation.py`. It
+    # was a column once, pointing at a "canonical" channel every member
+    # named, and that shape could not hold what the data turned out to
+    # be: the pairs among one author's channels form an arbitrary graph,
+    # not a star, so which family came out depended on the order the
+    # pairs were confirmed in and some groups could not be assembled at
+    # all. Deriving it also removes the drift a stored summary of the
+    # pairs invited, and with it the one invariant this project had to
+    # enforce in application code because a CHECK could not see it.
 
     # Denormalized from the newest message a backfill saw. A convenience
     # for "is this channel still alive", not a source of truth: the
@@ -705,12 +689,20 @@ class AffiliationRun(Base):
 class AffiliationCandidate(Base):
     """Two channels that may share an author, and why anyone thinks so.
 
-    A proposal, never a conclusion. Detection writes rows here and may
-    write nothing else; only the confirmation command turns one into a
-    family by writing ``channels.operator_id``. That split is the whole
-    design — no threshold on this data separates an author's second
-    channel from a close collaborator, so the ranking exists to order a
-    human's attention, not to replace it.
+    A proposal, never a conclusion — until the operator confirms it, at
+    which point **this table is the family**. Detection writes rows here
+    and may write nothing else; only the confirmation command sets
+    ``decision``. That split is the whole design: no threshold on this
+    data separates an author's second channel from a close collaborator,
+    so the ranking exists to order a human's attention, not to replace
+    it.
+
+    The confirmed rows are also the sole record of who shares an author.
+    A family is a connected component of them, read through the
+    ``channel_families`` view; nothing stores membership separately, so
+    nothing can disagree with the pairs. Merging two families is
+    therefore one confirmed row, and splitting one is the removal of a
+    row — neither is an operation anything has to implement.
 
     The pair is unordered and stored once, with ``channel_a <
     channel_b``. Sorting by id rather than by whichever signal fired
@@ -741,15 +733,6 @@ class AffiliationCandidate(Base):
         CheckConstraint(
             "(decision = 'pending') = (decided_at IS NULL)",
             name="decided_has_timestamp",
-        ),
-        # `canonical_id` records which side the operator judged the main
-        # channel, at the moment they judged it. Re-canonicalizing a
-        # family later rewrites `channels.operator_id` for every member;
-        # without this it would be unrecoverable which one was chosen
-        # first. It is meaningful only for a confirmation.
-        CheckConstraint(
-            "(canonical_id IS NOT NULL) = (decision = 'confirmed')",
-            name="canonical_only_when_confirmed",
         ),
         # The ranking is the table's one access path.
         Index("ix_affiliation_candidates_score", "score"),
@@ -809,9 +792,6 @@ class AffiliationCandidate(Base):
     origin: Mapped[CandidateOrigin] = mapped_column(
         _pg_enum(CandidateOrigin, "candidate_origin"),
         server_default=CandidateOrigin.SIGNAL.value,
-    )
-    canonical_id: Mapped[int | None] = mapped_column(
-        ForeignKey("channels.tg_id", ondelete="SET NULL")
     )
     decided_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)

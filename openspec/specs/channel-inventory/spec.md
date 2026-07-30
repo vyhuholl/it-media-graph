@@ -21,7 +21,7 @@ The system SHALL connect to Telegram using an existing Telethon session file and
 
 ### Requirement: Channel Record
 
-The system SHALL store one record per Telegram channel or chat, keyed by its Telegram id. A record MAY name the canonical channel of the family it belongs to; that field is written only by a confirmed review decision.
+The system SHALL store one record per Telegram channel or chat, keyed by its Telegram id. A record MAY carry the family it belongs to; that field is written only by a confirmed review decision, and it distinguishes no member of the family from any other.
 
 #### Scenario: Identity is recorded
 - **WHEN** a channel record is created
@@ -45,12 +45,13 @@ The system SHALL store one record per Telegram channel or chat, keyed by its Tel
 
 #### Scenario: A new record belongs to no family
 - **WHEN** a channel record is created
-- **THEN** its family pointer is empty
-- **AND** no import, resolution or metadata pass writes it
+- **THEN** it belongs to no family
+- **AND** no import, resolution or metadata pass writes its family
 
-#### Scenario: The family pointer names a channel in the inventory
-- **WHEN** a record's family pointer is written naming a channel the inventory does not hold
-- **THEN** the write is refused at the database level
+#### Scenario: The record names no main channel of its family
+- **WHEN** a channel's family is read from its record
+- **THEN** the answer identifies the family
+- **AND** it does not identify any channel as the family's main one
 
 ### Requirement: Subscription Import
 
@@ -156,14 +157,16 @@ progress is visible.
 - **THEN** a count per status is reported
 
 #### Scenario: Listing one family
-- **WHEN** the command runs filtered to one family
-- **THEN** every channel belonging to it is listed, canonical channel included
-- **AND** which of them is canonical is visible
+- **GIVEN** any channel of a family
+- **WHEN** the command runs filtered to that channel's family
+- **THEN** every channel belonging to it is listed
+- **AND** the same set is listed whichever member of the family was named
 
 #### Scenario: Families are visible in the summary
 - **WHEN** the command runs without a filter
 - **THEN** it reports how many families are recorded
 - **AND** how many channels belong to one
+- **AND** a family of one unaffiliated channel is counted in neither
 
 ### Requirement: Manual Addition
 

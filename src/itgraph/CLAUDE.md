@@ -29,8 +29,9 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `affiliation/` | Recognizing that several channels have one author. Proposes; never decides |
 | `db/session.py` | `Database`: engine + session factory |
 | `db/models.py` | SQLAlchemy models, `Base` |
-| `db/channels.py` | The channel inventory: upsert, review, listing, resolution state, and the family link — the only writer of `operator_id` |
-| `db/affiliation.py` | The affiliation tables: detection runs, candidate pairs and their evidence |
+| `db/channels.py` | The channel inventory: upsert, review, listing, resolution state, and the only place a family is confirmed, rejected or withdrawn |
+| `db/affiliation.py` | The affiliation tables: detection runs, candidate pairs and their evidence; reads families out of the `channel_families` view |
+| `db/views.py` | Views. `channel_families` — which channels share an author, as the connected components of the confirmed pairs |
 | `db/edges.py` | The derived tables: `edges`, `pending_mentions` and the sources that order them |
 | `db/raw.py` | Writes into the raw layer; nothing here reads a payload |
 | `db/floods.py` | The record of rate limits: one row per wait, and the two questions asked of it |

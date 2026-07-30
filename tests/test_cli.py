@@ -729,13 +729,13 @@ def test_affiliates_writes_no_family_link(
         try:
             async with database.session() as session:
                 rows = await session.execute(
-                    text("SELECT operator_id FROM channels")
+                    text("SELECT family_key FROM channel_families")
                 )
                 return list(rows.scalars().all())
         finally:
             await database.dispose()
 
-    assert asyncio.run(read()) == [None, None]
+    assert asyncio.run(read()) == []
 
 
 def test_affiliates_needs_no_telegram_session(
@@ -826,24 +826,17 @@ def test_family_confirms_and_the_listing_shows_it(
     seed_affiliation_fixture(database_url)
 
     confirmed = runner.invoke(
-        app,
-        [
-            "family",
-            "@fake_gonzo_main",
-            "@fake_gonzo_pod",
-            "--canonical",
-            "@fake_gonzo_main",
-        ],
+        app, ["family", "@fake_gonzo_main", "@fake_gonzo_pod"]
     )
     listing = runner.invoke(app, ["channels", "--family", "@fake_gonzo_pod"])
     summary = runner.invoke(app, ["channels"])
 
     assert confirmed.exit_code == 0, confirmed.output
-    assert "belongs to the family of" in confirmed.output
-    # Asked by the member, the answer is the whole family.
+    assert "1 pairs recorded; family of 2 channels" in confirmed.output
+    # Asked by either member, the answer is the whole family, and no
+    # member is marked out as the main one.
     assert "@fake_gonzo_main" in listing.output
-    assert "canonical" in listing.output
-    assert "member" in listing.output
+    assert "canonical" not in listing.output
     assert "families   1 (2 channels)" in summary.output
 
 
@@ -881,16 +874,7 @@ def test_family_withdraws_a_confirmation(
     use_test_database(monkeypatch, database_url)
     seed_affiliation_fixture(database_url)
 
-    runner.invoke(
-        app,
-        [
-            "family",
-            str(KNOWN),
-            str(KNOWN + 1),
-            "--canonical",
-            str(KNOWN),
-        ],
-    )
+    runner.invoke(app, ["family", str(KNOWN), str(KNOWN + 1)])
     result = runner.invoke(
         app, ["family", str(KNOWN), str(KNOWN + 1), "--withdraw"]
     )
@@ -901,101 +885,6 @@ def test_family_withdraws_a_confirmation(
     assert "families   0" in summary.output
 
 
-def test_family_promotes_another_member_to_canonical(
-    monkeypatch: pytest.MonkeyPatch, database_url: str
-) -> None:
-    use_test_database(monkeypatch, database_url)
-    seed_affiliation_fixture(database_url)
-
-    runner.invoke(
-        app, ["family", str(KNOWN), str(KNOWN + 1), "--canonical", str(KNOWN)]
-    )
-    result = runner.invoke(
-        app, ["family", str(KNOWN + 1), "--canonical", str(KNOWN + 1)]
-    )
-
-    assert result.exit_code == 0, result.output
-    assert "is now canonical for 2 channels" in result.output
-
-
-def test_family_needs_a_canonical_channel(
-    monkeypatch: pytest.MonkeyPatch, database_url: str
-) -> None:
-    use_test_database(monkeypatch, database_url)
-    seed_affiliation_fixture(database_url)
-
-    result = runner.invoke(app, ["family", str(KNOWN), str(KNOWN + 1)])
-
-    assert result.exit_code != 0
-    assert "--canonical" in result.output
-
-
-def test_family_refuses_a_chain(
-    monkeypatch: pytest.MonkeyPatch, database_url: str
-) -> None:
-    use_test_database(monkeypatch, database_url)
-    seed_affiliation_fixture(database_url)
-    third = KNOWN + 2
-
-    import asyncio
-
-    from sqlalchemy import text
-    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
-    async def add_third() -> None:
-        engine = create_async_engine(database_url)
-        try:
-            async with (
-                async_sessionmaker(engine)() as session,
-                session.begin(),
-            ):
-                await session.execute(
-                    text(
-                        "INSERT INTO channels (tg_id, username, "
-                        "discovered_via, status) VALUES "
-                        "(:c, 'fake_gonzo_third', 'manual', 'seed')"
-                    ),
-                    {"c": third},
-                )
-        finally:
-            await engine.dispose()
-
-    asyncio.run(add_third())
-
-    runner.invoke(
-        app, ["family", str(KNOWN), str(KNOWN + 1), "--canonical", str(KNOWN)]
-    )
-    result = runner.invoke(
-        app,
-        ["family", str(KNOWN + 1), str(third), "--canonical", str(KNOWN + 1)],
-    )
-
-    assert result.exit_code == 1
-    assert "itself in family" in result.output
-
-
-def test_family_refuses_a_rejection_with_a_canonical_channel(
-    monkeypatch: pytest.MonkeyPatch, database_url: str
-) -> None:
-    use_test_database(monkeypatch, database_url)
-    seed_affiliation_fixture(database_url)
-
-    result = runner.invoke(
-        app,
-        [
-            "family",
-            str(KNOWN),
-            str(KNOWN + 1),
-            "--reject",
-            "--canonical",
-            str(KNOWN),
-        ],
-    )
-
-    assert result.exit_code != 0
-    assert "canonical" in result.output
-
-
 def test_affiliates_stops_proposing_a_confirmed_pair(
     monkeypatch: pytest.MonkeyPatch, database_url: str
 ) -> None:
@@ -1003,9 +892,7 @@ def test_affiliates_stops_proposing_a_confirmed_pair(
     seed_affiliation_fixture(database_url)
 
     runner.invoke(app, ["affiliates"])
-    runner.invoke(
-        app, ["family", str(KNOWN), str(KNOWN + 1), "--canonical", str(KNOWN)]
-    )
+    runner.invoke(app, ["family", str(KNOWN), str(KNOWN + 1)])
     result = runner.invoke(app, ["affiliates"])
 
     assert result.exit_code == 0, result.output
@@ -1085,63 +972,150 @@ def test_affiliates_shows_a_pair_with_one_seed_in_it(
     assert "@fake_gonzo_main" in result.output
 
 
-def test_family_promotes_the_channel_named_by_canonical(
+def seed_vacancies_group(url: str) -> list[int]:
+    """Five channels one author runs, and no channel is the hub.
+
+    The shape that motivated dropping the canonical channel: detection
+    finds pairs among them that form no star, so under the old model the
+    second confirmation was refused and the group could not be assembled.
+    """
+    import asyncio
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    ids = [KNOWN + 10 + offset for offset in range(5)]
+
+    async def build() -> None:
+        engine = create_async_engine(url)
+        try:
+            async with (
+                async_sessionmaker(engine)() as session,
+                session.begin(),
+            ):
+                for index, tg_id in enumerate(ids):
+                    await session.execute(
+                        text(
+                            "INSERT INTO channels (tg_id, username, title, "
+                            "discovered_via, status) VALUES "
+                            "(:id, :name, :title, 'manual', 'seed')"
+                        ),
+                        {
+                            "id": tg_id,
+                            "name": f"fake_jobs_{index}",
+                            "title": f"Jobs {index}",
+                        },
+                    )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(build())
+    return ids
+
+
+def test_family_assembles_a_group_from_pairs_that_form_no_star(
     monkeypatch: pytest.MonkeyPatch, database_url: str
 ) -> None:
-    """`--canonical` naming a different channel than the argument used to
-    be ignored, promoting the argument — the opposite of what was asked."""
+    """Confirmed in the order detection proposed them, one pair at a
+    time. Every one of these was refused by the canonical model."""
     use_test_database(monkeypatch, database_url)
-    seed_affiliation_fixture(database_url)
+    a, b, c, d, e = seed_vacancies_group(database_url)
 
-    runner.invoke(
-        app, ["family", str(KNOWN), str(KNOWN + 1), "--canonical", str(KNOWN)]
-    )
+    # a-b, a-c, d-b, e-b: no channel is in every pair, and d-b bridges
+    # what would otherwise be two separate groups.
+    for first, second in ((a, b), (a, c), (d, b), (e, b)):
+        result = runner.invoke(app, ["family", str(first), str(second)])
+        assert result.exit_code == 0, result.output
+
+    listing = runner.invoke(app, ["channels", "--family", str(e)])
+
+    for tg_id in (a, b, c, d, e):
+        assert str(tg_id) in listing.output
+
+
+def test_family_confirms_a_whole_group_in_one_command(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    ids = seed_vacancies_group(database_url)
+
+    result = runner.invoke(app, ["family", *(str(tg_id) for tg_id in ids)])
+    listing = runner.invoke(app, ["channels", "--family", str(ids[2])])
+
+    assert result.exit_code == 0, result.output
+    # Five channels are ten pairs, not a chain of four.
+    assert "10 pairs recorded; family of 5 channels" in result.output
+    for tg_id in ids:
+        assert str(tg_id) in listing.output
+
+
+def test_family_reports_a_merge_rather_than_performing_it_silently(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    a, b, c, d, _ = seed_vacancies_group(database_url)
+
+    runner.invoke(app, ["family", str(a), str(b)])
+    runner.invoke(app, ["family", str(c), str(d)])
+    bridged = runner.invoke(app, ["family", str(b), str(c)])
+
+    assert bridged.exit_code == 0, bridged.output
+    # One pair written, four channels in the family it produced.
+    assert "1 pairs recorded; family of 4 channels" in bridged.output
+
+
+def test_family_no_longer_accepts_canonical(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    a, b, *_ = seed_vacancies_group(database_url)
+
     result = runner.invoke(
-        app, ["family", str(KNOWN + 1), "--canonical", str(KNOWN)]
+        app, ["family", str(a), str(b), "--canonical", str(a)]
     )
 
     assert result.exit_code != 0
-    assert "--canonical names" in result.output
+    assert "No such option" in result.output or "--canonical" in result.output
 
 
-def test_family_promoting_accepts_a_matching_canonical(
+def test_family_needs_at_least_two_channels(
     monkeypatch: pytest.MonkeyPatch, database_url: str
 ) -> None:
     use_test_database(monkeypatch, database_url)
-    seed_affiliation_fixture(database_url)
+    a, *_ = seed_vacancies_group(database_url)
 
-    runner.invoke(
-        app, ["family", str(KNOWN), str(KNOWN + 1), "--canonical", str(KNOWN)]
-    )
-    by_username = runner.invoke(
-        app,
-        ["family", "@fake_gonzo_pod", "--canonical", "@fake_gonzo_pod"],
-    )
+    result = runner.invoke(app, ["family", str(a)])
 
-    assert by_username.exit_code == 0, by_username.output
-    assert "is now canonical for 2 channels" in by_username.output
+    assert result.exit_code != 0
+    assert "at least two" in result.output
 
 
-def test_family_confirming_an_existing_family_says_what_to_run(
+def test_family_reject_takes_exactly_two_channels(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    """A rejection is a statement about a pair; there is no reading of
+    rejecting a group that says anything definite."""
+    use_test_database(monkeypatch, database_url)
+    a, b, c, *_ = seed_vacancies_group(database_url)
+
+    result = runner.invoke(app, ["family", str(a), str(b), str(c), "--reject"])
+
+    assert result.exit_code != 0
+    assert "exactly two" in result.output
+
+
+def test_family_withdrawal_splits_only_what_it_held_together(
     monkeypatch: pytest.MonkeyPatch, database_url: str
 ) -> None:
     use_test_database(monkeypatch, database_url)
-    seed_affiliation_fixture(database_url)
+    a, b, c, *_ = seed_vacancies_group(database_url)
 
-    runner.invoke(
-        app, ["family", str(KNOWN), str(KNOWN + 1), "--canonical", str(KNOWN)]
-    )
-    result = runner.invoke(
-        app,
-        [
-            "family",
-            "@fake_gonzo_main",
-            "@fake_gonzo_pod",
-            "--canonical",
-            "@fake_gonzo_pod",
-        ],
-    )
+    runner.invoke(app, ["family", str(a), str(b)])
+    runner.invoke(app, ["family", str(b), str(c)])
+    runner.invoke(app, ["family", str(a), str(b), "--withdraw"])
 
-    assert result.exit_code == 1
-    assert "already one family" in result.output
-    assert "@fake_gonzo_pod --canonical @fake_gonzo_pod" in result.output
+    listing = runner.invoke(app, ["channels", "--family", str(b)])
+
+    assert str(b) in listing.output
+    assert str(c) in listing.output
+    assert str(a) not in listing.output

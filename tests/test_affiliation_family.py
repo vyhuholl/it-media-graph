@@ -1,20 +1,23 @@
-"""Recording that two channels share an author.
+"""Recording that channels share an author.
 
-The only place `operator_id` is ever written, so the invariants the
-column cannot express itself are checked here: depth exactly one, no
-accidental merge of two families, and the observed edges left alone.
+A family is a set with no main channel, and it is the connected
+components of the confirmed pairs rather than anything stored. So the
+cases worth pinning are the ones that shape made possible and the old
+star model did not: a group assembled from pairs that form no star,
+confirmation order not mattering, a bridging pair merging two families,
+and a withdrawal splitting one only when nothing else holds it together.
 """
 
 import pytest
 from sqlalchemy import text
 
+from itgraph.db.affiliation import family_keys, family_of
 from itgraph.db.channels import (
     ChannelNotFoundError,
     DiscoveredChannel,
     confirm_affiliation,
     count_families,
     list_channels,
-    recanonicalize_family,
     reject_affiliation,
     upsert_channels,
     withdraw_affiliation,
@@ -26,6 +29,7 @@ A = 1001
 B = 1002
 C = 1003
 D = 1004
+E = 1005
 
 
 async def seed(database: Database) -> None:
@@ -39,34 +43,272 @@ async def seed(database: Database) -> None:
                     title=f"Example {tg_id}",
                     is_chat=False,
                 )
-                for tg_id in (A, B, C, D)
+                for tg_id in (A, B, C, D, E)
             ],
             discovered_via=DiscoverySource.OWN_SUBSCRIPTIONS,
         )
 
 
-async def operator_ids(database: Database) -> dict[int, int | None]:
+async def families(database: Database) -> dict[int, int]:
+    """The family of every seeded channel, solo channels included."""
+    async with database.session() as session:
+        keys = await family_keys(session)
+    return {tg_id: family_of(keys, tg_id) for tg_id in (A, B, C, D, E)}
+
+
+async def confirmed_pairs(database: Database) -> set[tuple[int, int]]:
     async with database.session() as session:
         rows = await session.execute(
-            text("SELECT tg_id, operator_id FROM channels ORDER BY tg_id")
+            text(
+                "SELECT channel_a, channel_b FROM affiliation_candidates "
+                "WHERE decision = 'confirmed' ORDER BY 1, 2"
+            )
         )
-        return dict(rows.all())
+        return {(a, b) for a, b in rows.all()}
 
 
-async def test_confirming_writes_the_pointer_one_way(
+# --- the case this change exists for ----------------------------------
+
+
+async def test_a_group_whose_pairs_form_no_star_is_one_family(
+    database: Database,
+) -> None:
+    """The vacancies case: detection finds A-B, A-C, D-B, and no channel
+    is the hub. The old model refused the second confirmation."""
+    await seed(database)
+
+    async with database.session() as session:
+        await confirm_affiliation(session, [A, B])
+        await confirm_affiliation(session, [A, C])
+        await confirm_affiliation(session, [D, B])
+
+    assert await families(database) == {A: A, B: A, C: A, D: A, E: E}
+
+
+async def test_confirmation_order_does_not_change_the_family(
     database: Database,
 ) -> None:
     await seed(database)
 
     async with database.session() as session:
-        link = await confirm_affiliation(session, A, B, canonical=A)
+        await confirm_affiliation(session, [D, B])
+        await confirm_affiliation(session, [A, C])
+        await confirm_affiliation(session, [A, B])
 
-    assert link.canonical == A
-    assert link.member == B
-    pointers = await operator_ids(database)
-    assert pointers[B] == A
-    # The canonical channel names nobody — the shape `linked_to` uses.
-    assert pointers[A] is None
+    assert await families(database) == {A: A, B: A, C: A, D: A, E: E}
+
+
+async def test_a_bridging_pair_merges_two_families(
+    database: Database,
+) -> None:
+    """The other refusal the old model had, with no command to perform
+    what it refused."""
+    await seed(database)
+
+    async with database.session() as session:
+        await confirm_affiliation(session, [A, B])
+        await confirm_affiliation(session, [C, D])
+        assert (await count_families(session)).families == 2
+
+    async with database.session() as session:
+        group = await confirm_affiliation(session, [B, C])
+
+    assert group.channels == 4
+    assert await families(database) == {A: A, B: A, C: A, D: A, E: E}
+
+
+async def test_a_pair_inside_one_family_succeeds_and_changes_nothing(
+    database: Database,
+) -> None:
+    await seed(database)
+    async with database.session() as session:
+        await confirm_affiliation(session, [A, B])
+        await confirm_affiliation(session, [B, C])
+
+    before = await families(database)
+    async with database.session() as session:
+        await confirm_affiliation(session, [A, C])
+
+    assert await families(database) == before
+
+
+# --- confirming a whole group at once ---------------------------------
+
+
+async def test_a_group_is_confirmable_in_one_statement(
+    database: Database,
+) -> None:
+    await seed(database)
+
+    async with database.session() as session:
+        group = await confirm_affiliation(session, [A, B, C, D])
+
+    # Every pair, not a chain: four channels are six pairs.
+    assert group.pairs == 6
+    assert group.channels == 4
+    assert await confirmed_pairs(database) == {
+        (A, B),
+        (A, C),
+        (A, D),
+        (B, C),
+        (B, D),
+        (C, D),
+    }
+
+
+async def test_a_group_confirmed_at_once_survives_one_withdrawal(
+    database: Database,
+) -> None:
+    """Which is why every pair is stored rather than a chain."""
+    await seed(database)
+    async with database.session() as session:
+        await confirm_affiliation(session, [A, B, C, D])
+
+    async with database.session() as session:
+        await withdraw_affiliation(session, A, B)
+
+    assert await families(database) == {A: A, B: A, C: A, D: A, E: E}
+    assert (A, B) not in await confirmed_pairs(database)
+
+
+async def test_a_repeated_channel_is_refused(database: Database) -> None:
+    await seed(database)
+
+    with pytest.raises(ValueError, match="more than once"):
+        async with database.session() as session:
+            await confirm_affiliation(session, [A, B, A])
+
+
+async def test_fewer_than_two_channels_is_refused(
+    database: Database,
+) -> None:
+    await seed(database)
+
+    with pytest.raises(ValueError, match="at least two"):
+        async with database.session() as session:
+            await confirm_affiliation(session, [A])
+
+
+async def test_an_unknown_channel_writes_nothing(database: Database) -> None:
+    """Including no pair among the channels that were valid."""
+    await seed(database)
+
+    with pytest.raises(ChannelNotFoundError):
+        async with database.session() as session:
+            await confirm_affiliation(session, [A, B, 999999])
+
+    assert await confirmed_pairs(database) == set()
+
+
+# --- withdrawal, and the split that falls out of the derivation -------
+
+
+async def test_withdrawing_the_only_connection_splits_the_family(
+    database: Database,
+) -> None:
+    await seed(database)
+    async with database.session() as session:
+        await confirm_affiliation(session, [A, B])
+        await confirm_affiliation(session, [B, C])
+
+    async with database.session() as session:
+        await withdraw_affiliation(session, A, B)
+
+    result = await families(database)
+    assert result[A] == A
+    assert result[B] == result[C] == B
+
+
+async def test_withdrawing_a_pair_leaves_the_others_confirmed(
+    database: Database,
+) -> None:
+    await seed(database)
+    async with database.session() as session:
+        await confirm_affiliation(session, [A, B])
+        await confirm_affiliation(session, [B, C])
+
+    async with database.session() as session:
+        await withdraw_affiliation(session, A, B)
+
+    assert await confirmed_pairs(database) == {(B, C)}
+
+
+async def test_a_withdrawn_pair_returns_to_pending(
+    database: Database,
+) -> None:
+    await seed(database)
+    async with database.session() as session:
+        await confirm_affiliation(session, [A, B], note="same author")
+
+    async with database.session() as session:
+        await withdraw_affiliation(session, A, B)
+
+    async with database.session() as session:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT decision::text, decided_at, decision_note "
+                    "FROM affiliation_candidates"
+                )
+            )
+        ).one()
+
+    assert row == ("pending", None, None)
+
+
+# --- rejection --------------------------------------------------------
+
+
+async def test_rejecting_records_the_pair_and_no_family(
+    database: Database,
+) -> None:
+    await seed(database)
+
+    async with database.session() as session:
+        await reject_affiliation(session, A, B, note="different people")
+
+    assert await families(database) == {A: A, B: B, C: C, D: D, E: E}
+    async with database.session() as session:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT decision::text, decision_note "
+                    "FROM affiliation_candidates"
+                )
+            )
+        ).one()
+    assert row == ("rejected", "different people")
+
+
+async def test_a_rejected_pair_does_not_veto_a_family(
+    database: Database,
+) -> None:
+    """A rejection says "this pair is not evidence", not "these two are
+    not family". If other confirmations connect them anyway, they are
+    one family and the rejection keeps stopping the pair being proposed.
+    """
+    await seed(database)
+
+    async with database.session() as session:
+        await confirm_affiliation(session, [A, B])
+        await confirm_affiliation(session, [B, C])
+        await reject_affiliation(session, A, C)
+
+    result = await families(database)
+    assert result[A] == result[B] == result[C]
+
+
+async def test_rejecting_a_channel_with_itself_is_refused(
+    database: Database,
+) -> None:
+    await seed(database)
+
+    with pytest.raises(ValueError, match="itself"):
+        async with database.session() as session:
+            await reject_affiliation(session, A, A)
+
+
+# --- what the inventory reports ---------------------------------------
 
 
 async def test_a_confirmation_is_recorded_as_the_operator_s(
@@ -77,161 +319,60 @@ async def test_a_confirmation_is_recorded_as_the_operator_s(
     await seed(database)
 
     async with database.session() as session:
-        await confirm_affiliation(
-            session, A, B, canonical=A, note="same author"
-        )
+        await confirm_affiliation(session, [A, B], note="same author")
 
     async with database.session() as session:
         row = (
             await session.execute(
                 text(
-                    "SELECT origin::text, decision::text, canonical_id, "
-                    "decision_note FROM affiliation_candidates"
-                )
-            )
-        ).one()
-
-    assert row == ("operator", "confirmed", A, "same author")
-
-
-async def test_the_canonical_channel_must_be_one_of_the_two(
-    database: Database,
-) -> None:
-    await seed(database)
-
-    with pytest.raises(ValueError, match="must be one of the two"):
-        async with database.session() as session:
-            await confirm_affiliation(session, A, B, canonical=C)
-
-
-async def test_a_channel_cannot_be_affiliated_with_itself(
-    database: Database,
-) -> None:
-    await seed(database)
-
-    with pytest.raises(ValueError, match="itself"):
-        async with database.session() as session:
-            await confirm_affiliation(session, A, A, canonical=A)
-
-
-async def test_an_unknown_channel_is_refused(database: Database) -> None:
-    await seed(database)
-
-    with pytest.raises(ChannelNotFoundError):
-        async with database.session() as session:
-            await confirm_affiliation(session, A, 999999, canonical=A)
-
-
-async def test_a_chain_is_refused(database: Database) -> None:
-    """Depth one, or `COALESCE(operator_id, tg_id)` needs transitive
-    closure and every consumer of the family key gets a wrong answer."""
-    await seed(database)
-    async with database.session() as session:
-        await confirm_affiliation(session, A, B, canonical=A)
-
-    with pytest.raises(ValueError, match="itself in family"):
-        async with database.session() as session:
-            await confirm_affiliation(session, B, C, canonical=B)
-
-    assert (await operator_ids(database))[C] is None
-
-
-async def test_a_third_channel_joins_the_existing_family(
-    database: Database,
-) -> None:
-    await seed(database)
-    async with database.session() as session:
-        await confirm_affiliation(session, A, B, canonical=A)
-        await confirm_affiliation(session, A, C, canonical=A)
-
-    pointers = await operator_ids(database)
-    assert pointers[B] == A
-    assert pointers[C] == A
-
-
-async def test_merging_two_families_is_refused(database: Database) -> None:
-    await seed(database)
-    async with database.session() as session:
-        await confirm_affiliation(session, A, B, canonical=A)
-        await confirm_affiliation(session, C, D, canonical=C)
-
-    with pytest.raises(ValueError, match="merging two families"):
-        async with database.session() as session:
-            await confirm_affiliation(session, B, D, canonical=B)
-
-
-async def test_rejecting_writes_no_pointer(database: Database) -> None:
-    await seed(database)
-
-    async with database.session() as session:
-        await reject_affiliation(session, A, B, note="different people")
-
-    assert await operator_ids(database) == {A: None, B: None, C: None, D: None}
-    async with database.session() as session:
-        row = (
-            await session.execute(
-                text(
-                    "SELECT decision::text, canonical_id, decision_note "
+                    "SELECT origin::text, decision::text, decision_note "
                     "FROM affiliation_candidates"
                 )
             )
         ).one()
-    assert row == ("rejected", None, "different people")
+
+    assert row == ("operator", "confirmed", "same author")
 
 
-async def test_withdrawal_clears_the_pointer_and_reopens_the_pair(
+async def test_the_family_listing_answers_from_any_member(
     database: Database,
 ) -> None:
     await seed(database)
     async with database.session() as session:
-        await confirm_affiliation(session, A, B, canonical=A)
+        await confirm_affiliation(session, [A, B, C])
 
     async with database.session() as session:
-        await withdraw_affiliation(session, A, B)
-
-    assert (await operator_ids(database))[B] is None
-    async with database.session() as session:
-        row = (
-            await session.execute(
-                text(
-                    "SELECT decision::text, canonical_id, decided_at "
-                    "FROM affiliation_candidates"
-                )
+        keys = await family_keys(session)
+        for member in (A, B, C):
+            listed = await list_channels(
+                session, family=family_of(keys, member)
             )
-        ).one()
-    assert row == ("pending", None, None)
+            assert [channel.tg_id for channel in listed] == [A, B, C]
 
 
-async def test_recanonicalizing_moves_every_member(
+async def test_a_channel_in_no_family_is_its_own_family_of_one(
+    database: Database,
+) -> None:
+    await seed(database)
+
+    async with database.session() as session:
+        listed = await list_channels(session, family=E)
+
+    assert [channel.tg_id for channel in listed] == [E]
+
+
+async def test_families_are_counted_not_memberships(
     database: Database,
 ) -> None:
     await seed(database)
     async with database.session() as session:
-        await confirm_affiliation(session, A, B, canonical=A)
-        await confirm_affiliation(session, A, C, canonical=A)
+        await confirm_affiliation(session, [A, B, C])
 
     async with database.session() as session:
-        counts = await recanonicalize_family(session, B)
+        counts = await count_families(session)
 
+    assert counts.families == 1
     assert counts.channels == 3
-    pointers = await operator_ids(database)
-    assert pointers[B] is None
-    assert pointers[A] == B
-    assert pointers[C] == B
-    # Nobody is left naming the former canonical channel.
-    assert A not in [value for value in pointers.values() if value is not None]
-
-
-async def test_promoting_an_already_canonical_channel_is_refused(
-    database: Database,
-) -> None:
-    await seed(database)
-    async with database.session() as session:
-        await confirm_affiliation(session, A, B, canonical=A)
-
-    with pytest.raises(ValueError, match="already the canonical"):
-        async with database.session() as session:
-            await recanonicalize_family(session, A)
 
 
 async def test_confirming_a_family_leaves_every_edge_in_place(
@@ -251,99 +392,22 @@ async def test_confirming_a_family_leaves_every_edge_in_place(
             )
 
     async with database.session() as session:
-        await confirm_affiliation(session, A, B, canonical=A)
+        await confirm_affiliation(session, [A, B])
 
     async with database.session() as session:
         remaining = await session.scalar(text("SELECT count(*) FROM edges"))
-        # And the family key is what lets analysis tell the edge apart.
+        # The family key is what lets analysis tell the edge apart.
         intra = await session.scalar(
             text(
                 "SELECT count(*) FROM edges e "
                 "JOIN channels s ON s.tg_id = e.src_channel_id "
                 "JOIN channels d ON d.tg_id = e.dst_channel_id "
-                "WHERE COALESCE(s.operator_id, s.tg_id) "
-                "= COALESCE(d.operator_id, d.tg_id)"
+                "LEFT JOIN channel_families fs ON fs.channel_id = s.tg_id "
+                "LEFT JOIN channel_families fd ON fd.channel_id = d.tg_id "
+                "WHERE COALESCE(fs.family_key, s.tg_id) "
+                "= COALESCE(fd.family_key, d.tg_id)"
             )
         )
 
     assert remaining == 5
     assert intra == 5
-
-
-async def test_the_family_listing_includes_the_canonical_channel(
-    database: Database,
-) -> None:
-    await seed(database)
-    async with database.session() as session:
-        await confirm_affiliation(session, A, B, canonical=A)
-
-    async with database.session() as session:
-        # Asked by either member, the answer is the whole family.
-        from_member = await list_channels(session, family=A)
-        rows = [channel.tg_id for channel in from_member]
-
-    assert rows == [A, B]
-
-
-async def test_a_channel_in_no_family_is_its_own_family_of_one(
-    database: Database,
-) -> None:
-    await seed(database)
-
-    async with database.session() as session:
-        rows = await list_channels(session, family=C)
-
-    assert [channel.tg_id for channel in rows] == [C]
-
-
-async def test_families_are_counted_not_memberships(
-    database: Database,
-) -> None:
-    await seed(database)
-    async with database.session() as session:
-        await confirm_affiliation(session, A, B, canonical=A)
-        await confirm_affiliation(session, A, C, canonical=A)
-
-    async with database.session() as session:
-        counts = await count_families(session)
-
-    assert counts.families == 1
-    assert counts.channels == 3
-
-
-async def test_confirming_an_existing_family_names_the_promote_command(
-    database: Database,
-) -> None:
-    """The error that sent a real operator to ask what was wrong.
-
-    Confirming the pair again with the other side as canonical is the
-    natural thing to type, and "re-canonicalize first" is a remedy
-    nobody can act on without the syntax.
-    """
-    await seed(database)
-    async with database.session() as session:
-        await confirm_affiliation(session, A, B, canonical=A)
-
-    with pytest.raises(ValueError, match="already one family") as caught:
-        async with database.session() as session:
-            await confirm_affiliation(session, A, B, canonical=B)
-
-    message = str(caught.value)
-    assert "itgraph family" in message
-    # Pasteable, not retyped off a listing.
-    assert "@example_1002 --canonical @example_1002" in message
-
-
-async def test_the_two_family_error_still_names_both(
-    database: Database,
-) -> None:
-    """The other branch keeps its own message — merging is a different
-    problem from re-canonicalizing."""
-    await seed(database)
-    async with database.session() as session:
-        await confirm_affiliation(session, A, B, canonical=A)
-        await confirm_affiliation(session, C, D, canonical=C)
-
-    with pytest.raises(ValueError, match="merging two families"):
-        async with database.session() as session:
-            await confirm_affiliation(session, B, D, canonical=B)
