@@ -41,6 +41,7 @@ most outward-facing channel in the inventory.
 
 import math
 from collections import Counter, defaultdict
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -49,7 +50,9 @@ from openpyxl.comments import Comment
 from openpyxl.utils import get_column_letter
 
 DSN = "postgresql://itgraph:itgraph@localhost:5433/itgraph"
-OUT = "channel_scorecard.xlsx"
+OUT = (
+    Path(__file__).resolve().parent.parent / "data" / "channel_scorecard.xlsx"
+)
 SHEET = "channels"
 
 # Below this many collected posts, the rate columns are left blank rather
@@ -345,6 +348,8 @@ def write(frame: pd.DataFrame) -> None:
     picks the column and the direction, and any default here would be an
     opinion about what matters.
     """
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+
     with pd.ExcelWriter(OUT, engine="openpyxl") as writer:
         frame.to_excel(writer, sheet_name=SHEET, index=False)
         sheet = writer.sheets[SHEET]

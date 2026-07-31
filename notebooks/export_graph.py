@@ -18,12 +18,13 @@ the top of every centrality ranking.
 
 import math
 from datetime import UTC, datetime
+from pathlib import Path
 
 import networkx as nx
 import psycopg
 
 DSN = "postgresql://itgraph:itgraph@localhost:5433/itgraph"
-OUT = "seed_graph.gexf"
+OUT = Path(__file__).resolve().parent.parent / "data" / "seed_graph.gexf"
 
 HALF_LIFE_DAYS = 90.0
 
@@ -87,6 +88,7 @@ def main() -> None:
     isolated = [n for n, d in g.degree() if d == 0]
     g.remove_nodes_from(isolated)
 
+    OUT.parent.mkdir(parents=True, exist_ok=True)
     nx.write_gexf(g, OUT)
     print(f"{g.number_of_nodes()} nodes, {g.number_of_edges()} edges -> {OUT}")
     print(f"{intra_family} intra-family edges dropped")
