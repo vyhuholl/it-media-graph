@@ -8,6 +8,11 @@
 *.session
 *.session-journal
 
+# EDA results
+*.gexf
+*.gephi
+*.xlsx
+
 # Database dumps: the operator's own subscriptions and review decisions.
 # They live outside the repository by default; this is here for the day
 # someone points ITGRAPH_BACKUP_DIR at it.
