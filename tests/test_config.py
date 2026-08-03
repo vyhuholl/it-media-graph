@@ -52,3 +52,41 @@ def test_missing_credentials_fail_loudly(env: pytest.MonkeyPatch) -> None:
     env.delenv("TELEGRAM_API_HASH")
     with pytest.raises(ValidationError):
         build()
+
+
+def test_a_sample_outside_the_horizon_is_refused(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """A sample past the horizon could never be taken.
+
+    A post old enough to be due for it is already too old to be read, so
+    the entry would sit in the configuration doing nothing. Refused at
+    import rather than discovered as a gap in the data weeks later.
+    """
+    env.setenv("WATCH_HORIZON_HOURS", "48")
+    env.setenv("WATCH_SAMPLE_OFFSETS", "[15,2880]")
+    with pytest.raises(ValidationError, match="past the horizon"):
+        build()
+
+
+def test_unsorted_sample_offsets_are_refused(env: pytest.MonkeyPatch) -> None:
+    """The schedule takes the first offset past a post's age.
+
+    Out of order, that silently skips every entry after a larger one.
+    """
+    env.setenv("WATCH_SAMPLE_OFFSETS", "[60,15,120]")
+    with pytest.raises(ValidationError, match="ascending"):
+        build()
+
+
+def test_an_empty_sample_schedule_is_refused(env: pytest.MonkeyPatch) -> None:
+    env.setenv("WATCH_SAMPLE_OFFSETS", "[]")
+    with pytest.raises(ValidationError, match="empty"):
+        build()
+
+
+def test_an_inverted_idle_clamp_is_refused(env: pytest.MonkeyPatch) -> None:
+    env.setenv("WATCH_IDLE_MIN_MINUTES", "600")
+    env.setenv("WATCH_IDLE_MAX_MINUTES", "30")
+    with pytest.raises(ValidationError, match="watch_idle_min_minutes"):
+        build()

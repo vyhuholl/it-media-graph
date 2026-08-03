@@ -7,6 +7,7 @@ bodies, so `itgraph --help` works on a machine with no `.env` yet.
 import asyncio
 import logging
 from collections.abc import Coroutine
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
@@ -38,13 +39,25 @@ app = typer.Typer(
 
 
 def _run(body: Coroutine[Any, Any, None]) -> None:
-    """Run a command body, turning an expected failure into exit 1."""
+    """Run a command body, turning an expected failure into exit 1.
+
+    ``SessionBusyError`` belongs here rather than in each command: a
+    collector already running is an ordinary thing to discover, and the
+    operator needs the sentence, not a traceback ending in a Postgres
+    function nobody asked about.
+    """
     from itgraph.db.channels import ChannelLookupError
+    from itgraph.db.session_lease import LeaseLostError, SessionBusyError
     from itgraph.tg.client import NotAuthorizedError
 
     try:
         asyncio.run(body)
-    except (ChannelLookupError, NotAuthorizedError) as exc:
+    except (
+        ChannelLookupError,
+        NotAuthorizedError,
+        SessionBusyError,
+        LeaseLostError,
+    ) as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(1) from exc
 
@@ -97,28 +110,36 @@ def login(
     """Authorize the MTProto session (asks for phone number and code)."""
     from getpass import getpass
 
+    from itgraph.db.session_lease import session_lease
     from itgraph.tg.auth import authorize_qr
     from itgraph.tg.client import build_client
 
+    # The one networked command that does not go through `connected` —
+    # it exists to create the authorized session the others require, so
+    # it cannot ask for one. It still writes the session file, which is
+    # the resource the lease protects, so it takes the lease by hand.
     async def run() -> None:
-        client = build_client()
-        try:
-            if qr:
-                await client.connect()
-                if not await client.is_user_authorized():
-                    await authorize_qr(
-                        client,
-                        show=typer.echo,
-                        ask_password=lambda: getpass("2FA password: "),
-                    )
-            else:
-                await client.start()
-            me = await client.get_me()
-            typer.echo(f"Authorized as {getattr(me, 'username', None) or me}")
-        finally:
-            await client.disconnect()
+        async with session_lease("login"):
+            client = build_client()
+            try:
+                if qr:
+                    await client.connect()
+                    if not await client.is_user_authorized():
+                        await authorize_qr(
+                            client,
+                            show=typer.echo,
+                            ask_password=lambda: getpass("2FA password: "),
+                        )
+                else:
+                    await client.start()
+                me = await client.get_me()
+                typer.echo(
+                    f"Authorized as {getattr(me, 'username', None) or me}"
+                )
+            finally:
+                await client.disconnect()
 
-    asyncio.run(run())
+    _run(run())
 
 
 @app.command("dump-dialogs")
@@ -132,7 +153,7 @@ def dump_dialogs() -> None:
         database = Database()
         try:
             async with (
-                connected() as client,
+                connected("dump-dialogs") as client,
                 database.session() as session,
             ):
                 counts = await import_dialogs(client, session)
@@ -254,7 +275,7 @@ def add(
     async def run() -> None:
         database = Database()
         try:
-            async with connected() as client:
+            async with connected("add") as client:
                 summary = await add_channels(
                     client,
                     database,
@@ -425,7 +446,7 @@ def backfill(
         database = Database()
         try:
             async with (
-                connected() as client,
+                connected("backfill") as client,
                 database.session() as session,
             ):
                 summary = await backfill_channels(
@@ -485,7 +506,7 @@ def metadata(
     async def run() -> None:
         database = Database()
         try:
-            async with connected() as client:
+            async with connected("metadata") as client:
                 summary = await refresh_metadata(
                     client,
                     database,
@@ -497,6 +518,106 @@ def metadata(
             await database.dispose()
         typer.echo(summary.line())
         _report_halt(summary.halt)
+
+    _run(run())
+
+
+@app.command()
+def watch(
+    cycles: Annotated[
+        int | None,
+        typer.Option(
+            "--cycles",
+            help="Stop after this many passes over the queue (default: never).",
+        ),
+    ] = None,
+) -> None:
+    """Poll seed channels for new posts and refreshed engagement counters.
+
+    Runs until stopped. Unlike every other command here it holds the
+    Telegram session for as long as it lives, so a `backfill`, `resolve`
+    or `metadata` run started alongside it will refuse: stop the loop
+    first.
+
+    Each poll is one `messages.getHistory` and answers two questions at
+    once — whether the channel published anything, and what its recent
+    posts' counters are now. Nothing is derived; run `itgraph derive`
+    over the collected messages as usual.
+
+    A reading missed while this was not running is skipped rather than
+    taken late. A snapshot due at post-age 30 minutes and taken at eight
+    hours is a different measurement, not a late one.
+    """
+    import signal
+
+    from itgraph.db.session import Database
+    from itgraph.tg.client import connected_with_lease
+    from itgraph.tg.watch import watch as watch_loop
+
+    async def run() -> None:
+        database = Database()
+        stop = asyncio.Event()
+        try:
+            async with connected_with_lease("watch") as (client, lease):
+                loop = asyncio.get_running_loop()
+                # So that Ctrl-C and a supervisor's TERM both finish the
+                # poll in flight and release the lease, rather than
+                # leaving a half-written transaction and a lock to time
+                # out. `add_signal_handler` is Unix-only; on anything
+                # else the default handler still stops the process, just
+                # less politely.
+                for received in (signal.SIGINT, signal.SIGTERM):
+                    with suppress(NotImplementedError):
+                        loop.add_signal_handler(received, stop.set)
+                stats = await watch_loop(
+                    client, database, lease=lease, stop=stop, max_cycles=cycles
+                )
+        finally:
+            await database.dispose()
+        typer.echo(stats.line())
+
+    _run(run())
+
+
+@app.command("watch-status")
+def watch_status() -> None:
+    """Report what the poll loop has been doing, without disturbing it.
+
+    Takes no session lease, deliberately: a status command that could not
+    be run while the loop is running would be reporting on the one state
+    nobody can observe.
+    """
+    from datetime import timedelta
+
+    from itgraph.db.metrics import count_snapshots
+    from itgraph.db.poll import queue_lag
+    from itgraph.db.session import Database
+
+    async def run() -> None:
+        database = Database()
+        try:
+            async with database.session() as session:
+                now = datetime.now(UTC)
+                lag = await queue_lag(session, now=now)
+                day = await count_snapshots(
+                    session, since=now - timedelta(days=1)
+                )
+                hour = await count_snapshots(
+                    session, since=now - timedelta(hours=1)
+                )
+                total = await count_snapshots(session)
+        finally:
+            await database.dispose()
+
+        typer.echo(
+            f"{lag.tracked} channel(s) scheduled, {lag.overdue} due now"
+        )
+        if lag.oldest_due_at is not None:
+            typer.echo(f"oldest overdue by {now - lag.oldest_due_at}")
+        typer.echo(
+            f"snapshots: {hour} in the last hour, {day} in the last day, "
+            f"{total} in all"
+        )
 
     _run(run())
 
@@ -591,7 +712,7 @@ def resolve(
     async def run() -> None:
         database = Database()
         try:
-            async with connected() as client:
+            async with connected("resolve") as client:
                 summary = await resolve_inventory(
                     client,
                     database,

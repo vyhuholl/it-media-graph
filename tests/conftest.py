@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,7 @@ from itgraph.config import settings
 # `Base.metadata`, so `create_all` below builds it the way a migration
 # would. Without this the test schema is missing `channel_families` and
 # every family query fails on a database that looks otherwise complete.
+from itgraph.db import session_lease as session_lease_module
 from itgraph.db import views as _views  # noqa: F401
 from itgraph.db.models import Base
 from itgraph.db.session import Database
@@ -56,6 +58,29 @@ def test_database_url() -> URL:
     if not name.endswith("_test"):  # pragma: no cover - defensive
         raise RuntimeError(f"refusing to use database {name!r} for tests")
     return url.set(database=name)
+
+
+@pytest.fixture(autouse=True)
+def no_session_lease(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stop any test from taking the real session lease.
+
+    The lease is deliberately hard to bypass in production — every
+    networked command goes through `connected`, which takes it — and that
+    would otherwise make every CLI test open a connection to whatever
+    `DATABASE_URL` points at, which is the *working* database, not the
+    throwaway one. Neutralized here for the suite as a whole so no test
+    has to remember.
+
+    `SessionLease` itself is exercised directly in
+    ``tests/test_session_lease.py``, against the test database, and that
+    module opts out of this fixture.
+    """
+
+    @asynccontextmanager
+    async def nothing(command: str, **kwargs: Any) -> AsyncIterator[None]:
+        yield
+
+    monkeypatch.setattr(session_lease_module, "session_lease", nothing)
 
 
 @pytest.fixture

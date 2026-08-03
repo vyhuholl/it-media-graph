@@ -30,10 +30,12 @@ from itgraph.db.models import (
 )
 
 __all__ = [
+    "advance_newest",
     "channels_in_scope",
     "channels_needing_metadata",
     "count_deferred_chats",
     "count_stale_metadata",
+    "in_scope",
     "load_state",
     "record_complete",
     "record_failure",
@@ -44,17 +46,23 @@ __all__ = [
 ]
 
 
-def _in_scope() -> tuple[ColumnElement[bool], ...]:
+def in_scope() -> tuple[ColumnElement[bool], ...]:
     """What every networked pass over the inventory is allowed to touch.
 
     Three predicates, and never a fourth: the channel was reviewed and
     accepted, it is not a discussion chat, and no previous run found it
     permanently gone. Returned rather than written out at each call site
-    so the two passes cannot drift apart — the failure mode is silent and
-    the thing it lets through is collection nobody consented to.
+    so the passes cannot drift apart — the failure mode is silent and the
+    thing it lets through is collection nobody consented to.
+
+    Public, and named without an underscore, because there are three
+    consumers now rather than two and one of them lives in another
+    module: the history walk, the metadata pass and the watch loop. A
+    predicate that decides what this project is allowed to read is
+    exactly the wrong thing to have a second copy of.
 
     The ``BackfillState`` condition assumes the caller has joined that
-    table; both callers below do.
+    table; every caller does.
     """
     return (
         Channel.status == ChannelStatus.SEED,
@@ -87,7 +95,7 @@ async def channels_in_scope(session: AsyncSession) -> Sequence[Channel]:
     statement = (
         select(Channel)
         .outerjoin(BackfillState, BackfillState.channel_id == Channel.tg_id)
-        .where(*_in_scope())
+        .where(*in_scope())
         .order_by(Channel.tg_id)
     )
     return (await session.scalars(statement)).all()
@@ -117,7 +125,7 @@ async def channels_needing_metadata(
         select(Channel)
         .outerjoin(BackfillState, BackfillState.channel_id == Channel.tg_id)
         .outerjoin(RawChannel, RawChannel.channel_id == Channel.tg_id)
-        .where(*_in_scope())
+        .where(*in_scope())
         .order_by(Channel.tg_id)
     )
     if not refresh:
@@ -142,7 +150,7 @@ async def count_stale_metadata(
         .select_from(Channel)
         .outerjoin(BackfillState, BackfillState.channel_id == Channel.tg_id)
         .outerjoin(RawChannel, RawChannel.channel_id == Channel.tg_id)
-        .where(*_in_scope(), _metadata_is_due(max_age))
+        .where(*in_scope(), _metadata_is_due(max_age))
     )
     return await session.scalar(statement) or 0
 
@@ -237,6 +245,41 @@ async def record_progress(
     if newest_fetched_id is not None:
         values["newest_fetched_id"] = newest_fetched_id
     await _upsert_state(session, channel_id, **values)
+
+
+async def advance_newest(
+    session: AsyncSession, channel_id: int, newest_fetched_id: int
+) -> None:
+    """Move the forward cursor, and touch nothing else.
+
+    The walk owns how far *back* a channel is collected and says so
+    through ``status`` and ``oldest_fetched_id``; the poll loop owns how
+    far *forward* and says so here. ``record_progress`` cannot serve both
+    — it sets ``status`` to ``RUNNING`` and requires an oldest cursor,
+    which is correct for a walk in progress and would be a lie told by a
+    loop that is not walking anything.
+
+    Never moves backwards. A poll that returns a short window while a
+    walk is mid-flight must not rewind a mark that is already ahead of
+    it, and a stale value is the one thing this cursor may never hold.
+    """
+    statement = insert(BackfillState).values(
+        channel_id=channel_id, newest_fetched_id=newest_fetched_id
+    )
+    await session.execute(
+        statement.on_conflict_do_update(
+            index_elements=[BackfillState.channel_id],
+            set_={
+                "newest_fetched_id": func.greatest(
+                    func.coalesce(
+                        BackfillState.newest_fetched_id, newest_fetched_id
+                    ),
+                    newest_fetched_id,
+                ),
+                "updated_at": datetime.now(UTC),
+            },
+        )
+    )
 
 
 async def record_complete(

@@ -272,20 +272,98 @@ class FakeChannelFull:
 
 
 class FakeHistoryMessage:
-    """A message as ``iter_messages`` yields it."""
+    """A message as ``iter_messages`` yields it.
 
-    def __init__(self, msg_id: int, date: datetime, text: str = "") -> None:
+    The counters are **mutable and read at ``to_dict`` time**, which is
+    the whole point of them being here. Everything the watch loop exists
+    to measure is a number that changes between one reading of a message
+    and the next, and a fake whose numbers were fixed at construction
+    could not express that — a test would be asserting that two
+    identical readings are identical.
+
+    ``reactions`` is given as a plain ``{emoji: count}`` mapping and
+    expanded into Telegram's shape on the way out, because the shape is
+    what production parses and the mapping is what a test wants to write.
+    ``None`` means the channel publishes no reactions at all, which is a
+    different fact from an empty mapping.
+    """
+
+    def __init__(
+        self,
+        msg_id: int,
+        date: datetime,
+        text: str = "",
+        *,
+        views: int | None = None,
+        forwards: int | None = None,
+        reactions: dict[str, int] | None = None,
+        comments: int | None = None,
+    ) -> None:
         self.id = msg_id
         self.date = date
         self.message = text
+        self.views = views
+        self.forwards = forwards
+        self.reactions = reactions
+        self.comments = comments
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "_": "Message",
             "id": self.id,
             "date": self.date,
             "message": self.message,
             "peer_id": {"_": "PeerChannel", "channel_id": 1000000001},
+            "views": self.views,
+            "forwards": self.forwards,
+            # Absent as JSON null, exactly as a stored payload has it —
+            # the shape that makes "reactions off" and "nobody reacted"
+            # distinguishable, and the one that trips a naive parser.
+            "reactions": None,
+            "replies": None,
+        }
+        if self.reactions is not None:
+            payload["reactions"] = {
+                "_": "MessageReactions",
+                "results": [
+                    {
+                        "_": "ReactionCount",
+                        "count": count,
+                        "reaction": {
+                            "_": "ReactionEmoji",
+                            "emoticon": emoticon,
+                        },
+                    }
+                    for emoticon, count in self.reactions.items()
+                ],
+            }
+        if self.comments is not None:
+            payload["replies"] = {
+                "_": "MessageReplies",
+                "replies": self.comments,
+                "comments": True,
+                "channel_id": 1520237172,
+            }
+        return payload
+
+
+class FakeServiceMessage:
+    """A ``MessageService`` — an event, not a post.
+
+    Has a date and an id like anything else in a history window, and no
+    counters at all. The loop must store it and snapshot nothing.
+    """
+
+    def __init__(self, msg_id: int, date: datetime) -> None:
+        self.id = msg_id
+        self.date = date
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "_": "MessageService",
+            "id": self.id,
+            "date": self.date,
+            "action": {"_": "MessageActionChatEditPhoto"},
         }
 
 

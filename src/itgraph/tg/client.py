@@ -3,16 +3,24 @@
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING
 
 from telethon import TelegramClient
 from telethon.utils import maybe_async
 
 from itgraph.config import settings
 
+if TYPE_CHECKING:
+    # Under `TYPE_CHECKING` so importing the client does not drag in the
+    # database layer; the lease itself is imported inside the function
+    # that takes it.
+    from itgraph.db.session_lease import SessionLease
+
 __all__ = [
     "NotAuthorizedError",
     "build_client",
     "connected",
+    "connected_with_lease",
     "persist_peers",
 ]
 
@@ -65,23 +73,54 @@ async def persist_peers(client: TelegramClient) -> None:
 
 
 @asynccontextmanager
-async def connected() -> AsyncIterator[TelegramClient]:
-    """Connect an already-authorized session.
+async def connected_with_lease(
+    command: str,
+) -> AsyncIterator[tuple[TelegramClient, SessionLease]]:
+    """Connect an already-authorized session, exclusively, and say so.
 
     Deliberately never starts an interactive login: collection runs
     unattended, and an auth prompt in the middle of a backfill means the
     session is wrong. Authorize once via ``itgraph login``.
+
+    The session lease is taken here rather than in each command, and
+    ``command`` is required rather than defaulted for the same reason:
+    this is the one place every networked command passes through, so a
+    new command cannot be written that forgets to claim the session. It
+    only has to say which command it is, which it cannot do wrongly by
+    omission.
+
+    The lease is released after the client disconnects, not before — the
+    thing being protected is the session file, and Telethon writes to it
+    on the way out.
+
+    The lease is yielded alongside the client for the one caller that
+    needs it: a process that runs for days has to keep asking whether it
+    still holds the session, which a command that exits in minutes never
+    does. Everything else uses ``connected`` and never sees it.
     """
-    client = build_client()
-    await client.connect()
-    try:
-        if not await client.is_user_authorized():
-            raise NotAuthorizedError(
-                f"No authorized session at {settings.telegram_session}; "
-                "run `itgraph login` once — see the Telegram authorization "
-                "section of src/itgraph/README.md."
-            )
-        logger.debug("connected as an authorized user")
+    from itgraph.db.session_lease import session_lease
+
+    async with session_lease(command) as lease:
+        client = build_client()
+        await client.connect()
+        try:
+            if not await client.is_user_authorized():
+                raise NotAuthorizedError(
+                    f"No authorized session at {settings.telegram_session}; "
+                    "run `itgraph login` once — see the Telegram "
+                    "authorization section of src/itgraph/README.md."
+                )
+            logger.debug("connected as an authorized user")
+            yield client, lease
+        finally:
+            await client.disconnect()
+
+
+@asynccontextmanager
+async def connected(command: str) -> AsyncIterator[TelegramClient]:
+    """Connect an already-authorized session, exclusively.
+
+    What every command but the loop uses. See ``connected_with_lease``.
+    """
+    async with connected_with_lease(command) as (client, _):
         yield client
-    finally:
-        await client.disconnect()

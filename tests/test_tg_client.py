@@ -1,8 +1,11 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from itgraph.db import session_lease as session_lease_module
 from itgraph.tg import client as tg_client
 
 
@@ -43,7 +46,7 @@ async def test_connected_yields_and_disconnects(fake: MagicMock) -> None:
     client = FakeClient(authorized=True)
     fake.return_value = client
 
-    async with tg_client.connected() as connection:
+    async with tg_client.connected("backfill") as connection:
         assert connection is client
         client.connect.assert_awaited_once()
         client.disconnect.assert_not_awaited()
@@ -58,8 +61,63 @@ async def test_connected_refuses_an_unauthorized_session(
     fake.return_value = client
 
     with pytest.raises(tg_client.NotAuthorizedError):
-        async with tg_client.connected():
+        async with tg_client.connected("backfill"):
             pass
 
     # Still hung up, even on the error path.
     client.disconnect.assert_awaited_once()
+
+
+async def test_connected_claims_the_session_lease(
+    fake: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lease is taken here so that no command can forget to take it.
+
+    Asserted at this seam rather than per command precisely because that
+    is the argument for putting it here: every networked command goes
+    through `connected`, so one test covers all of them, and a command
+    added later is covered before it is written.
+    """
+    taken: list[str] = []
+
+    @asynccontextmanager
+    async def recording(command: str, **kwargs: Any) -> AsyncIterator[None]:
+        taken.append(command)
+        yield
+
+    monkeypatch.setattr(session_lease_module, "session_lease", recording)
+    fake.return_value = FakeClient(authorized=True)
+
+    async with tg_client.connected("metadata"):
+        pass
+
+    assert taken == ["metadata"]
+
+
+async def test_the_lease_outlives_the_disconnect(
+    fake: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Released after the client hangs up, never before.
+
+    Telethon writes the session file on the way out — that is what
+    `persist_peers` exists to make explicit — so a lease released before
+    the disconnect would leave the last write unprotected.
+    """
+    order: list[str] = []
+    client = FakeClient(authorized=True)
+    client.disconnect = AsyncMock(side_effect=lambda: order.append("hung up"))
+    fake.return_value = client
+
+    @asynccontextmanager
+    async def recording(command: str, **kwargs: Any) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            order.append("lease released")
+
+    monkeypatch.setattr(session_lease_module, "session_lease", recording)
+
+    async with tg_client.connected("backfill"):
+        pass
+
+    assert order == ["hung up", "lease released"]

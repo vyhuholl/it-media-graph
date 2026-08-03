@@ -34,7 +34,8 @@ The corollary is worth stating separately: **anything derivable can be deferred 
 - **Not every request is priced the same, and the difference decides the shape of the tooling.** `messages.getHistory` is cheap: it rate-limits per burst, and a wait is measured in seconds. Two others carry a *per-day* quota, where waiting does not help because the limit counts calls rather than measuring their rate:
   - `contacts.resolveUsername` — the tightest of them, empirically a couple of hundred a day, and it has no batch form. Telethon's own `get_entity` docstring warns that flood waits start "around 50 usernames in a short period". Only `itgraph resolve` is allowed to spend it; a `ResolveUsernameRequest` recorded in `flood_events` under any other command is a regression.
   - `channels.getFullChannel` — rationed too, and what `itgraph metadata` spends. Descriptions and linked chats change on the order of months, so it runs about monthly rather than alongside every walk.
-  A history walk spends neither: its peer comes out of the session file's entity cache, and a channel the cache cannot supply is skipped rather than resolved. That is why the daily quota bounds how fast *new* channels enter the graph, not how much history can be collected.
+  A history walk spends neither: its peer comes out of the session file's entity cache, and a channel the cache cannot supply is skipped rather than resolved. That is why the daily quota bounds how fast *new* channels enter the graph, not how much history can be collected. The poll loop spends neither for the same reason and with more at stake — a leak there would spend the day's quota every day rather than once.
+- **One process holds the session.** Once collection includes something that runs continuously, this stops being obvious and starts needing enforcing: two processes on one session file is a corrupted file and possibly a revoked authorization. Every networked command takes an exclusive lease before connecting and refuses when it is held, so a backfill started next to a running loop declines instead of racing it.
 
 ## Storage
 
@@ -86,9 +87,15 @@ Absolute numbers are useless — a 500k channel and a 3k channel are not compara
 
 Four independent signals, and they mean different things: views (reach), reactions (approval), forwards (endorsement strong enough to republish), comments (disagreement as often as interest). Forwards are the most valuable and the slowest to accumulate; comment spikes are the ones most likely to be a fight. Track each against its own baseline rather than collapsing them into one score.
 
-This requires polling recent posts: every 15–30 minutes for the first 48 hours, decaying afterwards. A simple Postgres-backed queue plus one worker (`arq`) — NATS would be overkill here.
+This requires polling recent posts: every 15–30 minutes for the first 48 hours, decaying afterwards. A simple Postgres-backed queue plus one worker — NATS would be overkill here.
 
-Alert delivery: a dedicated aiogram bot.
+**Collection and judgement are separate phases, and the split is a schedule decision rather than a taste one.** The baselines above are of the form "what this channel's posts normally have at age *t*", and they cannot be computed, borrowed or backfilled — they accumulate in wall-clock time. So the snapshot loop went first and alone (`itgraph watch`), and everything that scores those snapshots can be written afterwards, at any point, as a pass with no deadline of its own. The interim payoff is real: the offline analytics stop being restricted to posts that were already mature when they were read.
+
+The corollary is a rule any scoring pass has to obey. Samples are irregular by design — quiet hours, suspend and rate limits all cost readings, and a missed one is dropped rather than taken late — so **a snapshot's age is `observed_at` minus the publication date, never which sample in the schedule it was meant to be.**
+
+The queue is taken from the suggestion above; `arq` is not. It is a Redis job queue, and adding Redis to schedule a single sequential worker contradicts the Postgres-only rule for no gain — the whole dispatch is one indexed `due_at` query. Concurrency is the one thing this must not have anyway: Telegram's limits are per account, so parallel workers reach the same ceiling faster and look worse doing it.
+
+Alert delivery: a dedicated aiogram bot, in its own dependency group and its own process, reading an alert table. That interface is the seam that lets the bot move to a different machine later without the collector following it — the collector needs a residential IP and the Bot API does not.
 
 ## Digests
 
@@ -107,7 +114,8 @@ Repost activity across the wider chat ecosystem — beyond the channels collecte
 | 1–2 | Collector + schema + backfill of seed channels | Forward graph v0 |
 | 3–4 | Candidates | 300–500 channels |
 | 5–6 | Clustering + role metrics + visualization | **First useful result** |
-| 7–8 | Post-level virality + metric snapshots + alert bot | Working notifications |
+| 7 | Metric snapshots: the poll loop, the time series it writes | Baselines start accruing |
+| 8 | Post-level virality: baselines, scoring, replay + alert bot | Working notifications |
 | 9–10 | Comments (the heavy phase) | Commenter graph |
 | 11–12 | Buffer + digests + YouTube Data API | — |
 

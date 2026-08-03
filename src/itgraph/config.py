@@ -103,6 +103,103 @@ class Settings(BaseSettings):
     # holds a bounded slice of the raw layer in memory at once.
     derive_batch_size: int = 1000
 
+    # --- the watch loop ---------------------------------------------
+    #
+    # Everything below governs a process that runs indefinitely, which is
+    # what makes these different in kind from the backfill settings above.
+    # A backfill spends its budget and stops; the loop spends a little,
+    # forever. So the numbers are chosen for a sustained rate that is
+    # lower than the backfill's, not for a burst that is survivable.
+
+    # When a post is read, in minutes after it was published. Dense early,
+    # where a spike separates from an ordinary post, and thin later,
+    # because forwards and comments accrue for far longer than views do.
+    # A sample missed while the loop was down is dropped rather than taken
+    # late — see `itgraph.schedule` for why that is not a compromise.
+    watch_sample_offsets: tuple[float, ...] = (
+        15,
+        30,
+        60,
+        120,
+        240,
+        480,
+        1440,
+        2880,
+    )
+
+    # Past this age a post is no longer read at all. It must sit strictly
+    # past the last sample, and the extra hour is not slack for its own
+    # sake: a horizon equal to the last offset makes that last sample
+    # unreachable, because a post old enough to be due for it is already
+    # too old to be read. The validator below refuses that arrangement
+    # rather than letting a configured sample quietly never happen.
+    watch_horizon_hours: float = Field(default=49.0, gt=0)
+
+    # A channel with nothing live is checked on an interval derived from
+    # its own posting rate — the mean gap between its posts, divided by
+    # this. Above 1 so a channel is checked several times per expected
+    # post rather than once, which is what bounds how old a post can be
+    # before anything notices it.
+    watch_idle_divisor: float = Field(default=4.0, ge=1.0)
+    # ...and then clamped. The floor stops a prolific channel from being
+    # polled every few minutes on the idle path; the ceiling stops a
+    # channel that posts twice a year from being forgotten. Measured
+    # against this inventory: ~400 channels have nothing live at any
+    # moment, and at these bounds they cost roughly 800 requests a day
+    # between them.
+    watch_idle_min_minutes: float = Field(default=30.0, gt=0)
+    watch_idle_max_minutes: float = Field(default=720.0, gt=0)
+
+    # No channel is polled twice inside this, whatever the schedule says.
+    # A channel publishing an album or a burst of five posts would
+    # otherwise have five samples due within a minute of each other.
+    watch_min_gap_minutes: float = Field(default=10.0, ge=0)
+
+    # How many messages one poll asks for: the channel's posting rate over
+    # the horizon, inside these bounds. The ceiling is what keeps a poll
+    # to a single request — a channel needing more than 100 would have to
+    # post over 50 times a day, which this inventory does not contain.
+    watch_window_min: int = Field(default=10, ge=1)
+    watch_window_max: int = Field(default=100, ge=1)
+
+    # A channel that keeps coming back empty, and one that keeps failing,
+    # are both backed off — the first mildly, the second hard. Neither is
+    # a reason to stop checking, so both are capped rather than allowed to
+    # grow without bound.
+    watch_empty_backoff: float = Field(default=1.5, ge=1.0)
+    watch_empty_backoff_cap: int = Field(default=4, ge=0)
+    watch_failure_backoff: float = Field(default=2.0, ge=1.0)
+    watch_failure_backoff_cap: int = Field(default=6, ge=0)
+    watch_failure_max_minutes: float = Field(default=1440.0, gt=0)
+
+    # The gap before each of the loop's requests. Larger than the
+    # backfill's, because nothing here is in a hurry: the whole inventory
+    # produces ~576 posts a day, and the loop has all day.
+    watch_request_delay: float = 6.0
+
+    # How long to wait when nothing is due. The floor on how promptly the
+    # loop notices its own queue, and it costs no request.
+    watch_tick_seconds: float = Field(default=60.0, gt=0)
+
+    # How long a cached posting rate stays good. It is an input to a
+    # schedule, not a number anyone reads, and recomputing it per tick
+    # would cost more in queries than the polling costs in requests.
+    watch_rate_max_age_hours: float = Field(default=24.0, gt=0)
+
+    # Local hours between which the loop does not poll. Real accounts
+    # sleep, it removes a large share of the daily request count, and
+    # nothing here needs minute-level latency at 04:00. Equal values mean
+    # no quiet window at all. The zone is explicit because a naive local
+    # time is wrong the moment this runs anywhere but one laptop.
+    watch_quiet_from_hour: int = Field(default=2, ge=0, le=23)
+    watch_quiet_to_hour: int = Field(default=7, ge=0, le=23)
+    watch_timezone: str = "Europe/Moscow"
+
+    # How often a running loop re-confirms it still holds the session
+    # lease. Losing it is fatal, so this is how long two collectors could
+    # in principle overlap before one of them notices and stops.
+    watch_lease_check_seconds: float = Field(default=300.0, gt=0)
+
     backup_dir: Path = DEFAULT_BACKUP_DIR
 
     # There is no pg_dump on the host — it runs inside the Postgres
@@ -147,6 +244,48 @@ class Settings(BaseSettings):
                 raise ValueError(
                     f"{name}_min ({low}) is above {name}_max ({high})"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _watch_bounds_are_ordered(self) -> Self:
+        """Refuse a schedule that cannot produce a valid interval.
+
+        Same reasoning as the pause ranges: an inverted clamp surfaces
+        hours into a run that is meant never to end, and it looks like a
+        scheduling bug rather than a typo in `.env`.
+        """
+        if self.watch_idle_min_minutes > self.watch_idle_max_minutes:
+            raise ValueError(
+                f"watch_idle_min_minutes ({self.watch_idle_min_minutes}) is "
+                f"above watch_idle_max_minutes ({self.watch_idle_max_minutes})"
+            )
+        if self.watch_window_min > self.watch_window_max:
+            raise ValueError(
+                f"watch_window_min ({self.watch_window_min}) is above "
+                f"watch_window_max ({self.watch_window_max})"
+            )
+        if not self.watch_sample_offsets:
+            raise ValueError(
+                "watch_sample_offsets is empty: a post would be stored and "
+                "then never read, which is not a lighter schedule but a "
+                "different feature"
+            )
+        if list(self.watch_sample_offsets) != sorted(
+            self.watch_sample_offsets
+        ):
+            raise ValueError(
+                "watch_sample_offsets must be in ascending order; the "
+                "schedule takes the first offset past a post's age and an "
+                "unsorted list would skip samples silently"
+            )
+        last = self.watch_sample_offsets[-1]
+        if last >= self.watch_horizon_hours * 60:
+            raise ValueError(
+                f"the last watch_sample_offsets entry ({last} min) is not "
+                f"inside watch_horizon_hours ({self.watch_horizon_hours} h): "
+                "a post old enough for that sample would already be past the "
+                "horizon, so the sample could never be taken"
+            )
         return self
 
 

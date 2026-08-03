@@ -38,7 +38,7 @@ def use_telegram(
     monkeypatch: pytest.MonkeyPatch, telegram: FakeTelegramClient
 ) -> None:
     @asynccontextmanager
-    async def connected() -> AsyncIterator[FakeTelegramClient]:
+    async def connected(command: str) -> AsyncIterator[FakeTelegramClient]:
         yield telegram
 
     monkeypatch.setattr(tg_client, "connected", connected)
@@ -141,7 +141,7 @@ def test_an_unauthorized_session_exits_non_zero(
     use_test_database(monkeypatch, database_url)
 
     @asynccontextmanager
-    async def refuse() -> AsyncIterator[None]:
+    async def refuse(command: str) -> AsyncIterator[None]:
         raise tg_client.NotAuthorizedError("no authorized session at x")
         yield  # pragma: no cover - unreachable by design
 
@@ -1119,3 +1119,147 @@ def test_family_withdrawal_splits_only_what_it_held_together(
     assert str(b) in listing.output
     assert str(c) in listing.output
     assert str(a) not in listing.output
+
+
+def seed_seed_channel(url: str, tg_id: int, username: str) -> None:
+    """One accepted channel, written directly.
+
+    Not collected through the CLI: what these tests are about is the loop
+    and the lease, and going through `dump-dialogs` plus `mark` would put
+    two other commands between the test and its subject.
+    """
+    import asyncio
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    async def build() -> None:
+        engine = create_async_engine(url)
+        try:
+            async with (
+                async_sessionmaker(engine)() as session,
+                session.begin(),
+            ):
+                await session.execute(
+                    text(
+                        "INSERT INTO channels "
+                        "(tg_id, username, title, discovered_via, status) "
+                        "VALUES (:id, :name, 'Example', 'manual', 'seed')"
+                    ),
+                    {"id": tg_id, "name": username},
+                )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(build())
+
+
+def test_watch_polls_and_reports(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    """The loop reachable through the CLI, bounded by `--cycles`.
+
+    Without the bound this command never returns, which is the point of
+    the command and a problem for a test.
+    """
+    from datetime import UTC, datetime
+
+    from fakes import FakeChannel, FakeHistoryMessage
+
+    use_test_database(monkeypatch, database_url)
+    seed_seed_channel(database_url, 1000000001, "example")
+
+    telegram = FakeTelegramClient(
+        entities={"example": FakeChannel(1000000001, "example")},
+        histories={
+            1000000001: [
+                FakeHistoryMessage(
+                    10, datetime.now(UTC), "post", views=100, forwards=1
+                )
+            ]
+        },
+    )
+
+    @asynccontextmanager
+    async def connected_with_lease(
+        command: str,
+    ) -> AsyncIterator[tuple[FakeTelegramClient, None]]:
+        assert command == "watch"
+        yield telegram, None
+
+    monkeypatch.setattr(
+        tg_client, "connected_with_lease", connected_with_lease
+    )
+
+    result = runner.invoke(app, ["watch", "--cycles", "1"])
+
+    assert result.exit_code == 0, result.output
+    assert "1 new messages" in result.output
+    assert "1 snapshots" in result.output
+
+
+def test_watch_refuses_while_the_session_is_held(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    """The whole reason the lease exists, at the seam an operator meets it."""
+    from itgraph.db import session_lease as lease_module
+
+    use_test_database(monkeypatch, database_url)
+
+    @asynccontextmanager
+    async def busy(command: str, **kwargs: Any) -> AsyncIterator[None]:
+        raise lease_module.SessionBusyError(
+            "the Telegram session itgraph.session is in use by itgraph watch"
+        )
+        yield  # pragma: no cover - unreachable by design
+
+    monkeypatch.setattr(lease_module, "session_lease", busy)
+
+    result = runner.invoke(app, ["watch", "--cycles", "1"])
+
+    assert result.exit_code == 1
+    assert "in use by" in result.output
+
+
+def test_backfill_refuses_while_the_loop_holds_the_session(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    from itgraph.db import session_lease as lease_module
+
+    use_test_database(monkeypatch, database_url)
+
+    @asynccontextmanager
+    async def busy(command: str, **kwargs: Any) -> AsyncIterator[None]:
+        raise lease_module.SessionBusyError("in use by itgraph watch pid=1")
+        yield  # pragma: no cover - unreachable by design
+
+    monkeypatch.setattr(lease_module, "session_lease", busy)
+
+    result = runner.invoke(app, ["backfill", "--since", "2026-05-01"])
+
+    assert result.exit_code == 1
+    assert "in use by itgraph watch" in result.output
+
+
+def test_watch_status_needs_no_lease(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    """A status command that could not run alongside the loop would be
+    reporting on the one state nobody can observe."""
+    from itgraph.db import session_lease as lease_module
+
+    use_test_database(monkeypatch, database_url)
+    seed_seed_channel(database_url, 1000000001, "example")
+
+    @asynccontextmanager
+    async def refuse(command: str, **kwargs: Any) -> AsyncIterator[None]:
+        raise AssertionError("watch-status must not take the session lease")
+        yield  # pragma: no cover - unreachable by design
+
+    monkeypatch.setattr(lease_module, "session_lease", refuse)
+
+    result = runner.invoke(app, ["watch-status"])
+
+    assert result.exit_code == 0, result.output
+    assert "1 due now" in result.output
+    assert "snapshots:" in result.output

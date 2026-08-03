@@ -16,6 +16,7 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     MetaData,
@@ -46,8 +47,10 @@ __all__ = [
     "EdgeKind",
     "FailureKind",
     "FloodEvent",
+    "MessageMetric",
     "PendingMention",
     "PendingMentionSource",
+    "PollState",
     "RawChannel",
     "RawMessage",
     "RejectReason",
@@ -163,12 +166,21 @@ class CollectionCommand(enum.StrEnum):
     the column answers changes from "which command spends this method" to
     "which of the two spent today's quota" — which is the question worth
     asking once both are running against the same daily ceiling.
+
+    ``WATCH`` owns no quota-bearing method at all, which is the strongest
+    version of the same claim. The poll loop asks for history and nothing
+    else, and unlike a backfill it does so indefinitely — so a
+    ``ResolveUsernameRequest`` or a ``GetFullChannelRequest`` filed under
+    it is not one run's mistake but a leak that spends the day's quota
+    every day until someone notices. This is the command whose attribution
+    is worth the most.
     """
 
     BACKFILL = "backfill"
     RESOLVE = "resolve"
     METADATA = "metadata"
     ADD = "add"
+    WATCH = "watch"
 
 
 class BackfillStatus(enum.StrEnum):
@@ -409,6 +421,86 @@ class RawChannel(Base):
         return f"RawChannel(channel_id={self.channel_id})"
 
 
+class MessageMetric(Base):
+    """What one message's counters were at one moment.
+
+    The raw layer for numbers that move. ``RawMessage`` cannot hold them:
+    it is immutable by construction and the first fetch of a message id
+    wins, which is right for a message body and useless for a counter.
+    So engagement lives here, as observations — append-only, one row per
+    message per reading, and never rewritten. A snapshot is a fact about
+    a moment; correcting it later would be inventing a different moment.
+
+    The samples are **irregular by design**. Suspend, quiet hours and
+    rate limits all cost readings, and a missed one is dropped rather
+    than taken late — a sample due at post-age 30 minutes and read at
+    post-age 8 hours is not a late reading of the early curve, it is a
+    different measurement wearing its name. So a consumer must read the
+    age from ``observed_at`` minus the post's publication date, and never
+    from which sample in the schedule this was supposed to be. That is
+    the one assumption a scoring pass could make silently and be wrong
+    about everywhere.
+
+    **NULL is not zero.** A channel with reactions switched off publishes
+    no reactions object at all, which is a different fact from a post
+    nobody reacted to, and dividing by a baseline built from the two
+    conflated is how a vacancy feed ends up looking like the most-loved
+    channel in the inventory. ``notebooks/anomalous_posts.py`` has to
+    rebuild that distinction per channel because the single snapshot it
+    reads lost it; here it survives from the source.
+
+    **Reactions stay per emoji and no total is stored.** A sum is a
+    derived measure, and this is an observation table — the same trade
+    ``Edge`` refuses when it carries two dates and declines to store the
+    interval between them. The breakdown is also worth more than the sum:
+    a post accumulating 🤡 and one accumulating ❤️ are opposite events
+    that a total reports identically.
+
+    The foreign key onto ``raw_messages`` is load-bearing rather than
+    decorative: it makes a snapshot of a message the raw layer does not
+    hold impossible, which pins the write order — payload first, snapshot
+    second, one transaction. It references that table's primary key, so
+    it costs no index of its own.
+    """
+
+    __tablename__ = "message_metrics"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["channel_id", "msg_id"],
+            ["raw_messages.channel_id", "raw_messages.msg_id"],
+            ondelete="CASCADE",
+        ),
+        # The alert pass reads "every snapshot since I last ran", and the
+        # primary key's leftmost column is the channel, so no prefix of it
+        # can serve that query.
+        Index("ix_message_metrics_observed_at", "observed_at"),
+    )
+
+    channel_id: Mapped[int] = mapped_column(
+        BigInteger, primary_key=True, autoincrement=False
+    )
+    msg_id: Mapped[int] = mapped_column(
+        BigInteger, primary_key=True, autoincrement=False
+    )
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True
+    )
+
+    views: Mapped[int | None] = mapped_column(Integer)
+    forwards: Mapped[int | None] = mapped_column(Integer)
+    # One entry per reaction, keyed by the emoji or custom-emoji id the
+    # payload names. Absent means the channel publishes no reactions;
+    # empty means it does and nobody has.
+    reactions: Mapped[dict[str, int] | None] = mapped_column(JSONB)
+    comments: Mapped[int | None] = mapped_column(Integer)
+
+    def __repr__(self) -> str:
+        return (
+            f"MessageMetric(channel_id={self.channel_id}, "
+            f"msg_id={self.msg_id}, observed_at={self.observed_at!r})"
+        )
+
+
 class BackfillState(Base):
     """How far history collection got on one channel, and why it stopped.
 
@@ -455,6 +547,72 @@ class BackfillState(Base):
             f"BackfillState(channel_id={self.channel_id}, "
             f"status={self.status.value!r}, "
             f"oldest_fetched_id={self.oldest_fetched_id})"
+        )
+
+
+class PollState(Base):
+    """When one channel is next due to be polled, and why then.
+
+    Timing only. The *position* — how far collection has got in this
+    channel — stays on ``BackfillState.newest_fetched_id``, which has
+    been recorded since the backfill change as the high-water mark that
+    incremental collection would read. The poll loop is that reader, and
+    it reads it in place: one fact, one table, no copy to drift.
+
+    This is deliberately not a column on ``BackfillState``, even though
+    both tables are keyed by channel and both describe collection.
+    ``BackfillStatus`` has terminal values — ``COMPLETE``, and a channel
+    capped for good — and polling has no terminal state at all. A single
+    status column meaning both "this walk is over" and "this channel is
+    checked forever" is where the confusion would start, and it would
+    start silently.
+
+    A channel with no row here is due immediately, which is what makes
+    the table seed itself: the first pass over the inventory is the
+    seeding pass, and nothing has to backfill it.
+    """
+
+    __tablename__ = "poll_state"
+
+    channel_id: Mapped[int] = mapped_column(
+        ForeignKey("channels.tg_id", ondelete="CASCADE"),
+        primary_key=True,
+        autoincrement=False,
+    )
+
+    # The loop's one access path: what is due, oldest first.
+    due_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    last_polled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+    # Cached, not measured per tick: it is an input to a schedule, not a
+    # number anyone reads, and recomputing it every time the loop looked
+    # at a channel would cost more in queries than the polling costs in
+    # requests.
+    posts_per_day: Mapped[float | None] = mapped_column(Float)
+    posts_per_day_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+    # How many consecutive polls found nothing new, and the last error if
+    # the poll failed outright. Both lengthen the interval; a poll that
+    # succeeds resets them. A channel that has gone quiet and a channel
+    # that is broken are backed off the same way and recorded
+    # differently, because only one of them is worth reporting.
+    consecutive_empty: Mapped[int] = mapped_column(
+        Integer, server_default=text("0")
+    )
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer, server_default=text("0")
+    )
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+    def __repr__(self) -> str:
+        return (
+            f"PollState(channel_id={self.channel_id}, due_at={self.due_at!r})"
         )
 
 
