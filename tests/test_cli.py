@@ -1389,3 +1389,54 @@ def test_the_networked_path_still_carries_the_exception() -> None:
     from itgraph.tg.errors import NotAuthorizedError as from_errors
 
     assert from_client is from_errors
+
+
+@pytest.fixture
+def restore_aiogram_level() -> Iterator[None]:
+    """Logger levels are global; put this one back after fiddling."""
+    import logging
+
+    logger = logging.getLogger("aiogram.event")
+    before = logger.level
+    try:
+        yield
+    finally:
+        logger.setLevel(before)
+
+
+def test_unhandled_update_noise_is_quiet_by_default(
+    restore_aiogram_level: None,
+) -> None:
+    """Nearly every update this bot sees is unhandled by design.
+
+    Two handlers, a group full of ordinary chatter, and strangers who
+    found the username: at roughly one alert a day that line would be
+    the entire log.
+    """
+    import logging
+
+    logging.getLogger("aiogram.event").setLevel(logging.NOTSET)
+
+    result = runner.invoke(app, ["version"])
+
+    assert result.exit_code == 0
+    assert logging.getLogger("aiogram.event").level == logging.WARNING
+
+
+def test_verbose_brings_the_unhandled_update_log_back(
+    restore_aiogram_level: None,
+) -> None:
+    """It is the right diagnostic when a handler stops matching.
+
+    Silencing it unconditionally would remove the one visible symptom of
+    a wrong chat id — which is precisely what somebody running with
+    `--verbose` is trying to find.
+    """
+    import logging
+
+    logging.getLogger("aiogram.event").setLevel(logging.WARNING)
+
+    result = runner.invoke(app, ["--verbose", "version"])
+
+    assert result.exit_code == 0
+    assert logging.getLogger("aiogram.event").level != logging.WARNING

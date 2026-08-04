@@ -94,6 +94,20 @@ def main(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)-8s %(name)s %(message)s",
     )
+    # aiogram announces every update no handler took, at INFO. For a bot
+    # with two handlers that is nearly every update there is — group
+    # chatter, being added to a chat, strangers who found the username —
+    # all of it unhandled by design rather than by accident. At roughly
+    # one alert a day the line would be the whole log.
+    #
+    # `--verbose` restores it rather than merely declining to silence it,
+    # and the difference is the point: it is the right diagnostic when a
+    # handler has stopped matching — a wrong chat id looks exactly like
+    # this and nothing else reports it — so debugging has to be able to
+    # turn it back on, not just avoid turning it off.
+    logging.getLogger("aiogram.event").setLevel(
+        logging.NOTSET if verbose else logging.WARNING
+    )
 
 
 @app.command()
