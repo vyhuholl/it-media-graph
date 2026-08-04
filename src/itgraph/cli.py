@@ -722,8 +722,19 @@ def bot() -> None:
     token = settings.telegram_bot_token.get_secret_value()
     chat_id = settings.alert_chat_id
 
+    # The bot's own connection when one is configured. Reported either
+    # way: running under the collector's credentials is a supported
+    # state, not a secret one, and silence about it would make the
+    # hardened and unhardened deployments look identical.
+    from sqlalchemy.engine import make_url
+
+    url = str(settings.bot_database_url or settings.database_url)
+    logging.getLogger("itgraph.bot").info(
+        "connecting to the database as %r", make_url(url).username
+    )
+
     async def run() -> None:
-        database = Database()
+        database = Database(url)
         telegram = Bot(token=token)
         stop = asyncio.Event()
         dispatcher = build_dispatcher(database, chat_id)

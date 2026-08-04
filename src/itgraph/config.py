@@ -262,6 +262,20 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr | None = None
     alert_chat_id: int | None = None
 
+    # The bot's own connection, under the restricted `itgraph_bot` role.
+    # A *separate* setting rather than "point DATABASE_URL at the bot
+    # role when you run the bot", because that instruction is one the
+    # operator has to remember forever and cannot verify: the collector
+    # reads its settings once at startup, so a `.env` pointed at the bot
+    # role keeps working until something restarts, and then every write
+    # fails at once. Two settings cannot be confused that way — each
+    # process reads the one meant for it.
+    #
+    # Unset means the bot uses `database_url` like everything else, which
+    # works and is not hardened. The bot says which of the two it got, so
+    # the unhardened state is visible rather than assumed.
+    bot_database_url: PostgresDsn | None = None
+
     backup_dir: Path = DEFAULT_BACKUP_DIR
 
     # There is no pg_dump on the host — it runs inside the Postgres
