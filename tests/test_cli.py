@@ -1332,3 +1332,60 @@ def test_neither_alert_command_connects_to_telegram(
     monkeypatch.setattr(tg_client, "connected_with_lease", refuse)
 
     assert runner.invoke(app, ["alerts"]).exit_code == 0
+
+
+# Modules an offline command reaches for. Naming them individually
+# rather than importing the whole CLI is what makes a failure say which
+# path went wrong.
+OFFLINE_MODULES = [
+    "itgraph.tg.errors",
+    "itgraph.db.channels",
+    "itgraph.db.floods",
+    "itgraph.db.alerts",
+    "itgraph.db.session_lease",
+    "itgraph.derive.edges",
+    "itgraph.affiliation.run",
+    "itgraph.alerts.run",
+    "itgraph.bot.app",
+]
+
+
+def test_offline_commands_do_not_import_telethon() -> None:
+    """A pass that goes nowhere near Telegram must not load Telethon.
+
+    Not a style point. Telethon logs a line about encryption libraries
+    the moment it is imported, so `itgraph derive` printed evidence of
+    touching Telegram while doing nothing but read Postgres — and this
+    project's clearest promise is that some passes do not. A log line
+    contradicting it makes the promise unverifiable by the cheapest
+    method available, which is reading the output.
+
+    Run in a subprocess because the assertion is about module state, and
+    by the time this test runs the suite has imported Telethon many
+    times over.
+    """
+    import subprocess
+    import sys
+
+    program = (
+        "import sys\n"
+        + "".join(f"import {name}\n" for name in OFFLINE_MODULES)
+        + "assert 'telethon' not in sys.modules, "
+        "sorted(m for m in sys.modules if m.startswith('telethon'))[:3]\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", program],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_the_networked_path_still_carries_the_exception() -> None:
+    """Moving it must not break the name every call site already uses."""
+    from itgraph.tg.client import NotAuthorizedError as from_client
+    from itgraph.tg.errors import NotAuthorizedError as from_errors
+
+    assert from_client is from_errors

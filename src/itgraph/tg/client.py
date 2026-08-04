@@ -10,6 +10,11 @@ from telethon.utils import maybe_async
 
 from itgraph.config import settings
 
+# Re-exported: the exception is defined without Telethon so that
+# `cli.py` can catch it in commands that never connect. Importing it
+# from here still works, and every existing call site does.
+from itgraph.tg.errors import NotAuthorizedError
+
 if TYPE_CHECKING:
     # Under `TYPE_CHECKING` so importing the client does not drag in the
     # database layer; the lease itself is imported inside the function
@@ -25,10 +30,6 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
-
-
-class NotAuthorizedError(RuntimeError):
-    """The session holds no authorized user."""
 
 
 def build_client() -> TelegramClient:

@@ -48,7 +48,12 @@ def _run(body: Coroutine[Any, Any, None]) -> None:
     """
     from itgraph.db.channels import ChannelLookupError
     from itgraph.db.session_lease import LeaseLostError, SessionBusyError
-    from itgraph.tg.client import NotAuthorizedError
+
+    # From `tg.errors`, not `tg.client`: every command runs through this
+    # wrapper, and `tg.client` imports Telethon, which announces itself
+    # on import. A pass that goes nowhere near Telegram must not print a
+    # line implying it did.
+    from itgraph.tg.errors import NotAuthorizedError
 
     try:
         asyncio.run(body)
