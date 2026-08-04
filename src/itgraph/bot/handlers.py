@@ -18,6 +18,7 @@ import logging
 from datetime import UTC, datetime
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -95,7 +96,7 @@ def build_dispatcher(database: Database, chat_id: int) -> Dispatcher:
     dispatcher.message.filter(F.chat.id == chat_id)
     dispatcher.callback_query.filter(F.message.chat.id == chat_id)
 
-    @dispatcher.message(F.text == "/status")
+    @dispatcher.message(Command("status"))
     async def status(message: Message) -> None:
         """What the alerting is doing, so quiet and broken differ.
 
@@ -103,6 +104,20 @@ def build_dispatcher(database: Database, chat_id: int) -> Dispatcher:
         healthy alert bot says nothing for days, and without a way to ask,
         "no alerts" and "the pass has not run since Tuesday" look
         identical.
+
+        ``Command`` rather than an exact text match, and the difference
+        only shows up in a group. Telegram requires a command there to
+        name the bot — ``/status@name`` — and an equality test against
+        ``"/status"`` rejects exactly the form a group has to send. So the
+        obvious filter works in a private chat and silently breaks the
+        moment the alerts are shared with anyone, which is the way round
+        that gets discovered late.
+
+        The other half of working in a group is a BotFather setting
+        rather than code: with privacy mode on — the default — a bot is
+        only handed commands addressed to it, which is precisely the
+        ``/status@name`` form this now accepts. Button presses arrive
+        either way.
         """
         async with database.session() as session:
             lag = await queue_lag(session, now=datetime.now(UTC))

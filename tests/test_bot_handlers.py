@@ -1,23 +1,31 @@
 """The aiogram binding.
 
 Deliberately the thinnest module in the change, so this file is short.
-What it does cover is the guarantee that cannot be checked anywhere else:
-a message from a chat that is not the operator's must not reach a
-handler. The bot's username is discoverable, so strangers will find it,
-and what it can be asked about is the operator's own subscriptions.
+What it does cover is what only this layer decides: which chats are
+answered at all, and which spellings of a command count.
+
+The command-spelling case is here because getting it wrong fails in the
+worst available direction — correctly in a private chat, silently in a
+group, so the bug ships and surfaces the day the alerts are shared.
 """
 
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
+from typing import Any
 
+import pytest
 from aiogram import Bot
+from aiogram.client.session.base import BaseSession
 from aiogram.dispatcher.event.bases import UNHANDLED
-from aiogram.types import Chat, Message, Update
+from aiogram.methods import TelegramMethod
+from aiogram.types import Chat, Message, MessageEntity, Update, User
 
 from itgraph.bot.handlers import build_dispatcher, verdict_keyboard
 from itgraph.db.session import Database
 
 OPERATOR = 4242
 STRANGER = 9999
+BOT_NAME = "itgraph_alerts_bot"
 
 
 def test_the_keyboard_carries_the_alert_it_answers_for() -> None:
@@ -45,17 +53,96 @@ def test_there_is_no_mute_button() -> None:
     assert not any("mute" in label.lower() for label in labels)
 
 
-def message_from(chat_id: int) -> Update:
-    """A `/status` from some chat, as aiogram would deliver it."""
+def command_from(chat_id: int, *, text: str, kind: str = "private") -> Update:
+    """A command from some chat, as aiogram would deliver it."""
     return Update(
         update_id=1,
         message=Message(
             message_id=1,
             date=datetime(2026, 8, 4, 12, 0, tzinfo=UTC),
-            chat=Chat(id=chat_id, type="private"),
-            text="/status",
+            chat=Chat(id=chat_id, type=kind),
+            text=text,
+            entities=[
+                MessageEntity(
+                    type="bot_command", offset=0, length=len(text.split()[0])
+                )
+            ],
         ),
     )
+
+
+class OfflineSession(BaseSession):
+    """Records what the bot tried to send instead of sending it.
+
+    No network in tests is a project rule, and here it also buys the
+    stronger assertion: the handler is proved to have produced a reply,
+    not merely to have been selected by a filter.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.sent: list[str] = []
+
+    async def close(self) -> None:
+        return None
+
+    async def make_request(
+        self,
+        bot: Bot,
+        method: TelegramMethod[Any],
+        timeout: int | None = None,
+    ) -> Any:
+        self.sent.append(getattr(method, "text", ""))
+        return Message(
+            message_id=2,
+            date=datetime(2026, 8, 4, 12, 0, tzinfo=UTC),
+            chat=Chat(id=OPERATOR, type="private"),
+        )
+
+    async def stream_content(
+        self,
+        url: str,
+        headers: dict[str, Any] | None = None,
+        timeout: int = 30,
+        chunk_size: int = 65536,
+        raise_for_status: bool = True,
+    ) -> AsyncGenerator[bytes]:
+        yield b""  # pragma: no cover - never streamed here
+
+
+def offline_bot() -> Bot:
+    """A bot that neither reaches the network nor asks who it is.
+
+    ``Command`` validates a ``/status@name`` mention against the bot's
+    username, which it would otherwise fetch over the network. Seeding
+    the cache keeps this offline while still exercising the mention path
+    — which is the point, because that is the form a group sends.
+    """
+    bot = Bot(
+        token="1:test-bot-token-not-a-real-one", session=OfflineSession()
+    )
+    bot._me = User(id=1, is_bot=True, first_name="itgraph", username=BOT_NAME)
+    return bot
+
+
+async def feed(
+    database_url: str, chat_id: int, *, text: str, kind: str = "private"
+) -> tuple[object, list[str]]:
+    """Drive one update through a real dispatcher. Returns outcome and replies."""
+    database = Database(database_url)
+    try:
+        dispatcher = build_dispatcher(database, OPERATOR)
+        bot = offline_bot()
+        session: OfflineSession = bot.session  # type: ignore[assignment]
+        try:
+            outcome = await dispatcher.feed_update(
+                bot, command_from(chat_id, text=text, kind=kind)
+            )
+        finally:
+            await bot.session.close()
+        return outcome, session.sent
+    finally:
+        await database.dispose()
 
 
 async def test_a_stranger_is_not_answered(database_url: str) -> None:
@@ -65,24 +152,62 @@ async def test_a_stranger_is_not_answered(database_url: str) -> None:
     because what matters is the outcome: an outsider asking `/status`
     learns nothing about the inventory.
     """
-    database = Database(database_url)
-    try:
-        dispatcher = build_dispatcher(database, OPERATOR)
-        bot = Bot(token="1:test-bot-token-not-a-real-one")
-        try:
-            outcome = await dispatcher.feed_update(bot, message_from(STRANGER))
-        finally:
-            await bot.session.close()
-    finally:
-        await database.dispose()
+    outcome, replies = await feed(database_url, STRANGER, text="/status")
 
     # `UNHANDLED` is aiogram's way of saying no handler matched.
     assert outcome is UNHANDLED
+    assert replies == []
 
 
-def test_the_two_interactions_are_registered(database_url: str) -> None:
+async def test_status_answers_in_a_private_chat(database_url: str) -> None:
+    _, replies = await feed(database_url, OPERATOR, text="/status")
+
+    assert len(replies) == 1
+    assert "оповещений всего" in replies[0]
+
+
+@pytest.mark.parametrize(
+    "text", [f"/status@{BOT_NAME}", "/status"], ids=["mentioned", "plain"]
+)
+async def test_status_answers_in_a_group_however_it_is_addressed(
+    database_url: str, text: str
+) -> None:
+    """The bug this replaced: an exact match on `"/status"`.
+
+    Telegram requires a command in a group to name the bot, and with
+    privacy mode on — the default — that is the only form the bot is
+    handed at all. An equality test therefore worked in a private chat
+    and rejected precisely what a group sends, which is the way round
+    that ships.
+    """
+    _, replies = await feed(
+        database_url, OPERATOR, text=text, kind="supergroup"
+    )
+
+    assert len(replies) == 1
+
+
+async def test_a_command_for_another_bot_is_not_answered(
+    database_url: str,
+) -> None:
+    """Two bots in one group must not both reply."""
+    outcome, replies = await feed(
+        database_url,
+        OPERATOR,
+        text="/status@some_other_bot",
+        kind="supergroup",
+    )
+
+    assert outcome is UNHANDLED
+    assert replies == []
+
+
+async def test_the_two_interactions_are_registered(database_url: str) -> None:
     database = Database(database_url)
-    dispatcher = build_dispatcher(database, OPERATOR)
+    try:
+        dispatcher = build_dispatcher(database, OPERATOR)
+    finally:
+        await database.dispose()
 
     assert len(dispatcher.message.handlers) == 1
     assert len(dispatcher.callback_query.handlers) == 1
