@@ -34,6 +34,11 @@ __all__ = [
     "AffiliationCandidate",
     "AffiliationDecision",
     "AffiliationRun",
+    "Alert",
+    "AlertDelivery",
+    "AlertFeedback",
+    "AlertKind",
+    "AlertVerdict",
     "BackfillState",
     "BackfillStatus",
     "Base",
@@ -181,6 +186,46 @@ class CollectionCommand(enum.StrEnum):
     METADATA = "metadata"
     ADD = "add"
     WATCH = "watch"
+
+
+class AlertKind(enum.StrEnum):
+    """What an alert is about.
+
+    Only what something can produce today. The scoring change will add
+    kinds for the rate-based signals, and adding them there rather than
+    here is the point: a value nothing can raise is a promise made in a
+    type, and a reader cannot tell it from a feature that quietly stopped
+    working.
+    """
+
+    REPOST_CASCADE = "repost_cascade"
+
+
+class AlertDelivery(enum.StrEnum):
+    """How an alert reached the operator.
+
+    Distinguished because the two are different products. ``DIRECT`` is a
+    message about one post, sent when it happened; ``DIGEST`` is a line
+    in a summary, and a reader treats it as a record rather than as news.
+    Which one an alert got is also how the cap is accounted for, so it is
+    a fact about delivery rather than a display preference.
+    """
+
+    DIRECT = "direct"
+    DIGEST = "digest"
+
+
+class AlertVerdict(enum.StrEnum):
+    """What the operator thought of an alert.
+
+    The only labelled data any later threshold work will have, which is
+    why the buttons exist from the first message rather than from the
+    first complaint about volume. An alert with no row here is
+    unanswered, which is deliberately not the same as ``BORING``.
+    """
+
+    USEFUL = "useful"
+    BORING = "boring"
 
 
 class BackfillStatus(enum.StrEnum):
@@ -964,6 +1009,144 @@ class AffiliationCandidate(Base):
         return (
             f"AffiliationCandidate(a={self.channel_a}, b={self.channel_b}, "
             f"score={self.score:.3f}, decision={self.decision.value!r})"
+        )
+
+
+class Alert(Base):
+    """One thing worth telling the operator, and whether they were told.
+
+    The interface between detection and delivery, and deliberately the
+    *only* one: a pass writes rows here and a bot reads them, so either
+    can move to another machine without the other changing. They will not
+    always be on one machine — the collector needs a residential IP and a
+    Bot API token does not — and a function call would have to become a
+    table later, at a moment when something else is also changing.
+
+    **The unique constraint is the escalation logic.** A post reaching
+    two families raises one row; the same post reaching three raises a
+    second, because the tuple differs; a post standing still raises
+    nothing more, because it does not. There is therefore no "have I
+    already said this" flag and no counter to get wrong, and a re-run
+    cannot double-send. Anything added beside this constraint to track
+    what was already raised is duplicating it.
+
+    **What is stored is what it took to decide, not what will be shown.**
+    No rendered message, no copy of which channels carried the post —
+    that is a query over ``edges`` at rendering time, and storing it
+    would put a derived measure in an observation table, the trade
+    ``Edge`` already refuses when it carries two dates and declines to
+    store the interval between them. ``value`` is the exception and
+    earns it: it is the number that crossed the threshold, and the
+    feedback record has to be about something that does not move.
+
+    The visible consequence is that a digest read in the morning shows
+    fresher numbers than the moment the alert was raised. That is
+    intended. The question a reader has is how far a post went, not how
+    far it had gone when a scheduled job noticed.
+
+    Evidence as nullable per-kind columns was the alternative, following
+    ``AffiliationCandidate``, and it is right there and wrong here: the
+    scoring change brings three rate-based kinds with four numbers each,
+    and a table with fourteen mostly-null columns would describe the
+    union of its producers rather than what an alert is.
+    """
+
+    __tablename__ = "alerts"
+    __table_args__ = (
+        # An alert about a post nothing collected should not be
+        # representable. Same composite key `MessageMetric` references,
+        # so it costs no index of its own.
+        ForeignKeyConstraint(
+            ["channel_id", "msg_id"],
+            ["raw_messages.channel_id", "raw_messages.msg_id"],
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "kind",
+            "channel_id",
+            "msg_id",
+            "band",
+            name="uq_alerts_post_band",
+        ),
+        # The bot's one access path, asked on every tick forever: what is
+        # still outstanding. Partial, because the answer is almost always
+        # a handful of rows out of everything ever raised.
+        Index(
+            "ix_alerts_undelivered",
+            "raised_at",
+            postgresql_where=text("delivered_at IS NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+
+    kind: Mapped[AlertKind] = mapped_column(_pg_enum(AlertKind, "alert_kind"))
+
+    channel_id: Mapped[int] = mapped_column(BigInteger)
+    msg_id: Mapped[int] = mapped_column(BigInteger)
+
+    # Which configured threshold tier this crossed, and what the measure
+    # actually was. The band is what makes escalation a row rather than a
+    # decision; the value is what the operator's verdict was about.
+    band: Mapped[int] = mapped_column(Integer)
+    value: Mapped[float] = mapped_column(Float)
+
+    raised_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    # Null until it has actually been sent. Never set in the same
+    # transaction as the send is attempted: see `db/alerts.py` for why
+    # at-least-once is the honest guarantee here.
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    delivery: Mapped[AlertDelivery | None] = mapped_column(
+        _pg_enum(AlertDelivery, "alert_delivery")
+    )
+
+    attempts: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+    def __repr__(self) -> str:
+        return (
+            f"Alert(kind={self.kind.value!r}, channel_id={self.channel_id}, "
+            f"msg_id={self.msg_id}, band={self.band})"
+        )
+
+
+class AlertFeedback(Base):
+    """What the operator thought of one alert.
+
+    Keyed by the alert rather than appended, so a changed mind replaces
+    an earlier verdict instead of accumulating beside it — the question
+    this table answers is "what do they think", not "what have they
+    thought".
+
+    An alert with no row here is **unanswered**, which is not a neutral
+    verdict and must not be read as one. Most alerts will have no row;
+    treating that as mild approval would make the labelled data say the
+    opposite of what happened.
+    """
+
+    __tablename__ = "alert_feedback"
+
+    alert_id: Mapped[int] = mapped_column(
+        ForeignKey("alerts.id", ondelete="CASCADE"),
+        primary_key=True,
+        autoincrement=False,
+    )
+    verdict: Mapped[AlertVerdict] = mapped_column(
+        _pg_enum(AlertVerdict, "alert_verdict")
+    )
+    given_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"AlertFeedback(alert_id={self.alert_id}, "
+            f"verdict={self.verdict.value!r})"
         )
 
 

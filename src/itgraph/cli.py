@@ -623,6 +623,122 @@ def watch_status() -> None:
 
 
 @app.command()
+def alerts(
+    window: Annotated[
+        float | None,
+        typer.Option(
+            "--window",
+            help="Hours after publication a repost still counts.",
+        ),
+    ] = None,
+) -> None:
+    """Find posts being carried by several unaffiliated channels.
+
+    Reads the derived edges and writes alerts; issues no Telegram request
+    and takes no session lease, so it runs beside a collector. Safe to
+    put on a short schedule — a second pass over unchanged edges writes
+    nothing.
+
+    Its evidence is only as fresh as `itgraph derive`, and the summary
+    says how stale that is. That line matters: an alerting system's
+    healthy state is silence, so "nothing travelled" and "nothing was
+    derived" have to be distinguishable.
+
+    Expect about one alert a day. That is the measured rate at the only
+    threshold that is not noise, and it is why the delivery machinery
+    exists before the scoring that will fill it.
+    """
+    from datetime import timedelta
+
+    from itgraph.alerts.run import run_cascades
+    from itgraph.db.session import Database
+
+    async def run() -> None:
+        database = Database()
+        try:
+            summary = await run_cascades(
+                database,
+                window=(
+                    timedelta(hours=window) if window is not None else None
+                ),
+            )
+        finally:
+            await database.dispose()
+        typer.echo(summary.line())
+
+    _run(run())
+
+
+@app.command()
+def bot() -> None:
+    """Deliver alerts to the operator, and record what they thought.
+
+    Talks to the Bot API, holds no Telethon session and takes no session
+    lease, so it runs while collection runs. Point it at the database
+    with the restricted `itgraph_bot` role rather than the collector's
+    credentials — see the bot section of src/itgraph/README.md.
+    """
+    import signal
+
+    from aiogram import Bot
+
+    from itgraph.bot.app import run_bot
+    from itgraph.bot.handlers import BotSender, build_dispatcher
+
+    # Inside the body, like every other import that reads the
+    # environment: `itgraph --help` has to work on a machine that has no
+    # `.env` yet, and a module-level `settings` would make it exit 1.
+    from itgraph.config import settings
+    from itgraph.db.session import Database
+
+    if settings.telegram_bot_token is None or settings.alert_chat_id is None:
+        typer.secho(
+            "TELEGRAM_BOT_TOKEN and ALERT_CHAT_ID must both be set; see the "
+            "bot section of src/itgraph/README.md.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    token = settings.telegram_bot_token.get_secret_value()
+    chat_id = settings.alert_chat_id
+
+    async def run() -> None:
+        database = Database()
+        telegram = Bot(token=token)
+        stop = asyncio.Event()
+        dispatcher = build_dispatcher(database, chat_id)
+        try:
+            loop = asyncio.get_running_loop()
+            for received in (signal.SIGINT, signal.SIGTERM):
+                with suppress(NotImplementedError):
+                    loop.add_signal_handler(received, stop.set)
+
+            # Delivery and the handlers are separate concerns on one
+            # connection: one pushes alerts out, the other takes the
+            # operator's answers back. Neither may stall the other, so
+            # they run as siblings rather than in sequence.
+            delivery = asyncio.create_task(
+                run_bot(database, BotSender(telegram, chat_id), stop=stop)
+            )
+            polling = asyncio.create_task(
+                dispatcher.start_polling(telegram, handle_signals=False)
+            )
+            await stop.wait()
+            await dispatcher.stop_polling()
+            with suppress(asyncio.CancelledError):
+                polling.cancel()
+                await polling
+            stats = await delivery
+        finally:
+            await telegram.session.close()
+            await database.dispose()
+        typer.echo(stats.line())
+
+    _run(run())
+
+
+@app.command()
 def derive(
     rebuild: Annotated[
         bool,

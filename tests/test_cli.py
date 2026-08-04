@@ -1263,3 +1263,72 @@ def test_watch_status_needs_no_lease(
     assert result.exit_code == 0, result.output
     assert "1 due now" in result.output
     assert "snapshots:" in result.output
+
+
+def test_alerts_reports_what_it_raised(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    """The pass takes no session lease, so it runs beside a collector."""
+    from itgraph.db import session_lease as lease_module
+
+    use_test_database(monkeypatch, database_url)
+
+    @asynccontextmanager
+    async def refuse(command: str, **kwargs: Any) -> AsyncIterator[None]:
+        raise AssertionError("the alert pass must take no session lease")
+        yield  # pragma: no cover - unreachable by design
+
+    monkeypatch.setattr(lease_module, "session_lease", refuse)
+
+    result = runner.invoke(app, ["alerts"])
+
+    assert result.exit_code == 0, result.output
+    assert "new alert(s)" in result.output
+
+
+def test_alerts_reports_stale_evidence(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    """Silence is this system's healthy state, so staleness must be visible.
+
+    Without this line, "nothing travelled" and "`derive` has not run
+    since Tuesday" are the same observation. What must *not* happen is
+    the reverse: a quiet stretch reported as a broken pipeline.
+    """
+    use_test_database(monkeypatch, database_url)
+
+    result = runner.invoke(app, ["alerts"])
+
+    assert result.exit_code == 0, result.output
+    assert "nothing reposted in the window" in result.output
+
+
+def test_bot_refuses_without_a_token(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    from itgraph.config import settings as live_settings
+
+    use_test_database(monkeypatch, database_url)
+    monkeypatch.setattr(live_settings, "telegram_bot_token", None)
+    monkeypatch.setattr(live_settings, "alert_chat_id", None)
+
+    result = runner.invoke(app, ["bot"])
+
+    assert result.exit_code == 1
+    assert "TELEGRAM_BOT_TOKEN" in result.output
+
+
+def test_neither_alert_command_connects_to_telegram(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+
+    @asynccontextmanager
+    async def refuse(command: str) -> AsyncIterator[None]:
+        raise AssertionError("alerting must not connect over MTProto")
+        yield  # pragma: no cover - unreachable by design
+
+    monkeypatch.setattr(tg_client, "connected", refuse)
+    monkeypatch.setattr(tg_client, "connected_with_lease", refuse)
+
+    assert runner.invoke(app, ["alerts"]).exit_code == 0

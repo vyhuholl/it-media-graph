@@ -95,6 +95,8 @@ The corollary is a rule any scoring pass has to obey. Samples are irregular by d
 
 The queue is taken from the suggestion above; `arq` is not. It is a Redis job queue, and adding Redis to schedule a single sequential worker contradicts the Postgres-only rule for no gain — the whole dispatch is one indexed `due_at` query. Concurrency is the one thing this must not have anyway: Telegram's limits are per account, so parallel workers reach the same ceiling faster and look worse doing it.
 
+**Measured, once the graph existed: the cascade signal is real and thin.** Counting distinct unaffiliated families carrying one post, over the densely collected last 30 and 60 days — one family is ~19 events a day and is noise; two is ~1.1; three is ~0.35; four or more happened once in two months. There is almost no band between noise and silence. So "what is being reposted right now" is a genuine signal and not, on its own, a product — which is why post-level *virality* rather than post-level *travel* is what carries the realtime claim above, and why the delivery machinery was built before the scoring that will fill it rather than alongside.
+
 Alert delivery: a dedicated aiogram bot, in its own dependency group and its own process, reading an alert table. That interface is the seam that lets the bot move to a different machine later without the collector following it — the collector needs a residential IP and the Bot API does not.
 
 ## Digests

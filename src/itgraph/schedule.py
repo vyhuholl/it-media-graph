@@ -31,6 +31,7 @@ __all__ = [
     "backoff_factor",
     "idle_interval",
     "in_quiet_hours",
+    "in_quiet_window",
     "next_channel_poll",
     "next_sample_at",
     "sample_offsets",
@@ -196,25 +197,41 @@ def window_size(posts_per_day: float | None) -> int:
     )
 
 
-def in_quiet_hours(moment: datetime) -> bool:
-    """Whether the loop should be asleep at this moment.
+def in_quiet_window(
+    moment: datetime, *, start: int, end: int, zone: str
+) -> bool:
+    """Whether a moment falls inside a nightly window.
 
-    Read in the configured zone, not the machine's: the point is the
-    operator's night, and the machine may not be in it. Equal bounds mean
-    no quiet window, which is how it is switched off — an operator who
-    sets both to the same hour means "always on", not "quiet for zero
-    seconds and also for a whole day".
+    Takes the window rather than reading a setting, because there are two
+    of them now and they mean different things: the collector's is about
+    not making requests, the bot's about not making noise. They coincide
+    today only because both are the operator's night, and a shared
+    setting would make diverging cost a migration.
+
+    Read in the given zone, not the machine's — the point is somebody's
+    night, and the machine may not be in it. Equal bounds mean no window
+    at all, which is how it is switched off: an operator setting both to
+    the same hour means "always on", not "quiet for zero seconds and also
+    for a whole day".
     """
     from zoneinfo import ZoneInfo
 
-    start = settings.watch_quiet_from_hour
-    end = settings.watch_quiet_to_hour
     if start == end:
         return False
 
-    local = moment.astimezone(ZoneInfo(settings.watch_timezone))
+    local = moment.astimezone(ZoneInfo(zone))
     now = time(hour=local.hour, minute=local.minute)
     if start < end:
         return time(hour=start) <= now < time(hour=end)
-    # Wrapping past midnight: 22:00–06:00 is two intervals, not one.
+    # Wrapping past midnight: 22:00-06:00 is two intervals, not one.
     return now >= time(hour=start) or now < time(hour=end)
+
+
+def in_quiet_hours(moment: datetime) -> bool:
+    """Whether the *collector* should be asleep at this moment."""
+    return in_quiet_window(
+        moment,
+        start=settings.watch_quiet_from_hour,
+        end=settings.watch_quiet_to_hour,
+        zone=settings.watch_timezone,
+    )

@@ -200,6 +200,68 @@ class Settings(BaseSettings):
     # in principle overlap before one of them notices and stops.
     watch_lease_check_seconds: float = Field(default=300.0, gt=0)
 
+    # --- alerting -----------------------------------------------------
+    #
+    # The bands are measured rather than chosen. Over the densely
+    # collected last 30 and 60 days, with intra-family reposts excluded,
+    # a post reaching this many distinct families within the window:
+    #
+    #     1 family  → ~19 alerts/day   "somebody reposted this" — noise
+    #     2         → ~1.1
+    #     3         → ~0.35            one every three days
+    #     4+        → ~0               one case in two months
+    #
+    # There is almost no band between noise and silence, which is why
+    # this stops at three: a fourth would never fire and would mislead
+    # whoever read it next.
+    alert_cascade_bands: tuple[int, ...] = (2, 3)
+
+    # How long after publication a repost still counts toward a cascade.
+    # Not a correctness filter — a post picked up after three days did
+    # travel — but what makes this "moving now" rather than "has moved".
+    # Measured: six hours catches 73% of what twenty-four does, and the
+    # median crossing is at 4h37m, so most of what a longer window adds
+    # arrives late enough to belong in a weekly summary.
+    alert_cascade_window_hours: float = Field(default=6.0, gt=0)
+
+    # Past this, the pass says its evidence is stale. Derivation is not
+    # continuous and a full pass takes seconds, so anything approaching
+    # an hour means nothing is running it.
+    alert_stale_edges_hours: float = Field(default=2.0, gt=0)
+
+    # How many alerts may be sent directly per day. What exceeds it is
+    # held for the digest, never dropped. At the measured ~1.1/day this
+    # will not bind for weeks; it exists now because it is cheap now and
+    # because the scoring change is what will load it.
+    alert_daily_cap: int = Field(default=20, ge=1)
+
+    # When the summary of everything held goes out, in `watch_timezone`.
+    alert_digest_hour: int = Field(default=9, ge=0, le=23)
+
+    # The bot's own quiet window. Separate from the collector's because
+    # they mean different things — one is about not making requests, the
+    # other about not making noise — and equal by default because today
+    # both are the operator's night.
+    alert_quiet_from_hour: int = Field(default=2, ge=0, le=23)
+    alert_quiet_to_hour: int = Field(default=7, ge=0, le=23)
+
+    # How often the bot looks for work regardless of any notification.
+    # This is the correctness mechanism: `NOTIFY` is not durable, so a
+    # bot that was down when one fired learns about the alert here or
+    # not at all.
+    alert_poll_seconds: float = Field(default=60.0, gt=0)
+
+    # How many failed sends before an alert is reported as stuck rather
+    # than quietly retried forever.
+    alert_failure_report_after: int = Field(default=3, ge=1)
+
+    # The bot's credentials and its one recipient. The token is the
+    # credential most likely to end up on a machine the operator does not
+    # own; it is never committed, and the bot's database role is what
+    # bounds the damage if it leaks.
+    telegram_bot_token: SecretStr | None = None
+    alert_chat_id: int | None = None
+
     backup_dir: Path = DEFAULT_BACKUP_DIR
 
     # There is no pg_dump on the host — it runs inside the Postgres
@@ -285,6 +347,38 @@ class Settings(BaseSettings):
                 f"inside watch_horizon_hours ({self.watch_horizon_hours} h): "
                 "a post old enough for that sample would already be past the "
                 "horizon, so the sample could never be taken"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _digest_is_not_inside_quiet_hours(self) -> Self:
+        """Refuse a digest hour the bot would never be allowed to speak at.
+
+        The digest is what makes quiet hours a delay rather than a drop,
+        so scheduling it inside them would hold every alert and then
+        never deliver the summary — silence that looks exactly like
+        having nothing to report.
+
+        Checked here rather than re-checked at send time on purpose. A
+        second guard in the delivery path would turn a bad configuration
+        into a bot that runs correctly and says nothing, which is the one
+        failure this whole feature is least able to notice.
+        """
+        start = self.alert_quiet_from_hour
+        end = self.alert_quiet_to_hour
+        if start == end:
+            return self
+
+        hour = self.alert_digest_hour
+        inside = (
+            start <= hour < end if start < end else hour >= start or hour < end
+        )
+        if inside:
+            raise ValueError(
+                f"alert_digest_hour ({hour}) falls inside the bot's quiet "
+                f"window ({start}:00–{end}:00): the digest would be held by "
+                "the same rule it exists to compensate for, and nothing "
+                "held would ever be delivered"
             )
         return self
 

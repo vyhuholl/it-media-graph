@@ -30,6 +30,13 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `affiliation/detect.py` | Merging the signals into one ranked candidate list; the parameters and their validation |
 | `affiliation/run.py` | The detection pass: load, score, store, report. Touches no network |
 | `affiliation/` | Recognizing that several channels have one author. Proposes; never decides |
+| `alerts/cascade.py` | Which posts are travelling: distinct unaffiliated families, pure functions over edge rows |
+| `alerts/run.py` | The detection pass: load, detect, store, report. Touches no network and no snapshots |
+| `alerts/` | Deciding that something is worth telling the operator. Writes the queue; sends nothing |
+| `bot/render.py` | An alert as a message a person reads; pure, so the wording is testable |
+| `bot/app.py` | Delivery: claim, send, mark. The poll is correctness, the notification is speed |
+| `bot/handlers.py` | The aiogram binding — the only module that imports aiogram or holds the token |
+| `bot/` | Telling the operator. Bot API only: no session, no lease, no collection writes |
 | `db/session.py` | `Database`: engine + session factory |
 | `db/models.py` | SQLAlchemy models, `Base` |
 | `db/channels.py` | The channel inventory: upsert, review, listing, resolution state, and the only place a family is confirmed, rejected or withdrawn |
@@ -38,6 +45,7 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `db/edges.py` | The derived tables: `edges`, `pending_mentions` and the sources that order them |
 | `db/raw.py` | Writes into the raw layer; nothing here reads a payload |
 | `db/metrics.py` | Writes into the snapshot layer: append-only readings of a post's counters |
+| `db/alerts.py` | The alert queue: raising, claiming, delivering, and what the operator thought |
 | `db/poll.py` | The poll queue: which channel is due, and when it is due again. Timing only |
 | `db/floods.py` | The record of rate limits: one row per wait, and the two questions asked of it |
 | `db/backfill.py` | Which channels to walk, how far each got, and why one stopped |
