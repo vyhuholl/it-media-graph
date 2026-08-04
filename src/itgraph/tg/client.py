@@ -32,8 +32,52 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 
+def _proxy() -> dict[str, object] | None:
+    """The configured proxy in Telethon's shape, or ``None`` for direct.
+
+    Everything that knows a proxy exists is in this function and the two
+    lines below it: no pass, no command and no other module is aware.
+    That falls out of this being the only place a ``TelegramClient`` is
+    constructed, and it means a pass written later is proxied without
+    being written for it.
+
+    Credentials are omitted rather than passed as ``None``, because a
+    proxy that takes no authentication is ordinary.
+    """
+    if settings.proxy_host is None:
+        return None
+
+    proxy: dict[str, object] = {
+        "proxy_type": str(settings.proxy_type),
+        "addr": settings.proxy_host,
+        "port": settings.proxy_port,
+    }
+    if settings.proxy_username is not None:
+        proxy["username"] = settings.proxy_username
+    if settings.proxy_password is not None:
+        proxy["password"] = settings.proxy_password.get_secret_value()
+    return proxy
+
+
 def build_client() -> TelegramClient:
     """Construct the client. Does not connect and does not authorize."""
+    proxy = _proxy()
+    if proxy is None:
+        logger.info("Telegram route: direct, no proxy configured")
+    else:
+        # The host and the port, never the password. This line is the
+        # only way to tell a proxied deployment from one whose `.env`
+        # did not get copied or whose unit file lost its
+        # `EnvironmentFile` — a state in which everything works, nothing
+        # errors, and the account reaches Telegram from an address the
+        # operator believes it is not using.
+        logger.info(
+            "Telegram route: %s proxy at %s:%s",
+            settings.proxy_type,
+            settings.proxy_host,
+            settings.proxy_port,
+        )
+
     return TelegramClient(
         str(settings.telegram_session),
         settings.telegram_api_id,
@@ -47,6 +91,21 @@ def build_client() -> TelegramClient:
         # alternative to waiting is the behaviour that gets accounts
         # banned.
         flood_sleep_threshold=settings.flood_sleep_threshold,
+        # A configured proxy that cannot be reached raises out of
+        # `connect`, and the command exits non-zero. **There is no
+        # fallback to a direct connection, and there must never be one**
+        # — not a `try` around the connect, not a retry that drops the
+        # proxy, not a library option that falls back on its own. A
+        # collector that quietly connects directly still works, which is
+        # exactly the problem: green logs, a running process, and an
+        # address that was supposed to be hidden. A safety feature whose
+        # failure mode is appearing to have worked is worse than not
+        # having it.
+        #
+        # Absent rather than `None` when nothing is configured, so a
+        # direct connection is byte-for-byte the call it was before
+        # proxies were supported.
+        **({"proxy": proxy} if proxy is not None else {}),
     )
 
 

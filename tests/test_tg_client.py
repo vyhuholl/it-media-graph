@@ -1,12 +1,19 @@
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import SecretStr
 
+from itgraph.config import ProxyType
 from itgraph.db import session_lease as session_lease_module
 from itgraph.tg import client as tg_client
+
+# Obviously fake, because `tests/` is not excluded from the gitleaks
+# hook and a realistic-looking value would trip it.
+PROXY_PASSWORD = "test-proxy-password"
 
 
 class FakeClient:
@@ -40,6 +47,115 @@ def test_build_client_passes_device_metadata(
 
     assert captured["device_model"] == tg_client.settings.device_model
     assert captured["args"][1] == tg_client.settings.telegram_api_id
+
+
+@pytest.fixture
+def captured(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """What `build_client` would hand to Telethon. Constructs nothing."""
+    seen: dict[str, Any] = {}
+
+    def spy(*args: Any, **kwargs: Any) -> object:
+        seen.update(kwargs)
+        seen["args"] = args
+        return object()
+
+    monkeypatch.setattr(tg_client, "TelegramClient", spy)
+    return seen
+
+
+def configure_proxy(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> None:
+    values: dict[str, Any] = {
+        "proxy_type": ProxyType.SOCKS5,
+        "proxy_host": "proxy.invalid",
+        "proxy_port": 1080,
+        "proxy_username": None,
+        "proxy_password": None,
+    }
+    values.update(overrides)
+    for name, value in values.items():
+        monkeypatch.setattr(tg_client.settings, name, value)
+
+
+def test_a_configured_proxy_reaches_telethon(
+    captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configure_proxy(monkeypatch)
+    tg_client.build_client()
+
+    assert captured["proxy"] == {
+        "proxy_type": "socks5",
+        "addr": "proxy.invalid",
+        "port": 1080,
+    }
+
+
+def test_an_unset_proxy_passes_nothing(captured: dict[str, Any]) -> None:
+    """Not `None`, not an empty tuple — the argument is absent.
+
+    A direct connection has to be the call it was before proxies were
+    supported, so that configuring nothing changes nothing.
+    """
+    tg_client.build_client()
+
+    assert "proxy" not in captured
+
+
+def test_proxy_credentials_are_passed_when_set(
+    captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configure_proxy(
+        monkeypatch,
+        proxy_username="collector",
+        proxy_password=SecretStr(PROXY_PASSWORD),
+    )
+    tg_client.build_client()
+
+    assert captured["proxy"]["username"] == "collector"
+    assert captured["proxy"]["password"] == PROXY_PASSWORD
+
+
+def test_absent_credentials_are_omitted_not_none(
+    captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A proxy that takes no authentication is ordinary."""
+    configure_proxy(monkeypatch)
+    tg_client.build_client()
+
+    assert "username" not in captured["proxy"]
+    assert "password" not in captured["proxy"]
+
+
+def test_the_route_is_reported(
+    captured: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The one way to notice a deployment that came up unproxied.
+
+    A `.env` that did not get copied produces a collector that works,
+    logs nothing unusual, and reaches Telegram from the address the
+    proxy exists to hide.
+    """
+    configure_proxy(
+        monkeypatch,
+        proxy_username="collector",
+        proxy_password=SecretStr(PROXY_PASSWORD),
+    )
+    with caplog.at_level(logging.INFO, logger="itgraph.tg.client"):
+        tg_client.build_client()
+
+    assert "proxy.invalid" in caplog.text
+    assert "1080" in caplog.text
+    assert PROXY_PASSWORD not in caplog.text
+
+
+def test_a_direct_route_is_reported_too(
+    captured: dict[str, Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.INFO, logger="itgraph.tg.client"):
+        tg_client.build_client()
+
+    assert "direct" in caplog.text
 
 
 async def test_connected_yields_and_disconnects(fake: MagicMock) -> None:

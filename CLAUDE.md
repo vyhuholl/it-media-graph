@@ -44,6 +44,7 @@ uv run itgraph --help    # CLI entrypoint (typer)
 ## Never commit
 - `.env`, `*.session`, `*.session-journal` — a session file is full account access
 - the Telegram **bot token**. Unlike the api hash it plausibly ends up on a machine you do not own, which is why the bot also gets its own database role: the role is what bounds the damage when the token leaks, and a token in a migration or a fixture defeats both
+- the **proxy password** (`PROXY_PASSWORD`), on the same footing as the api hash. It buys someone else a shared exit billed to the operator, and — worse — an address the collector's traffic is known to come from
 - any dump of the user's own subscriptions or real collected channel data
 - commenter user IDs or any other personal data; store hashed, keep out of git
 

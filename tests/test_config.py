@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from itgraph.config import Settings
+from itgraph.config import ProxyType, Settings
 
 # Deliberately not shaped like a real api_hash (32 lowercase hex): a secret
 # scanner cannot tell a fake one from the real thing, so the fake has to be
@@ -119,3 +119,111 @@ def test_the_bot_connection_is_optional(env: pytest.MonkeyPatch) -> None:
     the state is visible rather than assumed.
     """
     assert build().bot_database_url is None
+
+
+# Not a plausible password: `tests/` is deliberately not excluded from
+# the gitleaks hook, so a realistic-looking fake would trip it — and the
+# fix is an obviously fake value, not an exclude.
+PROXY_PASSWORD = "test-proxy-password"
+
+PROXY_ENV = {
+    "PROXY_TYPE": "socks5",
+    "PROXY_HOST": "proxy.invalid",
+    "PROXY_PORT": "1080",
+}
+
+
+def test_no_proxy_is_the_default(env: pytest.MonkeyPatch) -> None:
+    """Unset means a direct connection: what a laptop wants."""
+    settings = build()
+    assert settings.proxy_host is None
+    assert settings.proxy_type is None
+
+
+def test_a_complete_proxy_is_accepted(env: pytest.MonkeyPatch) -> None:
+    for key, value in PROXY_ENV.items():
+        env.setenv(key, value)
+    settings = build()
+
+    assert settings.proxy_type is ProxyType.SOCKS5
+    assert settings.proxy_host == "proxy.invalid"
+    assert settings.proxy_port == 1080
+    # Credentials are optional: plenty of proxies take none.
+    assert settings.proxy_username is None
+    assert settings.proxy_password is None
+
+
+def test_proxy_credentials_are_accepted(env: pytest.MonkeyPatch) -> None:
+    for key, value in PROXY_ENV.items():
+        env.setenv(key, value)
+    env.setenv("PROXY_USERNAME", "collector")
+    env.setenv("PROXY_PASSWORD", PROXY_PASSWORD)
+    settings = build()
+
+    assert settings.proxy_username == "collector"
+    assert settings.proxy_password is not None
+    assert settings.proxy_password.get_secret_value() == PROXY_PASSWORD
+
+
+def test_the_proxy_password_is_not_printed(env: pytest.MonkeyPatch) -> None:
+    """On the same footing as the api hash."""
+    for key, value in PROXY_ENV.items():
+        env.setenv(key, value)
+    env.setenv("PROXY_PASSWORD", PROXY_PASSWORD)
+
+    assert PROXY_PASSWORD not in repr(build())
+
+
+def test_an_unsupported_proxy_type_is_refused(env: pytest.MonkeyPatch) -> None:
+    """Refused here rather than by Telethon at the first connection."""
+    for key, value in PROXY_ENV.items():
+        env.setenv(key, value)
+    env.setenv("PROXY_TYPE", "mtproxy")
+
+    with pytest.raises(ValidationError, match="proxy_type"):
+        build()
+
+
+def test_a_host_without_a_port_is_refused(env: pytest.MonkeyPatch) -> None:
+    env.setenv("PROXY_TYPE", "socks5")
+    env.setenv("PROXY_HOST", "proxy.invalid")
+
+    with pytest.raises(ValidationError, match="proxy_port"):
+        build()
+
+
+def test_a_host_without_a_type_is_refused(env: pytest.MonkeyPatch) -> None:
+    env.setenv("PROXY_HOST", "proxy.invalid")
+    env.setenv("PROXY_PORT", "1080")
+
+    with pytest.raises(ValidationError, match="proxy_type"):
+        build()
+
+
+def test_a_port_without_a_host_is_refused(env: pytest.MonkeyPatch) -> None:
+    """The dangerous half of a partial configuration.
+
+    A host without a port fails loudly at the connection; a port without
+    a host would connect directly while every setting around it says the
+    connection is proxied.
+    """
+    env.setenv("PROXY_TYPE", "socks5")
+    env.setenv("PROXY_PORT", "1080")
+
+    with pytest.raises(ValidationError, match="without proxy_host"):
+        build()
+
+
+def test_credentials_without_a_host_are_refused(
+    env: pytest.MonkeyPatch,
+) -> None:
+    env.setenv("PROXY_USERNAME", "collector")
+    env.setenv("PROXY_PASSWORD", PROXY_PASSWORD)
+
+    with pytest.raises(ValidationError, match="without proxy_host") as caught:
+        build()
+
+    # The message names what is set, so the operator can see which of
+    # the values needs removing — and never the password itself.
+    assert "proxy_username" in str(caught.value)
+    assert PROXY_PASSWORD not in str(caught.value)

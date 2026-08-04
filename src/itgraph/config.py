@@ -3,17 +3,36 @@
 Import ``settings`` from here; no other module reads ``os.environ``.
 """
 
+from enum import StrEnum
 from pathlib import Path
 from typing import Self
 
 from pydantic import Field, PostgresDsn, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-__all__ = ["Settings", "settings"]
+__all__ = ["ProxyType", "Settings", "settings"]
 
 # Backups hold the operator's own subscriptions and review decisions, so
 # they live outside the repository where no `git add .` can reach them.
 DEFAULT_BACKUP_DIR = Path.home() / "itgraph-backups"
+
+
+class ProxyType(StrEnum):
+    """The proxy protocols the collector speaks.
+
+    An enum rather than a free string so an unsupported value is a
+    ``ValidationError`` when settings load, not a ``ValueError`` raised
+    from inside Telethon at the first connection — on the machine
+    nobody is watching, hours into a run.
+
+    These two because they are what the vendors of shared exits sell,
+    and what Telethon reaches through ``python-socks``. MTProxy is
+    deliberately absent: it is Telegram's own protocol, a different
+    connection class, and not a shared residential address.
+    """
+
+    SOCKS5 = "socks5"
+    HTTP = "http"
 
 
 class Settings(BaseSettings):
@@ -23,6 +42,12 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        # A `ValidationError` from a model validator carries the input
+        # it was given — which here is every environment value at once,
+        # api hash and proxy password included, printed to a terminal or
+        # a log the moment a setting is wrong. The `SecretStr` fields
+        # protect `repr(settings)`, not this path.
+        hide_input_in_errors=True,
     )
 
     database_url: PostgresDsn
@@ -38,6 +63,24 @@ class Settings(BaseSettings):
     device_model: str = "Desktop"
     system_version: str = "Windows 10"
     app_version: str = "5.3.1 x64"
+
+    # How the MTProto client reaches Telegram. Unset means directly,
+    # which is what a laptop wants and what every test uses. Set, it is
+    # used for every MTProto connection, with no fallback of any kind:
+    # a proxy that cannot be reached stops the command, because a proxy
+    # that fails open leaves the operator believing an address is hidden
+    # while it is not — a safety feature whose failure mode is appearing
+    # to have worked is worse than not having it. The alert bot is Bot
+    # API over ordinary HTTPS, carries no ban risk, and is never
+    # proxied.
+    proxy_type: ProxyType | None = None
+    proxy_host: str | None = None
+    proxy_port: int | None = Field(default=None, ge=1, le=65535)
+    # Optional: a proxy may take no authentication at all. The password
+    # is a `SecretStr` on the same footing as the api hash — it is never
+    # committed and never logged.
+    proxy_username: str | None = None
+    proxy_password: SecretStr | None = None
 
     # Telethon sleeps through a FloodWait shorter than this on its own;
     # longer ones surface as an exception the collector waits out and
@@ -320,6 +363,50 @@ class Settings(BaseSettings):
                 raise ValueError(
                     f"{name}_min ({low}) is above {name}_max ({high})"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _proxy_is_complete_or_absent(self) -> Self:
+        """Refuse a half-configured proxy at import.
+
+        Same reasoning as the pause ranges: a value that is wrong is
+        otherwise discovered on the machine nobody is watching, at the
+        moment something first connects, and reads as a bug in the
+        collector rather than as a typo in `.env`.
+
+        It matters more here than elsewhere, because the two ways this
+        can be wrong are not symmetric. A host without a port fails
+        loudly. A port without a host — an operator who set every
+        setting but the one that names the proxy — connects directly and
+        looks exactly like success.
+        """
+        parts: tuple[tuple[str, object | None], ...] = (
+            ("proxy_type", self.proxy_type),
+            ("proxy_port", self.proxy_port),
+            ("proxy_username", self.proxy_username),
+            ("proxy_password", self.proxy_password),
+        )
+        if self.proxy_host is None:
+            stray = [name for name, value in parts if value is not None]
+            if stray:
+                raise ValueError(
+                    f"{', '.join(stray)} set without proxy_host: nothing "
+                    "would be proxied, and the connection would be made "
+                    "directly while looking configured"
+                )
+            return self
+
+        missing = [
+            name
+            for name, value in parts[:2]  # type and port; credentials are not
+            if value is None
+        ]
+        if missing:
+            raise ValueError(
+                f"proxy_host is set without {' and '.join(missing)}: a proxy "
+                "needs a type and a port before anything can connect through "
+                "it"
+            )
         return self
 
     @model_validator(mode="after")

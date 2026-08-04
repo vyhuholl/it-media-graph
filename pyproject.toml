@@ -8,6 +8,7 @@ dependencies = [
     "alembic>=1.18.5",
     "asyncpg>=0.31.0",
     "pydantic-settings>=2.14.2",
+    "python-socks>=2.8.2",
     "qrcode>=8.2",
     "sqlalchemy[asyncio]>=2.0.51",
     "telethon>=1.44.0",
