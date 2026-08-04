@@ -22,7 +22,8 @@ The corollary is worth stating separately: **anything derivable can be deferred 
 
 - **MTProto userbot only** (Telethon). The Bot API cannot read other people's channels or their history.
 - **Account strategy.** Dumping the operator's own subscriptions and early experiments run on the main account: reading your own dialog list is what every official client does on startup, so the risk is effectively zero, and an aged account carries high trust with anti-spam. Mass backfill runs on a second number, which first gets a couple of weeks of ordinary use from a phone — a fresh SIM pulling hundreds of channels from a VPS on day two is the most recognizable bot pattern there is.
-- **Never join channels.** Public channels are read by username (`get_entity` + `iter_messages`). Mass joining is the single strongest ban trigger. Run from a residential IP rather than a datacenter one, and set realistic `device_model` / `system_version` / `app_version` on the client.
+- **Never join channels.** Public channels are read by username (`get_entity` + `iter_messages`). Mass joining is the single strongest ban trigger. Set realistic `device_model` / `system_version` / `app_version` on the client.
+- **The address must be shared with people — which is not the same as residential**, and this line originally said the wrong thing. Telegram is blocked here, so every connection to this account has always gone through a commercial VPN, whose exit is a datacenter address; on that footing it walked 211 thousand messages in eleven days and hit three rate limits, all of them `ResolveUsernameRequest` against its daily quota. Zero on `messages.getHistory`, which ran thousands of times. So a datacenter address is not itself the problem. What would stand out is an address nothing human ever comes from — a rented machine's own IP, used by one collector and nothing else. A VPN exit shared with a large number of ordinary users is what the account already has and what a move to a VPS has to preserve. Prefer a stable exit to a rotating one: changing address on every connection is stranger than changing region occasionally.
 - What to extract from `Message`:
   - `fwd_from.from_id` — **this is the repost graph**, the main asset of the project. This slice alone already produces a result.
   - `fwd_from.channel_post` — the id of the *original* message. Without it the graph knows that A reposted B but not *what* it reposted, and "which posts travel" is unanswerable. Present in every payload already stored.
@@ -40,6 +41,8 @@ The corollary is worth stating separately: **anything derivable can be deferred 
 ## Storage
 
 PostgreSQL, nothing exotic. `raw_messages(channel_id, msg_id, payload jsonb, fetched_at)` plus normalized tables `channels / messages / edges(src, dst, type, ts)`. Separately, **snapshots** `message_metrics(msg_id, ts, views, forwards, reactions jsonb)` — without them there is no spike detection and no retrospective analysis.
+
+The snapshot layer grows faster than its shape suggests, and the reason is worth knowing before someone budgets for it. A poll reads *every* live post of a channel, and the channel's due time is the earliest over them — so a post is sampled whenever any of its neighbours is due, not only at its own scheduled offsets. Measured: 2.6 readings per post on a channel with one live post, 15.6 on one with a dozen. That is ~38 thousand rows a day, ~14 million a year, against the 2 million a naive reading of the schedule predicts. It costs no extra requests, only rows — a few gigabytes a year, which Postgres does not notice, but it is 6× the arithmetic anyone would do from the schedule alone.
 
 Edges carry both endpoints at message granularity: the referencing message and, for forwards, the referenced one. Channel-level aggregates are then a `GROUP BY` away, while the reverse — recovering post-level detail from channel-level rows — is not.
 
@@ -83,11 +86,33 @@ Visualization: start with a plain GEXF export into Gephi by hand. A custom view 
 
 ## Detecting strong reactions
 
-Absolute numbers are useless — a 500k channel and a 3k channel are not comparable. What is needed is a **z-score against the channel's own history at the same post age**: reactions/views N minutes after publication versus that channel's median over the last 30 days. Alert above a threshold.
+Absolute numbers are useless — a 500k channel and a 3k channel are not comparable. What is needed is a **z-score against what a post of that age normally reaches on that channel**.
 
-Four independent signals, and they mean different things: views (reach), reactions (approval), forwards (endorsement strong enough to republish), comments (disagreement as often as interest). Forwards are the most valuable and the slowest to accumulate; comment spikes are the ones most likely to be a fight. Track each against its own baseline rather than collapsing them into one score.
+**"That channel's own history at the same post age" turns out to be unreachable, and this is the plan's most consequential correction.** The median seed channel publishes 0.53 posts a day. A median worth dividing by needs on the order of thirty posts, which is fifty-seven days *per channel* — and the channels that would take longest are most of the inventory. Waiting does not fix it; nothing does.
 
-This requires polling recent posts: every 15–30 minutes for the first 48 hours, decaying afterwards. A simple Postgres-backed queue plus one worker — NATS would be overkill here.
+What replaces it is a decomposition. A **shared growth curve** — what fraction of its value a metric has reached at age *t* — estimated over all channels at once, multiplied by the **channel's own mature baseline**, which the 211 thousand already-collected messages supply today. Curves need posts, not posts-per-channel, so they are affordable where per-channel baselines are not.
+
+Measured over 353 posts tracked for at least eight hours, as a fraction of the eight-hour value:
+
+```
+                 15m   30m    1h    2h    4h    8h
+  views          17%   22%   33%   50%   76%   96%
+  reactions      27%   33%   47%   67%   85%   98%
+  forwards       35%   45%   56%   73%   89%  100%
+  comments       40%   40%   76%   85%  100%  100%
+```
+
+Three things follow, and two of them contradict what this section used to say.
+
+**Each metric needs its own curve.** At one hour a post has a third of its views and over half its forwards. One curve applied to four metrics would be wrong for three.
+
+**Forwards are not the slowest to accumulate — early on they are among the fastest.** That claim held against *maturity*, over weeks; inside the window an alert actually uses, forwards front-load relative to views. The direct consequence: `forwards / views` is **not** age-free early. Measured, it runs about 0.0146 at fifteen minutes against 0.0078 at eight hours — nearly double. Scoring a young post's forward rate against a mature baseline therefore *over*-alerts, which is the dangerous direction: false alarms are what destroy trust in an alert bot, and this was assumed to err the safe way round.
+
+**The curve varies by channel kind, and only there.** Aggregators, personal channels and media cluster together; vacancy feeds are visibly slower (52% of views at four hours against 72–81%), which fits — a job feed is read when someone is looking for work, not when it is posted. So the curve is per `ChannelKind`: enough data per kind, and `kind` is already hand-reviewed in the inventory.
+
+Four independent signals, and they mean different things: views (reach), reactions (approval), forwards (endorsement strong enough to republish), comments (disagreement as often as interest). Comment spikes are the ones most likely to be a fight. Track each against its own baseline rather than collapsing them into one score.
+
+This requires polling recent posts. As built and measured: samples at 15, 30, 60, 120, 240, 480, 1440 and 2880 minutes after publication, then never again; a per-channel due time; and a single sequential worker behind a Postgres queue — NATS would be overkill here. The whole inventory costs **3–4 thousand `messages.getHistory` calls a day**, roughly one request every 20–25 seconds, which is gentler than the backfill that preceded it. One request serves both jobs: a history window returns new posts *and* current counters for everything still live, so cost is per channel per cycle rather than per post.
 
 **Collection and judgement are separate phases, and the split is a schedule decision rather than a taste one.** The baselines above are of the form "what this channel's posts normally have at age *t*", and they cannot be computed, borrowed or backfilled — they accumulate in wall-clock time. So the snapshot loop went first and alone (`itgraph watch`), and everything that scores those snapshots can be written afterwards, at any point, as a pass with no deadline of its own. The interim payoff is real: the offline analytics stop being restricted to posts that were already mature when they were read.
 
@@ -97,7 +122,7 @@ The queue is taken from the suggestion above; `arq` is not. It is a Redis job qu
 
 **Measured, once the graph existed: the cascade signal is real and thin.** Counting distinct unaffiliated families carrying one post, over the densely collected last 30 and 60 days — one family is ~19 events a day and is noise; two is ~1.1; three is ~0.35; four or more happened once in two months. There is almost no band between noise and silence. So "what is being reposted right now" is a genuine signal and not, on its own, a product — which is why post-level *virality* rather than post-level *travel* is what carries the realtime claim above, and why the delivery machinery was built before the scoring that will fill it rather than alongside.
 
-Alert delivery: a dedicated aiogram bot, in its own dependency group and its own process, reading an alert table. That interface is the seam that lets the bot move to a different machine later without the collector following it — the collector needs a residential IP and the Bot API does not.
+Alert delivery: a dedicated aiogram bot, in its own dependency group and its own process, reading an alert table. That interface is the seam that lets the bot move to a different machine later without the collector following it — the collector's connection is the one with something to lose, and the Bot API's is not.
 
 ## Digests
 
@@ -117,9 +142,12 @@ Repost activity across the wider chat ecosystem — beyond the channels collecte
 | 3–4 | Candidates | 300–500 channels |
 | 5–6 | Clustering + role metrics + visualization | **First useful result** |
 | 7 | Metric snapshots: the poll loop, the time series it writes | Baselines start accruing |
-| 8 | Post-level virality: baselines, scoring, replay + alert bot | Working notifications |
-| 9–10 | Comments (the heavy phase) | Commenter graph |
-| 11–12 | Buffer + digests + YouTube Data API | — |
+| 8 | Alert delivery + repost cascades — the one signal needing no warm-up | A bot that speaks ~once a day |
+| 9 | Post-level virality: growth curves, scoring, replay | Notifications with volume |
+| 10–11 | Comments (the heavy phase) | Commenter graph |
+| 12 | Buffer + digests + YouTube Data API | — |
+
+Delivery shipped a week before the scoring that fills it, and deliberately: the cascade signal needs no warm-up but produces about one alert a day, so the machinery that is unpleasant to debug in production — deduplication, caps, the digest, retries — got exercised on a trickle while the growth curves accrued. The cost is a fortnight of a quiet bot, which is cheaper than debugging delivery and thresholds at the same time on data that does not exist yet.
 
 Comments sit after the alert bot rather than before it. They are the heaviest phase, the first to carry personal data at scale, and the questions they answer are partly covered by external analytics in the meantime — whereas post-level virality reuses history already collected and produces a working product on its own.
 
