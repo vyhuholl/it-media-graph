@@ -1,0 +1,14 @@
+# {{ ansible_managed }}
+#
+# `scripts/backup-agent.sh` is launchd, so on Linux nothing takes a dump
+# until this exists — an absence that looks exactly like everything
+# working.
+[Unit]
+Description=itgraph: backups every few hours
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec={{ backup_interval | default('4h') }}
+
+[Install]
+WantedBy=timers.target

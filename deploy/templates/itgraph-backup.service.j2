@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+[Unit]
+Description=itgraph: database backup
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User={{ ansible_user }}
+WorkingDirectory={{ repo_dir }}
+ExecStart={{ uv }} run itgraph backup

@@ -1,0 +1,33 @@
+---
+# Non-secret settings. Secrets live in secrets.vault.yml, encrypted.
+
+itgraph_repo_url: git@github.com:you/it-media-graph.git
+itgraph_repo_version: master
+
+# Files only the operator has. Paths on the machine running Ansible.
+#
+# The session file is copied and never re-created: `itgraph login` on a
+# new host makes a session with an empty entity cache, and every seed
+# channel is then skipped for want of a cached peer — days of stopped
+# collection from a step that looks like ordinary setup.
+itgraph_session_src: ~/Documents/it-media-graph/itgraph.session
+itgraph_dump_src: ~/itgraph-backups/weekly/full-LATEST.dump
+
+db_user: itgraph
+db_name: itgraph
+db_port: 5433
+
+telegram_session: itgraph.session
+watch_timezone: Europe/Moscow
+
+# Only MTProto goes through this. The bot speaks Bot API over ordinary
+# HTTPS and needs no proxy. Leave proxy_host empty for a direct
+# connection.
+proxy_type: socks5
+proxy_host: ""
+proxy_port: 1080
+proxy_username: ""
+
+swap_size: 2G
+alerts_interval: 15min
+backup_interval: 4h

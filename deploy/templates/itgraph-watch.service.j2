@@ -1,0 +1,22 @@
+# {{ ansible_managed }}
+[Unit]
+Description=itgraph: Telegram collection loop
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User={{ ansible_user }}
+WorkingDirectory={{ repo_dir }}
+ExecStart={{ uv }} run itgraph watch
+Restart=always
+RestartSec=30
+# The loop handles SIGTERM: it finishes the poll in flight, commits, and
+# releases the session lease. Killing it harder leaves the lease to be
+# reclaimed by a dropped connection instead.
+KillSignal=SIGTERM
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target

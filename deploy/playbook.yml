@@ -1,0 +1,424 @@
+---
+# Bring up collection on a fresh Ubuntu host.
+#
+# What this playbook will not do, deliberately:
+#
+#   * run `itgraph login`. The session file is copied from the operator's
+#     machine, because it carries the entity cache `cached_peer` reads and
+#     a fresh session has none — every seed channel would be skipped for
+#     want of a cached peer, recoverable only through `resolve` at a
+#     couple of hundred usernames a day.
+#   * restore over a database that already has rows. See the guard in the
+#     `data` tasks: a re-run must not be a way to lose the inventory.
+#   * stop the collector still running on the operator's machine. That
+#     stays a human decision, taken after the verification below passes.
+#
+# Usage:
+#   ansible-playbook -i inventory.ini playbook.yml --ask-vault-pass
+#   ansible-playbook -i inventory.ini playbook.yml --tags services
+#   ansible-playbook -i inventory.ini playbook.yml --tags verify
+
+- name: Deploy itgraph collection
+  hosts: collector
+  become: false
+
+  vars:
+    repo_dir: "/home/{{ ansible_user }}/itgraph"
+    uv: "/home/{{ ansible_user }}/.local/bin/uv"
+
+  pre_tasks:
+    - name: Refuse to run without the things only the operator has
+      ansible.builtin.assert:
+        that:
+          - itgraph_session_src is defined
+          - itgraph_dump_src is defined
+          - telegram_api_hash is defined
+          - bot_db_password is defined
+        fail_msg: >-
+          Set itgraph_session_src and itgraph_dump_src in group_vars/all.yml,
+          and the secrets in group_vars/secrets.vault.yml. Nothing here can
+          be invented for you.
+        quiet: true
+      tags: [always]
+
+  tasks:
+
+    # ---------------------------------------------------------------- base
+
+    - name: Base packages
+      become: true
+      ansible.builtin.apt:
+        name: [git, curl, rsync, ca-certificates]
+        update_cache: true
+        cache_valid_time: 3600
+      tags: [base]
+
+    - name: Is docker already here
+      ansible.builtin.command: docker --version
+      register: docker_version
+      changed_when: false
+      failed_when: false
+      tags: [base]
+
+    # `pipefail` is not decoration: without it a failed download leaves
+    # `sh` reading empty input, exiting zero, and Ansible reporting a
+    # successful install of nothing.
+    - name: Install docker
+      become: true
+      ansible.builtin.shell:
+        cmd: set -o pipefail && curl -fsSL https://get.docker.com | sh
+        executable: /bin/bash
+      when: docker_version.rc != 0
+      changed_when: true
+      tags: [base]
+
+    - name: Let the deploy user talk to docker
+      become: true
+      ansible.builtin.user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: true
+      tags: [base]
+
+    # Reconnect so the new group membership is in effect; without this
+    # every later `docker` call needs sudo, which is worse.
+    - name: Pick up the docker group
+      ansible.builtin.meta: reset_connection
+      tags: [base]
+
+    - name: Is uv already here
+      ansible.builtin.stat:
+        path: "{{ uv }}"
+      register: uv_binary
+      tags: [base]
+
+    # uv, not apt: this project needs Python 3.14 and pins it, and Ubuntu
+    # does not ship it. Bare `python`/`pip` are forbidden here anyway.
+    - name: Install uv
+      ansible.builtin.shell:
+        cmd: set -o pipefail && curl -LsSf https://astral.sh/uv/install.sh | sh
+        executable: /bin/bash
+      when: not uv_binary.stat.exists
+      changed_when: true
+      tags: [base]
+
+    - name: Firewall allows ssh and nothing else
+      become: true
+      community.general.ufw:
+        rule: allow
+        name: OpenSSH
+      tags: [base]
+
+    - name: Firewall on
+      become: true
+      community.general.ufw:
+        state: enabled
+        policy: deny
+      tags: [base]
+
+    # A 4 GB host with no swap hands the OOM killer an easy choice during
+    # a `derive` batch, and the fattest process is Postgres.
+    - name: Swap file
+      become: true
+      ansible.builtin.command: "{{ item }}"
+      args:
+        creates: /swapfile
+      loop:
+        - fallocate -l {{ swap_size | default('2G') }} /swapfile
+      tags: [base]
+
+    - name: Swap permissions
+      become: true
+      ansible.builtin.file:
+        path: /swapfile
+        mode: "0600"
+      tags: [base]
+
+    - name: Format swap
+      become: true
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -eo pipefail
+          if ! swapon --show=NAME --noheadings | grep -qx /swapfile; then
+            mkswap /swapfile
+            swapon /swapfile
+          fi
+      register: swap_on
+      changed_when: "'Setting up swapspace' in swap_on.stdout"
+      tags: [base]
+
+    - name: Swap survives reboot
+      become: true
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        line: "/swapfile none swap sw 0 0"
+        state: present
+      tags: [base]
+
+    # ---------------------------------------------------------------- repo
+
+    - name: Clone the repository
+      ansible.builtin.git:
+        repo: "{{ itgraph_repo_url }}"
+        dest: "{{ repo_dir }}"
+        version: "{{ itgraph_repo_version | default('master') }}"
+        update: true
+      tags: [repo]
+
+    - name: Install dependencies
+      ansible.builtin.command: "{{ uv }} sync"
+      args:
+        chdir: "{{ repo_dir }}"
+      register: uv_sync
+      changed_when: "'Installed' in uv_sync.stderr or 'Resolved' in uv_sync.stderr"
+      tags: [repo]
+
+    # An override rather than an edit to the tracked compose file: the
+    # repository's version publishes Postgres on every interface, which is
+    # harmless on a laptop and an open database on a rented host. Patching
+    # the tracked file would fight `git pull` forever.
+    - name: Compose override — bind Postgres to loopback
+      ansible.builtin.template:
+        src: docker-compose.override.yml.j2
+        dest: "{{ repo_dir }}/docker-compose.override.yml"
+        mode: "0644"
+      tags: [repo]
+
+    - name: Configuration
+      ansible.builtin.template:
+        src: env.j2
+        dest: "{{ repo_dir }}/.env"
+        mode: "0600"
+      no_log: true
+      tags: [repo, config]
+
+    # ---------------------------------------------------------------- data
+
+    - name: Start Postgres
+      ansible.builtin.command: docker compose up -d
+      args:
+        chdir: "{{ repo_dir }}"
+      register: compose_up
+      changed_when: "'Started' in compose_up.stderr or 'Created' in compose_up.stderr"
+      tags: [data]
+
+    - name: Wait for Postgres
+      ansible.builtin.command: >-
+        docker exec itgraph-postgres pg_isready -U {{ db_user }} -d {{ db_name }}
+      register: pg_ready
+      until: pg_ready.rc == 0
+      retries: 30
+      delay: 2
+      changed_when: false
+      tags: [data]
+
+    # Roles are cluster-level and `pg_dump` does not carry them, but the
+    # GRANTs in the dump reference this one — so it has to exist before the
+    # restore or those statements fail. NOLOGIN until a password is set.
+    - name: Bot role exists before anything references it
+      ansible.builtin.command: >-
+        docker exec -i itgraph-postgres psql -U {{ db_user }} -d postgres -tAc
+        "DO $$ BEGIN
+           IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='itgraph_bot')
+           THEN CREATE ROLE itgraph_bot NOLOGIN; END IF;
+         END $$;"
+      changed_when: false
+      tags: [data]
+
+    - name: How much is already in this database
+      ansible.builtin.command: >-
+        docker exec -i itgraph-postgres psql -U {{ db_user }} -d {{ db_name }} -tAc
+        "SELECT count(*) FROM channels"
+      register: existing_channels
+      changed_when: false
+      failed_when: false
+      tags: [data]
+
+    # The one destructive step in the playbook. A re-run must not be a way
+    # to lose the hand-reviewed inventory, so it happens only into an empty
+    # database unless the operator says otherwise on the command line.
+    - name: Refuse to restore over existing data
+      ansible.builtin.assert:
+        that: existing_channels.stdout | trim | int == 0
+        fail_msg: >-
+          {{ existing_channels.stdout | trim }} channels already here.
+          Re-run with -e force_restore=true only if you mean to replace them.
+        quiet: true
+      when: not (force_restore | default(false) | bool)
+      tags: [data]
+
+    - name: Ship the dump
+      ansible.posix.synchronize:
+        src: "{{ itgraph_dump_src }}"
+        dest: /tmp/itgraph.dump
+      when: existing_channels.stdout | trim | int == 0
+            or (force_restore | default(false) | bool)
+      tags: [data]
+
+    - name: Restore
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: >-
+          set -o pipefail &&
+          docker exec -i itgraph-postgres
+          pg_restore -U {{ db_user }} -d {{ db_name }}
+          --no-owner --clean --if-exists < /tmp/itgraph.dump
+      changed_when: true
+      when: existing_channels.stdout | trim | int == 0
+            or (force_restore | default(false) | bool)
+      tags: [data]
+
+    - name: Remove the dump from the host
+      ansible.builtin.file:
+        path: /tmp/itgraph.dump
+        state: absent
+      tags: [data]
+
+    - name: Give the bot role its password
+      ansible.builtin.command: >-
+        docker exec -i itgraph-postgres psql -U {{ db_user }} -d {{ db_name }} -c
+        "ALTER ROLE itgraph_bot LOGIN PASSWORD '{{ bot_db_password }}'"
+      changed_when: true
+      no_log: true
+      tags: [data]
+
+    - name: Schema is at head
+      ansible.builtin.command: "{{ uv }} run alembic current"
+      args:
+        chdir: "{{ repo_dir }}"
+      register: alembic_current
+      changed_when: false
+      tags: [data]
+
+    # ------------------------------------------------------------- session
+
+    # Copied, never created. `itgraph login` on a new machine produces a
+    # session with an empty entity cache, and every seed channel is then
+    # skipped for want of a cached peer — days of stopped collection,
+    # caused by a step that looks like ordinary setup.
+    - name: Telegram session
+      ansible.builtin.copy:
+        src: "{{ itgraph_session_src }}"
+        dest: "{{ repo_dir }}/{{ telegram_session | default('itgraph.session') }}"
+        mode: "0600"
+        force: false
+      tags: [session]
+
+    # ------------------------------------------------------------ services
+
+    - name: Unit files
+      become: true
+      ansible.builtin.template:
+        src: "{{ item }}.j2"
+        dest: "/etc/systemd/system/{{ item }}"
+        mode: "0644"
+      loop:
+        - itgraph-watch.service
+        - itgraph-bot.service
+        - itgraph-alerts.service
+        - itgraph-alerts.timer
+        - itgraph-backup.service
+        - itgraph-backup.timer
+      notify: reload systemd
+      tags: [services]
+
+    - name: Flush unit changes before starting anything
+      ansible.builtin.meta: flush_handlers
+      tags: [services]
+
+    - name: Long-running services
+      become: true
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop:
+        - itgraph-watch
+        - itgraph-bot
+      tags: [services]
+
+    # The backup timer is the one thing whose absence looks exactly like
+    # everything working: `scripts/backup-agent.sh` is launchd, so on Linux
+    # nothing takes a dump until this exists.
+    - name: Timers
+      become: true
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop:
+        - itgraph-alerts.timer
+        - itgraph-backup.timer
+      tags: [services]
+
+    # -------------------------------------------------------------- verify
+
+    - name: The inventory came across
+      ansible.builtin.command: >-
+        docker exec -i itgraph-postgres psql -U {{ db_user }} -d {{ db_name }} -tAc
+        "SELECT count(*) FROM channels WHERE status='seed'"
+      register: seed_count
+      changed_when: false
+      tags: [verify]
+
+    - name: There are seed channels to collect
+      ansible.builtin.assert:
+        that: seed_count.stdout | trim | int > 0
+        fail_msg: "No seed channels — the restore did not land."
+        quiet: true
+      tags: [verify]
+
+    - name: One real request, to prove the session and the route
+      ansible.builtin.command: >-
+        {{ uv }} run itgraph backfill --since {{ ansible_date_time.date }} --limit 1
+      args:
+        chdir: "{{ repo_dir }}"
+      register: probe
+      changed_when: false
+      tags: [verify]
+
+    # Reads the line `build_client` logs at connect time. A deployment
+    # whose `.env` did not arrive works, logs nothing unusual, and reaches
+    # Telegram from the address the proxy exists to hide — this is the only
+    # thing that catches it.
+    - name: The proxy is actually in use
+      ansible.builtin.assert:
+        that: "'Telegram route: direct' not in probe.stderr"
+        fail_msg: >-
+          Connected directly. PROXY_* did not reach the process — check
+          .env and the unit's WorkingDirectory.
+        quiet: true
+      when: proxy_host is defined and proxy_host | length > 0
+      tags: [verify]
+
+    - name: The session survived the move
+      ansible.builtin.assert:
+        that: "'no cached peer' not in probe.stderr"
+        fail_msg: >-
+          Channels are being skipped for want of a cached peer. The session
+          file is not the one from the working machine.
+        quiet: true
+      tags: [verify]
+
+    - name: What the collector says about itself
+      ansible.builtin.command: "{{ uv }} run itgraph watch-status"
+      args:
+        chdir: "{{ repo_dir }}"
+      register: watch_status
+      changed_when: false
+      tags: [verify]
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          {{ seed_count.stdout | trim }} seed channels ·
+          {{ alembic_current.stdout_lines | last }} ·
+          {{ watch_status.stdout_lines | join(' · ') }}
+      tags: [verify]
+
+  handlers:
+    - name: Reload systemd
+      become: true
+      ansible.builtin.systemd:
+        daemon_reload: true

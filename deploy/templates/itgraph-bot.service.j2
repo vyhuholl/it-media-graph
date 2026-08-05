@@ -1,0 +1,19 @@
+# {{ ansible_managed }}
+[Unit]
+Description=itgraph: alert bot
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User={{ ansible_user }}
+WorkingDirectory={{ repo_dir }}
+ExecStart={{ uv }} run itgraph bot
+Restart=always
+RestartSec=30
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

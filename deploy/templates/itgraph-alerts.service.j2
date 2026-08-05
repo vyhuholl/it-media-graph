@@ -1,0 +1,16 @@
+# {{ ansible_managed }}
+[Unit]
+Description=itgraph: derive edges, then raise cascade alerts
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User={{ ansible_user }}
+WorkingDirectory={{ repo_dir }}
+# Two commands in order. For a oneshot unit systemd runs them in
+# sequence and stops at the first failure, which is what is wanted:
+# `alerts` reading stale edges reports staleness rather than alerts, and
+# would be worse than not running.
+ExecStart={{ uv }} run itgraph derive
+ExecStart={{ uv }} run itgraph alerts

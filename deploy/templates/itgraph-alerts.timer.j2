@@ -1,0 +1,10 @@
+# {{ ansible_managed }}
+[Unit]
+Description=itgraph: alerts on a short cycle
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec={{ alerts_interval | default('15min') }}
+
+[Install]
+WantedBy=timers.target

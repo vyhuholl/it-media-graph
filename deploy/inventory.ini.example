@@ -1,0 +1,2 @@
+[collector]
+itgraph ansible_host=1.2.3.4 ansible_user=itgraph

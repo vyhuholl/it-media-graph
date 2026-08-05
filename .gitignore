@@ -237,3 +237,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Ansible: the vault password and any un-encrypted variables. The
+# encrypted vault file itself is safe to commit and is committed; these
+# two are what would give it away.
+deploy/.vault-pass
+deploy/group_vars/secrets.yml

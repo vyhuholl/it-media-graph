@@ -1,0 +1,7 @@
+---
+collections:
+  # `synchronize`, for shipping a ~180 MB dump without pushing it through
+  # the connection plugin in base64 chunks.
+  - name: ansible.posix
+  # `ufw`
+  - name: community.general

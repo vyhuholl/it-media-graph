@@ -1,0 +1,10 @@
+# {{ ansible_managed }}
+#
+# An override rather than an edit to the tracked compose file. The
+# repository's version publishes Postgres on every interface, which is
+# harmless on a laptop and an open database with a known default password
+# on a rented host. Patching the tracked file would fight `git pull`.
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:{{ db_port }}:5432"
