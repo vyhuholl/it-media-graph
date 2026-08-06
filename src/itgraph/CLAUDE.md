@@ -33,6 +33,11 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `alerts/cascade.py` | Which posts are travelling: distinct unaffiliated families, pure functions over edge rows |
 | `alerts/run.py` | The detection pass: load, detect, store, report. Touches no network and no snapshots |
 | `alerts/` | Deciding that something is worth telling the operator. Writes the queue; sends nothing |
+| `scoring/curves.py` | How a metric accrues with a post's age, and the two factors that join a curve to history; pure |
+| `scoring/score.py` | What a post should have reached by now, and how far past it went; pure |
+| `scoring/refresh.py` | The baseline refresh: fit, store, publish as one run. A refresh replaces rather than accumulates |
+| `scoring/run.py` | The scoring pass: load, score, raise, report. Replay is this same pass with an earlier moment |
+| `scoring/` | Recognizing that a post is doing unusually well for its channel and its age |
 | `bot/render.py` | An alert as a message a person reads; pure, so the wording is testable |
 | `bot/app.py` | Delivery: claim, send, mark. The poll is correctness, the notification is speed |
 | `bot/handlers.py` | The aiogram binding — the only module that imports aiogram or holds the token |
@@ -46,6 +51,7 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `db/raw.py` | Writes into the raw layer; nothing here reads a payload |
 | `db/metrics.py` | Writes into the snapshot layer: append-only readings of a post's counters |
 | `db/alerts.py` | The alert queue: raising, claiming, delivering, and what the operator thought |
+| `db/baselines.py` | The baseline tables: what a post of a given age is expected to reach, and the run it was measured in |
 | `db/poll.py` | The poll queue: which channel is due, and when it is due again. Timing only |
 | `db/floods.py` | The record of rate limits: one row per wait, and the two questions asked of it |
 | `db/backfill.py` | Which channels to walk, how far each got, and why one stopped |

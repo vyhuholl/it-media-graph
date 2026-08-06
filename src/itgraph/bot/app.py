@@ -27,7 +27,13 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
-from itgraph.bot.render import Carrier, RenderedAlert, digest, render_cascade
+from itgraph.bot.render import (
+    Carrier,
+    RenderedAlert,
+    digest,
+    render_cascade,
+    render_spike,
+)
 from itgraph.config import settings
 from itgraph.db.alerts import (
     PendingAlert,
@@ -38,7 +44,7 @@ from itgraph.db.alerts import (
     mark_delivered,
     mark_failed,
 )
-from itgraph.db.models import AlertDelivery
+from itgraph.db.models import AlertDelivery, AlertKind
 from itgraph.db.session import Database
 from itgraph.schedule import in_quiet_window
 
@@ -85,7 +91,14 @@ class BotStats:
 async def _render(
     database: Database, alert: PendingAlert, *, now: datetime
 ) -> RenderedAlert | None:
-    """One alert as a message, or ``None`` if its post has vanished."""
+    """One alert as a message, or ``None`` if its post has vanished.
+
+    Dispatched on the kind, because a kind is exactly a claim about what
+    the message should say — the alternative is one wording that fits a
+    cascade and describes a view spike as three sources reposting.
+    Everything else about delivery is kind-blind and stays that way: the
+    claim, the cap, quiet hours and the retry never look at this.
+    """
     window = timedelta(hours=settings.alert_cascade_window_hours)
     async with database.session() as session:
         evidence = await alert_evidence(
@@ -96,6 +109,20 @@ async def _render(
         )
     if evidence is None:
         return None
+
+    if alert.kind is not AlertKind.REPOST_CASCADE:
+        return render_spike(
+            alert_id=alert.id,
+            kind=alert.kind,
+            channel_title=evidence.channel_title,
+            channel_username=evidence.channel_username,
+            msg_id=alert.msg_id,
+            published_at=evidence.published_at,
+            now=now,
+            z=alert.value,
+            text=evidence.text,
+        )
+
     return render_cascade(
         alert_id=alert.id,
         channel_title=evidence.channel_title,

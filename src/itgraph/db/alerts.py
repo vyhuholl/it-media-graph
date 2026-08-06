@@ -27,7 +27,9 @@ from itgraph.db.models import (
     AlertFeedback,
     AlertKind,
     AlertVerdict,
+    Metric,
 )
+from itgraph.scoring.score import Spike
 
 __all__ = [
     "CHANNEL",
@@ -42,6 +44,7 @@ __all__ = [
     "mark_delivered",
     "mark_failed",
     "raise_cascades",
+    "raise_spikes",
     "raised_bands",
     "record_verdict",
 ]
@@ -118,6 +121,56 @@ async def raise_cascades(
                 "value": float(cascade.value),
             }
             for cascade in cascades
+        ]
+    )
+    result = await session.execute(
+        statement.on_conflict_do_nothing(
+            constraint="uq_alerts_post_band"
+        ).returning(Alert.id)
+    )
+    written = len(result.all())
+
+    if written:
+        await session.execute(select(func.pg_notify(CHANNEL, str(written))))
+    return written
+
+
+async def raise_spikes(session: AsyncSession, spikes: Sequence[Spike]) -> int:
+    """Record spike alerts. Returns how many were new.
+
+    The same insert ``raise_cascades`` makes, against the same
+    constraint, and deliberately not a generalisation of it: the two
+    differ in what ``band`` and ``value`` mean, and a shared function
+    taking both as opaque numbers would be the place where that
+    distinction is lost.
+
+    **The band is always 1.** For a cascade the band is escalation — two
+    families and three families are different events. For a spike it
+    would not be: a post that is unusually popular and then more so is
+    the same event, and a second message about it would reintroduce from
+    the age axis exactly the noise that scoring one metric per post
+    removes from the metric axis. So a post raises at most one alert per
+    metric, ever, and the constraint enforces it without a flag.
+
+    ``value`` is the z. It is the number that crossed the threshold, and
+    it is what a replay at another threshold has to be able to compare
+    against. The multiple it corresponds to depends on the spread of the
+    baseline run that produced it, which is why the run's parameters are
+    kept in ``baseline_runs`` rather than the ratio being frozen here.
+    """
+    if not spikes:
+        return 0
+
+    statement = insert(Alert).values(
+        [
+            {
+                "kind": Metric(spike.score.metric).alert_kind(),
+                "channel_id": spike.post_key[0],
+                "msg_id": spike.post_key[1],
+                "band": 1,
+                "value": float(spike.score.z),
+            }
+            for spike in spikes
         ]
     )
     result = await session.execute(

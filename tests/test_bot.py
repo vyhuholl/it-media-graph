@@ -13,9 +13,16 @@ from test_alerts_db import PUBLISHER, seed
 
 from itgraph.alerts.cascade import Cascade
 from itgraph.bot.app import BotStats, Sender, deliver_once
-from itgraph.bot.render import Carrier, RenderedAlert, digest, render_cascade
+from itgraph.bot.render import (
+    Carrier,
+    RenderedAlert,
+    digest,
+    render_cascade,
+    render_spike,
+)
 from itgraph.config import settings
 from itgraph.db.alerts import claim_undelivered, raise_cascades
+from itgraph.db.models import AlertKind
 from itgraph.db.session import Database
 
 NOW = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
@@ -100,6 +107,64 @@ def test_a_long_post_is_excerpted() -> None:
 
 def test_a_post_with_no_text_still_renders() -> None:
     assert "3" in rendered(text=None).text
+
+
+def spike(**overrides: object) -> RenderedAlert:
+    kwargs: dict[str, object] = {
+        "alert_id": 1,
+        "kind": AlertKind.VIEWS_SPIKE,
+        "channel_title": "Example Channel",
+        "channel_username": "example",
+        "msg_id": 500,
+        "published_at": NOW - timedelta(minutes=40),
+        "now": NOW,
+        "z": 3.4,
+        "text": "смотрите, что нашли в опенсорсе",
+    }
+    kwargs.update(overrides)
+    return render_spike(**kwargs)  # type: ignore[arg-type]
+
+
+def test_a_spike_says_which_metric_it_is_about() -> None:
+    """The four kinds mean different things and a reader decides on that.
+
+    Reach, approval, an endorsement strong enough to republish, and an
+    argument — one wording covering all four would waste the distinction
+    the kinds exist to carry.
+    """
+    assert "Просмотры" in spike().text
+    assert "Реакции" in spike(kind=AlertKind.REACTION_SPIKE).text
+    assert "Пересылки" in spike(kind=AlertKind.FORWARD_SPIKE).text
+
+
+def test_a_spike_is_not_worded_as_a_cascade() -> None:
+    """The failure this dispatch exists to prevent.
+
+    Before the scoring pass there was one renderer, so a view spike would
+    have been delivered as "3 независимых источника репостят" — a
+    sentence that is not merely awkward but false.
+    """
+    assert "репостят" not in spike().text
+
+
+def test_a_spike_states_the_posts_age() -> None:
+    """It matters more here than on a cascade.
+
+    A spike can fire fifteen minutes after publication, and a reader who
+    has learned from cascades to expect hours misreads how early it is.
+    """
+    assert "40 мин назад" in spike().text
+
+
+def test_a_bigger_spike_reads_as_bigger() -> None:
+    """Words, plus the z for whoever is calibrating rather than reading."""
+    assert spike(z=3.2).text != spike(z=8.0).text
+    assert "z 8.0" in spike(z=8.0).text
+
+
+def test_a_spike_links_to_the_post() -> None:
+    assert "https://t.me/example/500" in spike().text
+    assert "t.me" not in spike(channel_username=None).text
 
 
 def test_the_digest_says_how_many_it_covers() -> None:

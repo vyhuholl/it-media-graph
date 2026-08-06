@@ -112,6 +112,29 @@ Three things follow, and two of them contradict what this section used to say.
 
 Four independent signals, and they mean different things: views (reach), reactions (approval), forwards (endorsement strong enough to republish), comments (disagreement as often as interest). Comment spikes are the ones most likely to be a fight. Track each against its own baseline rather than collapsing them into one score.
 
+**So the thing scored is a level, never a ratio.** A ratio of two metrics looks age-free and is not — that is what the forwards measurement above shows — and scoring one against a mature baseline corrects for age twice, in opposite directions. Each metric is compared to its own curve instead, so age is corrected exactly once:
+
+```
+  expected(age) = channel's mature median × factor × curve(age, kind, metric)
+  z             = log(actual / expected) / spread
+```
+
+The remaining three numbers were measured rather than assumed, and none of them turned out to be shareable between metrics:
+
+```
+  metric      channels  posts  factor  spread
+  views          465     586    0.44    0.38
+  reactions      436     424    0.68    0.75
+  forwards       454     562    0.63    0.77
+  comments       304     184    1.00    1.01
+```
+
+The `factor` is the join between a curve normalised to eight hours and a median computed over thirty days; the `spread` is the dispersion of `log(actual/expected)`, which is what makes the score a z rather than a multiple. Hardcoding views' 0.38 across all four would have fired reaction alerts at half the intended distance into the tail — which is why the spread is stored beside each baseline rather than written into the code.
+
+**Comments are measured but do not alert.** 184 posts, a spread of 1.01, and a calibration that drifts across the age bands: too poorly measured to trust, and a metric that fires wrongly costs more than one that stays quiet. The baseline is computed anyway, so enabling it later is a setting rather than a re-fit.
+
+One threshold across all metrics — z 3.0, about nine alerts a day — because dividing by each metric's own spread is exactly what makes a z comparable, and tuning a threshold back per metric would undo it. One band rather than several: between z 3 and z 4 the volume falls only from nine a day to six, so a second band would say almost nothing about six of the nine posts that already alerted.
+
 This requires polling recent posts. As built and measured: samples at 15, 30, 60, 120, 240, 480, 1440 and 2880 minutes after publication, then never again; a per-channel due time; and a single sequential worker behind a Postgres queue — NATS would be overkill here. The whole inventory costs **3–4 thousand `messages.getHistory` calls a day**, roughly one request every 20–25 seconds, which is gentler than the backfill that preceded it. One request serves both jobs: a history window returns new posts *and* current counters for everything still live, so cost is per channel per cycle rather than per post.
 
 **Collection and judgement are separate phases, and the split is a schedule decision rather than a taste one.** The baselines above are of the form "what this channel's posts normally have at age *t*", and they cannot be computed, borrowed or backfilled — they accumulate in wall-clock time. So the snapshot loop went first and alone (`itgraph watch`), and everything that scores those snapshots can be written afterwards, at any point, as a pass with no deadline of its own. The interim payoff is real: the offline analytics stop being restricted to posts that were already mature when they were read.

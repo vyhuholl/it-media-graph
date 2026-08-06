@@ -18,11 +18,31 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-__all__ = ["Carrier", "RenderedAlert", "digest", "render_cascade"]
+from itgraph.db.models import AlertKind
+
+__all__ = [
+    "Carrier",
+    "RenderedAlert",
+    "digest",
+    "render_cascade",
+    "render_spike",
+]
 
 # How much of a post to quote. Long enough to recognise it, short enough
 # that a message about a post is not a copy of it.
 EXCERPT = 200
+
+# What each spike is about, in the words a reader thinks in. Per kind
+# rather than one "необычная активность", because the four mean genuinely
+# different things — reach, approval, an endorsement strong enough to
+# republish, and an argument — and a reader deciding whether to open the
+# post is deciding on exactly that difference.
+SPIKE_LABEL = {
+    AlertKind.VIEWS_SPIKE: "👁 Просмотры",
+    AlertKind.REACTION_SPIKE: "❤️ Реакции",
+    AlertKind.FORWARD_SPIKE: "🔁 Пересылки",
+    AlertKind.COMMENT_SPIKE: "💬 Комментарии",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +138,68 @@ def render_cascade(
     if carriers:
         lines.append("")
         lines.append("Кто перенёс: " + ", ".join(c.label() for c in carriers))
+
+    return RenderedAlert(alert_id=alert_id, text="\n".join(lines))
+
+
+def _magnitude(z: float) -> str:
+    """How far past normal, in words.
+
+    Words rather than the multiple, because the multiple is not on the
+    alert and cannot honestly be recovered from it: a z is a distance in
+    units of the spread of the baseline run that produced it, and
+    reconstructing "×3.1" at render time would mean joining a run that
+    may since have been replaced. The z itself is stated too, for
+    whoever is calibrating rather than reading.
+    """
+    if z < 4:
+        return "заметно выше обычного"
+    if z < 6:
+        return "намного выше обычного"
+    return "исключительно много"
+
+
+def render_spike(
+    *,
+    alert_id: int,
+    kind: AlertKind,
+    channel_title: str | None,
+    channel_username: str | None,
+    msg_id: int,
+    published_at: datetime,
+    now: datetime,
+    z: float,
+    text: str | None,
+) -> RenderedAlert:
+    """One post doing unusually well on one metric, as one message.
+
+    No carrier list: a spike is a fact about the post's own audience, and
+    who else republished it is the cascade alert's subject. Putting both
+    in every message would make the two kinds indistinguishable at a
+    glance, which is the only thing the kinds are for.
+
+    The age is stated for the same reason it is on a cascade, and matters
+    more here: a spike alert can arrive fifteen minutes after publication,
+    so a reader who has learned to expect hours would misread how early
+    this is.
+    """
+    who = channel_title or (
+        f"@{channel_username}" if channel_username else "канал"
+    )
+    label = SPIKE_LABEL.get(kind, "📈 Активность")
+    lines = [
+        f"{label} — {_magnitude(z)} (z {z:.1f})",
+        f"{who} · {_age(now - published_at)}",
+    ]
+
+    link = post_link(channel_username, msg_id)
+    if link:
+        lines.append(link)
+
+    excerpt = _excerpt(text)
+    if excerpt:
+        lines.append("")
+        lines.append(excerpt)
 
     return RenderedAlert(alert_id=alert_id, text="\n".join(lines))
 

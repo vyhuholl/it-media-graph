@@ -1303,6 +1303,81 @@ def test_alerts_reports_stale_evidence(
     assert "nothing reposted in the window" in result.output
 
 
+def test_baselines_and_score_need_no_lease(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    """Both run beside a collector, so neither may claim the session.
+
+    The refresh is the one worth pinning down: it reads every raw message
+    in the inventory, which looks enough like collection that taking the
+    lease "to be safe" would be an easy thing to add later — and it would
+    stop the collector for the duration.
+    """
+    from itgraph.db import session_lease as lease_module
+
+    use_test_database(monkeypatch, database_url)
+
+    @asynccontextmanager
+    async def refuse(command: str, **kwargs: Any) -> AsyncIterator[None]:
+        raise AssertionError("scoring must take no session lease")
+        yield  # pragma: no cover - unreachable by design
+
+    monkeypatch.setattr(lease_module, "session_lease", refuse)
+
+    baselines = runner.invoke(app, ["baselines"])
+    assert baselines.exit_code == 0, baselines.output
+    assert "have a baseline" in baselines.output
+
+    scored = runner.invoke(app, ["score"])
+    assert scored.exit_code == 0, scored.output
+
+
+def test_score_says_so_when_there_are_no_baselines(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    """Rather than scoring against defaults nobody chose.
+
+    An empty database is the state every new deployment starts in, and
+    the message has to name the command that fixes it — silence here
+    would look exactly like a quiet day.
+    """
+    use_test_database(monkeypatch, database_url)
+
+    result = runner.invoke(app, ["score"])
+
+    assert result.exit_code == 0, result.output
+    assert "itgraph baselines" in result.output
+
+
+def test_since_is_refused_without_replay(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    """A live pass with a week-wide window would alert on settled posts."""
+    use_test_database(monkeypatch, database_url)
+
+    result = runner.invoke(app, ["score", "--since", "7"])
+
+    assert result.exit_code != 0
+    assert "--replay" in result.output
+
+
+def test_neither_scoring_command_connects_to_telegram(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+
+    @asynccontextmanager
+    async def refuse(command: str) -> AsyncIterator[None]:
+        raise AssertionError("scoring must not connect over MTProto")
+        yield  # pragma: no cover - unreachable by design
+
+    monkeypatch.setattr(tg_client, "connected", refuse)
+    monkeypatch.setattr(tg_client, "connected_with_lease", refuse)
+
+    assert runner.invoke(app, ["baselines"]).exit_code == 0
+    assert runner.invoke(app, ["score", "--replay"]).exit_code == 0
+
+
 def test_bot_refuses_without_a_token(
     monkeypatch: pytest.MonkeyPatch, database_url: str
 ) -> None:

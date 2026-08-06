@@ -8,7 +8,7 @@ import asyncio
 import logging
 from collections.abc import Coroutine
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
@@ -686,6 +686,117 @@ def alerts(
         typer.echo(summary.line())
 
     _run(run())
+
+
+@app.command()
+def baselines() -> None:
+    """Recompute what a normal post looks like on every channel.
+
+    Reads the raw layer and the snapshots, writes baselines, and touches
+    nothing else — no Telegram request, no session lease. Run it before
+    `itgraph score`, which has nothing to compare against otherwise, and
+    then about weekly: a channel that has doubled its audience is being
+    scored against the channel it used to be.
+
+    A refresh replaces the previous one rather than adding to it, and
+    only becomes visible once it has completed. Interrupting it is
+    therefore safe — the previous baselines stay in use.
+    """
+    from itgraph.db.session import Database
+    from itgraph.scoring.refresh import refresh_baselines
+
+    async def run() -> None:
+        database = Database()
+        try:
+            summary = await refresh_baselines(database)
+        finally:
+            await database.dispose()
+        typer.echo(summary.line())
+
+    _run(run())
+
+
+@app.command()
+def score(
+    threshold: Annotated[
+        float | None,
+        typer.Option(
+            "--threshold",
+            help="Alert past this z instead of the configured one.",
+        ),
+    ] = None,
+    replay: Annotated[
+        bool,
+        typer.Option(
+            "--replay",
+            help="Report what would have fired. Writes and sends nothing.",
+        ),
+    ] = False,
+    since: Annotated[
+        float | None,
+        typer.Option(
+            "--since",
+            help="Replay from this many days back instead of the default.",
+        ),
+    ] = None,
+) -> None:
+    """Find posts doing unusually well for their channel and their age.
+
+    Reads the snapshots and the baselines, writes alerts; issues no
+    Telegram request and takes no session lease, so it runs beside a
+    collector. Safe on a short schedule — a post raises at most one alert
+    per metric, ever, and a second pass over unchanged snapshots writes
+    nothing.
+
+    `--replay` answers "what would this have said" over history, writing
+    no alert and sending nothing. With `--threshold` it is how a
+    threshold is chosen in minutes rather than one experiment per day.
+    """
+    from itgraph.config import settings
+    from itgraph.db.session import Database
+    from itgraph.scoring.run import run_scoring
+
+    if since is not None and not replay:
+        # --since bounds a replay's history. On a live pass the window is
+        # the last few hours by design, and widening it would raise
+        # alerts about posts that settled days ago.
+        raise typer.BadParameter("--since is only meaningful with --replay")
+
+    async def run() -> None:
+        now = datetime.now(UTC)
+        span = since if since is not None else settings.scoring_replay_days
+        window = timedelta(days=span) if replay else None
+        database = Database()
+        try:
+            summary = await run_scoring(
+                database,
+                now=now,
+                since=now - window if window is not None else None,
+                threshold=threshold,
+                dry_run=replay,
+            )
+        finally:
+            await database.dispose()
+
+        typer.echo(summary.line())
+        for spike in summary.spikes:
+            channel, msg = spike.post_key
+            typer.echo(
+                f"  z {spike.score.z:5.1f}  {spike.score.metric:<9} "
+                f"{channel}/{msg}  "
+                f"{spike.score.observed:.0f} vs {spike.score.expected:.0f} "
+                f"expected at {_hours(spike.score.age)}"
+            )
+
+    _run(run())
+
+
+def _hours(age: timedelta) -> str:
+    """A post's age, as the replay listing prints it."""
+    minutes = max(int(age.total_seconds()) // 60, 0)
+    if minutes < 60:
+        return f"{minutes}m"
+    return f"{minutes // 60}h{minutes % 60:02d}m"
 
 
 @app.command()

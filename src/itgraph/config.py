@@ -10,6 +10,8 @@ from typing import Self
 from pydantic import Field, PostgresDsn, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from itgraph.db.models import Metric
+
 __all__ = ["ProxyType", "Settings", "settings"]
 
 # Backups hold the operator's own subscriptions and review decisions, so
@@ -298,6 +300,78 @@ class Settings(BaseSettings):
     # than quietly retried forever.
     alert_failure_report_after: int = Field(default=3, ge=1)
 
+    # --- virality scoring ---------------------------------------------
+    #
+    # The threshold a post's highest-scoring metric must cross. Measured
+    # rather than chosen: over the collected snapshots the noise floor is
+    # near z 2 and the distribution flattens above 2.5, so 3.0 sits in
+    # the quiet part with room to move either way. It gives about nine
+    # alerts a day, at a median 3.1× the expected value.
+    #
+    # One threshold across all metrics, not one each. Per-metric
+    # thresholds would equalise the volumes and thereby stop meaning
+    # anything: the spreads already differ (0.38 for views against 1.01
+    # for comments), so a z is comparable across metrics *because* it is
+    # divided by its own spread, and tuning it back per metric would undo
+    # exactly that.
+    alert_spike_z: float = Field(default=3.0, gt=0)
+
+    # Which metrics may raise an alert. A subset of what is *measured* —
+    # baselines are computed for all four regardless, so enabling one is
+    # configuration rather than a re-fit.
+    #
+    # Comments are absent: 184 posts across 304 channels, a spread of
+    # 1.01, and a calibration drifting from −0.15 to 0.00 across the age
+    # bands. Measured too poorly to alert on, and a metric that fires
+    # wrongly costs more trust than one that stays quiet.
+    #
+    # Typed as the enum, for the reason `ProxyType` is an enum: a typo
+    # here would otherwise disable a metric silently, and under-alerting
+    # is the failure this system cannot notice about itself.
+    alert_spike_metrics: tuple[Metric, ...] = (
+        Metric.VIEWS,
+        Metric.REACTIONS,
+        Metric.FORWARDS,
+    )
+
+    # How far back a scoring pass looks for posts. Just past the last age
+    # band's upper edge (9h), so every band a post can be scored in is
+    # reachable — the same reachability check `watch_horizon_hours` gets,
+    # and for the same reason: a window equal to the last band would make
+    # that band unscoreable and nothing would say so.
+    scoring_window_hours: float = Field(default=9.5, gt=0)
+
+    # How much snapshot history a baseline refresh fits its curves from.
+    # Long enough that a quiet week does not thin a band below its
+    # minimum; short enough that a channel's changing audience is
+    # followed rather than averaged over a quarter.
+    baseline_window_days: float = Field(default=14.0, gt=0)
+
+    # How settled a post must be to count toward a channel's median.
+    # Measured per row as `fetched_at - date`, never against one cutoff.
+    baseline_mature_days: int = Field(default=28, ge=1)
+
+    # The minimum history behind a baseline. At 30 posts, 465 of the 544
+    # channels in the poll queue are scorable; the rest are reported as
+    # unscored rather than given a thin median.
+    baseline_min_channel_posts: int = Field(default=30, ge=1)
+
+    # The minimum observations behind one age band of one curve. A band
+    # under it is omitted, which means posts of that age are not scored —
+    # a gap, and better than a fraction fitted on four readings.
+    baseline_min_band_samples: int = Field(default=20, ge=1)
+
+    # Past this, the pass says its baselines are stale. A refresh is
+    # cheap and a scoring pass reading month-old medians would compare
+    # today's posts against a channel that has since doubled.
+    baseline_refresh_days: float = Field(default=7.0, gt=0)
+
+    # How far back `--replay` reasons by default. Long enough to cover
+    # everything collected since the snapshot layer started, so a
+    # threshold can be argued about against real history rather than
+    # against a day of it.
+    scoring_replay_days: float = Field(default=7.0, gt=0)
+
     # The bot's credentials and its one recipient. The token is the
     # credential most likely to end up on a machine the operator does not
     # own; it is never committed, and the bot's database role is what
@@ -480,6 +554,46 @@ class Settings(BaseSettings):
                 f"window ({start}:00–{end}:00): the digest would be held by "
                 "the same rule it exists to compensate for, and nothing "
                 "held would ever be delivered"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _scoring_window_reaches_the_last_band(self) -> Self:
+        """Refuse a window that makes the oldest age band unscoreable.
+
+        The same class of error `watch_sample_offsets` is checked for,
+        and the one already made once in this project: a horizon equal to
+        the last offset means the last sample is never taken, and nothing
+        reports a sample that was never due. Here it would mean posts in
+        the 8h band are simply never scored, which reads exactly like
+        nothing unusual having happened at eight hours.
+        """
+        from itgraph.scoring.curves import AGE_BANDS
+
+        edge = AGE_BANDS[-1][1].total_seconds() / 3600
+        if self.scoring_window_hours < edge:
+            raise ValueError(
+                f"scoring_window_hours ({self.scoring_window_hours} h) does "
+                f"not reach the last age band's upper edge ({edge} h): posts "
+                "old enough for that band would fall outside the window, so "
+                "the band could never be scored"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _something_can_alert(self) -> Self:
+        """Refuse an empty alerting set rather than run silently.
+
+        An alerting system's healthy state is silence, so "nothing is
+        configured to alert" and "nothing unusual happened" are
+        indistinguishable from the outside. This is the only moment they
+        are distinguishable at all.
+        """
+        if not self.alert_spike_metrics:
+            raise ValueError(
+                "alert_spike_metrics is empty: the scoring pass would run, "
+                "compute every baseline and raise nothing, which is "
+                "indistinguishable from a quiet day"
             )
         return self
 

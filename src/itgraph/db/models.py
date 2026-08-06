@@ -42,17 +42,22 @@ __all__ = [
     "BackfillState",
     "BackfillStatus",
     "Base",
+    "BaselineRun",
     "CandidateOrigin",
     "Channel",
+    "ChannelBaseline",
     "ChannelKind",
     "ChannelStatus",
     "CollectionCommand",
+    "CurvePoint",
     "DiscoverySource",
     "Edge",
     "EdgeKind",
     "FailureKind",
     "FloodEvent",
     "MessageMetric",
+    "Metric",
+    "MetricBaseline",
     "PendingMention",
     "PendingMentionSource",
     "PollState",
@@ -191,14 +196,52 @@ class CollectionCommand(enum.StrEnum):
 class AlertKind(enum.StrEnum):
     """What an alert is about.
 
-    Only what something can produce today. The scoring change will add
-    kinds for the rate-based signals, and adding them there rather than
-    here is the point: a value nothing can raise is a promise made in a
-    type, and a reader cannot tell it from a feature that quietly stopped
-    working.
+    Only what something can produce. The four spike kinds arrived with
+    the scoring pass rather than being declared ahead of it, for the
+    reason the cascade change gave: a value nothing can raise is a
+    promise made in a type, and a reader cannot tell it from a feature
+    that quietly stopped working.
+
+    The four are separate rather than one ``SPIKE`` with a metric column
+    because they mean different things — reach, approval, an endorsement
+    strong enough to republish, and an argument — and the kind is what a
+    later query groups by when asking which of those the operator
+    actually found useful.
     """
 
     REPOST_CASCADE = "repost_cascade"
+    VIEWS_SPIKE = "views_spike"
+    REACTION_SPIKE = "reaction_spike"
+    FORWARD_SPIKE = "forward_spike"
+    COMMENT_SPIKE = "comment_spike"
+
+
+class Metric(enum.StrEnum):
+    """The four counters a post is scored on.
+
+    Deliberately not collapsed into one number. Views are reach,
+    reactions approval, forwards an endorsement strong enough to
+    republish, and comments as often an argument as an interest; each is
+    measured against its own baseline because a combined score would
+    average away the only distinction worth having.
+
+    The values match the columns of ``message_metrics`` and the fields of
+    ``derive.metrics.Counters``, so the three never need translating.
+    """
+
+    VIEWS = "views"
+    REACTIONS = "reactions"
+    FORWARDS = "forwards"
+    COMMENTS = "comments"
+
+    def alert_kind(self) -> AlertKind:
+        """The alert this metric raises when it is the highest score."""
+        return {
+            Metric.VIEWS: AlertKind.VIEWS_SPIKE,
+            Metric.REACTIONS: AlertKind.REACTION_SPIKE,
+            Metric.FORWARDS: AlertKind.FORWARD_SPIKE,
+            Metric.COMMENTS: AlertKind.COMMENT_SPIKE,
+        }[self]
 
 
 class AlertDelivery(enum.StrEnum):
@@ -1147,6 +1190,174 @@ class AlertFeedback(Base):
         return (
             f"AlertFeedback(alert_id={self.alert_id}, "
             f"verdict={self.verdict.value!r})"
+        )
+
+
+class BaselineRun(Base):
+    """One refresh of the baselines, and the parameters it used.
+
+    The same arrangement ``AffiliationRun`` uses, for the same reason: a
+    refresh produces hundreds of channel medians and a few dozen curve
+    points, and copying the parameters onto each would store one fact a
+    thousand times. Everything a refresh writes points back here, so
+    "under which parameters was this scored" is answerable without
+    recomputing anything.
+
+    It is also what makes a refresh *replace* rather than accumulate.
+    Reading baselines means reading the newest completed run; the older
+    rows stay, so a threshold argued about next month can be compared
+    against the baselines it was actually arguing with rather than
+    against whatever has been recomputed since.
+
+    ``completed_at`` is null until the refresh finishes. A run that died
+    half way leaves an incomplete set that nothing will read, rather than
+    a set of medians for some channels and curves fitted without them.
+    """
+
+    __tablename__ = "baseline_runs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+    # How old a post must be for its counters to count as settled, and
+    # how many such posts a channel needs before it has a median worth
+    # dividing by. At 30 posts, 465 of 544 channels qualify.
+    mature_days: Mapped[int] = mapped_column(Integer)
+    min_channel_posts: Mapped[int] = mapped_column(Integer)
+    # Below this a curve band or a spread is left unfitted rather than
+    # fitted thinly: an absent band is a gap, a band fitted on four
+    # observations is a wrong number.
+    min_band_samples: Mapped[int] = mapped_column(Integer)
+
+    # What the refresh could see. The denominator matters for the same
+    # reason it does in `AffiliationRun`: a channel with no baseline and
+    # a channel with a quiet week are different facts.
+    channels_in_scope: Mapped[int] = mapped_column(Integer)
+    channels_with_baseline: Mapped[int] = mapped_column(Integer)
+
+    def __repr__(self) -> str:
+        return f"BaselineRun(id={self.id}, started_at={self.started_at!r})"
+
+
+class ChannelBaseline(Base):
+    """What one channel's settled post normally reaches, per metric.
+
+    The median rather than the mean, and for the reason every baseline in
+    this project is a median: one viral post moves a mean, and the viral
+    post is the thing being measured — a baseline the outlier drags
+    upward hides the next outlier.
+
+    ``samples`` travels with it because a median over thirty posts and
+    one over three hundred are not the same claim, and the run that
+    scored a post has to be able to say which it had.
+    """
+
+    __tablename__ = "channel_baselines"
+
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("baseline_runs.id", ondelete="CASCADE"), primary_key=True
+    )
+    channel_id: Mapped[int] = mapped_column(
+        ForeignKey("channels.tg_id", ondelete="CASCADE"),
+        primary_key=True,
+        autoincrement=False,
+    )
+    metric: Mapped[Metric] = mapped_column(
+        _pg_enum(Metric, "metric"), primary_key=True
+    )
+
+    median: Mapped[float] = mapped_column(Float)
+    samples: Mapped[int] = mapped_column(Integer)
+
+    def __repr__(self) -> str:
+        return (
+            f"ChannelBaseline(channel_id={self.channel_id}, "
+            f"metric={self.metric.value!r}, median={self.median})"
+        )
+
+
+class MetricBaseline(Base):
+    """How a metric behaves on a kind of channel: the join, and the ruler.
+
+    ``factor`` is what relates a curve normalised to the eight-hour
+    reading to a median computed over thirty days. Without it the two
+    halves of the estimate are in different units and their product means
+    nothing. Measured per metric and never shared: 0.44 for views against
+    1.00 for comments, because views keep trickling for weeks while a
+    comment happens when somebody reads the post.
+
+    ``spread`` is the dispersion of ``log(actual / expected)`` once the
+    curve and the factor have done their work — the number that decides
+    what a threshold means. Stored rather than written into the code
+    because it differs by more than it looks: 0.38 for views against 1.01
+    for comments, and again by kind, from 0.26 on aggregators to 0.37 on
+    personal channels. A constant in the source would apply one metric's
+    shape to another and quietly outlive the measurement it came from.
+    """
+
+    __tablename__ = "metric_baselines"
+
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("baseline_runs.id", ondelete="CASCADE"), primary_key=True
+    )
+    kind: Mapped[ChannelKind] = mapped_column(
+        _pg_enum(ChannelKind, "channel_kind"), primary_key=True
+    )
+    metric: Mapped[Metric] = mapped_column(
+        _pg_enum(Metric, "metric"), primary_key=True
+    )
+
+    factor: Mapped[float] = mapped_column(Float)
+    spread: Mapped[float] = mapped_column(Float)
+    samples: Mapped[int] = mapped_column(Integer)
+
+    def __repr__(self) -> str:
+        return (
+            f"MetricBaseline(kind={self.kind.value!r}, "
+            f"metric={self.metric.value!r}, spread={self.spread})"
+        )
+
+
+class CurvePoint(Base):
+    """One point of a growth curve: the fraction reached by an age band.
+
+    A fraction of the post's own eight-hour reading, which is what takes
+    channel size out of the shape — a channel reaching two hundred
+    readers and one reaching two hundred thousand say the same thing
+    about "half way by two hours".
+
+    Bands rather than exact ages because samples are irregular by design:
+    quiet hours, a suspended laptop and a rate limit all move a reading
+    away from its scheduled offset, and a curve fitted on exact ages
+    would have almost no data.
+    """
+
+    __tablename__ = "curve_points"
+
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("baseline_runs.id", ondelete="CASCADE"), primary_key=True
+    )
+    kind: Mapped[ChannelKind] = mapped_column(
+        _pg_enum(ChannelKind, "channel_kind"), primary_key=True
+    )
+    metric: Mapped[Metric] = mapped_column(
+        _pg_enum(Metric, "metric"), primary_key=True
+    )
+    band: Mapped[str] = mapped_column(Text, primary_key=True)
+
+    fraction: Mapped[float] = mapped_column(Float)
+    samples: Mapped[int] = mapped_column(Integer)
+
+    def __repr__(self) -> str:
+        return (
+            f"CurvePoint(kind={self.kind.value!r}, "
+            f"metric={self.metric.value!r}, band={self.band!r}, "
+            f"fraction={self.fraction})"
         )
 
 
