@@ -1,0 +1,18 @@
+# {{ ansible_managed }}
+[Unit]
+Description=itgraph: score recent posts against their channel's baselines
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User={{ ansible_user }}
+WorkingDirectory={{ repo_dir }}
+# Deliberately *not* a third ExecStart on itgraph-alerts.service.
+# That unit runs `derive` then `alerts`, and a oneshot stops at the first
+# failure — which is right for those two, because alerting on stale edges
+# is worse than not alerting. Scoring shares nothing with them: it reads
+# `message_metrics` and the baselines, never the edges. Bolted onto that
+# unit, a failed `derive` would silence the alert kind that actually
+# produces volume, for a reason unrelated to it.
+ExecStart={{ uv }} run itgraph score

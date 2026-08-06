@@ -1,0 +1,14 @@
+# {{ ansible_managed }}
+[Unit]
+Description=itgraph: scoring on a short cycle
+
+[Timer]
+OnBootSec=8min
+# A post's first scoreable reading lands about 15 minutes after
+# publication, so a longer cycle would mostly delay alerts rather than
+# save anything: the pass reads one nine-hour window and finishes in
+# seconds.
+OnUnitActiveSec={{ score_interval | default('15min') }}
+
+[Install]
+WantedBy=timers.target

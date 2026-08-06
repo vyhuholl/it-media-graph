@@ -30,4 +30,15 @@ proxy_username: ""
 
 swap_size: 2G
 alerts_interval: 15min
+score_interval: 15min
+# Weekly. A channel that has grown is scored against the channel it used
+# to be, so letting this slip is what produces repeat false alarms — see
+# the virality section of src/itgraph/README.md.
+baselines_schedule: "Mon *-*-* 04:30:00"
+
+# The z a post's best metric must pass to raise an alert. Measured: 3.0
+# gives about six alerts a day. Here rather than only in the code so it
+# can be moved after `itgraph score --replay --threshold N` says what the
+# move would have cost.
+alert_spike_z: 3.0
 backup_interval: 4h

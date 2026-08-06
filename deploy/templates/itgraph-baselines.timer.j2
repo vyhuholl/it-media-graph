@@ -1,0 +1,17 @@
+# {{ ansible_managed }}
+[Unit]
+Description=itgraph: weekly baseline refresh
+
+[Timer]
+# Weekly, in the quiet hours. Not gratuitous hygiene: a channel whose
+# audience has grown is scored against the channel it used to be, and
+# that is not a subtle error — the first replay showed one such channel
+# producing seven of forty alerts, every one of them at five times an
+# expectation measured before it grew.
+OnCalendar={{ baselines_schedule | default('Mon *-*-* 04:30:00') }}
+# So a host that was off at the scheduled moment refreshes on the next
+# boot instead of waiting another week.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

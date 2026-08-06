@@ -283,12 +283,47 @@
       no_log: true
       tags: [data]
 
+    # The dump carries the schema as of the moment it was taken, so a
+    # dump older than a migration restores a database that is quietly
+    # behind. Reporting `alembic current` was enough while the schema
+    # only ever arrived with the data; it stopped being enough the first
+    # time a pass depended on a table added after the last dump — the
+    # failure lands on a timer, at night, on a machine nobody is
+    # watching. Applying is idempotent and this host is fresh.
+    - name: Bring the schema to head
+      ansible.builtin.command: "{{ uv }} run alembic upgrade head"
+      args:
+        chdir: "{{ repo_dir }}"
+      changed_when: true
+      tags: [data]
+
     - name: Schema is at head
       ansible.builtin.command: "{{ uv }} run alembic current"
       args:
         chdir: "{{ repo_dir }}"
       register: alembic_current
       changed_when: false
+      tags: [data]
+
+    # `score` without baselines does nothing and says so, so a missing
+    # first run is visible rather than silent — but it would still mean
+    # an evening of no virality alerts for no reason. Conditional,
+    # because this is the one heavy pass here and re-running the playbook
+    # must not drag it in every time.
+    - name: Have baselines ever been computed
+      ansible.builtin.command: >-
+        docker exec -i itgraph-postgres psql -U {{ db_user }} -d {{ db_name }} -tAc
+        "SELECT count(*) FROM baseline_runs WHERE completed_at IS NOT NULL"
+      register: baseline_runs
+      changed_when: false
+      tags: [data]
+
+    - name: First baseline refresh
+      ansible.builtin.command: "{{ uv }} run itgraph baselines"
+      args:
+        chdir: "{{ repo_dir }}"
+      when: baseline_runs.stdout | trim | int == 0
+      changed_when: true
       tags: [data]
 
     # ------------------------------------------------------------- session
@@ -318,6 +353,10 @@
         - itgraph-bot.service
         - itgraph-alerts.service
         - itgraph-alerts.timer
+        - itgraph-score.service
+        - itgraph-score.timer
+        - itgraph-baselines.service
+        - itgraph-baselines.timer
         - itgraph-backup.service
         - itgraph-backup.timer
       notify: reload systemd
@@ -349,6 +388,8 @@
         state: started
       loop:
         - itgraph-alerts.timer
+        - itgraph-score.timer
+        - itgraph-baselines.timer
         - itgraph-backup.timer
       tags: [services]
 

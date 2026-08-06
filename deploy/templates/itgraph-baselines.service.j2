@@ -1,0 +1,18 @@
+# {{ ansible_managed }}
+[Unit]
+Description=itgraph: recompute what a normal post looks like per channel
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User={{ ansible_user }}
+WorkingDirectory={{ repo_dir }}
+# The one heavy pass in this deployment: a median over every mature post
+# in the raw layer, four metrics wide. It takes no session lease and
+# writes nothing collection reads, so it is safe beside `watch` — the
+# scheduling below is about the disk, not about correctness.
+#
+# A refresh that dies half way is invisible rather than half-applied, so
+# an interrupted run costs nothing but the next scheduled one.
+ExecStart={{ uv }} run itgraph baselines
