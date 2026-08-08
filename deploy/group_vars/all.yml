@@ -1,7 +1,7 @@
 ---
 # Non-secret settings. Secrets live in secrets.vault.yml, encrypted.
 
-itgraph_repo_url: git@github.com:you/it-media-graph.git
+itgraph_repo_url: https://github.com/vyhuholl/it-media-graph.git
 itgraph_repo_version: master
 
 # Files only the operator has. Paths on the machine running Ansible.
@@ -32,7 +32,7 @@ watch_timezone: Europe/Moscow
 # the snapshots it misses for good — history can be re-fetched, a reading
 # of a post's counters at age thirty minutes cannot. Set true and the
 # playbook masks the sleep targets and tells logind to ignore the lid.
-host_is_laptop: false
+host_is_laptop: true
 
 swap_size: 2G
 alerts_interval: 15min
