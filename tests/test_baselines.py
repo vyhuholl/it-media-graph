@@ -99,7 +99,7 @@ async def a_run(database: Database, *, complete: bool = True) -> int:
             run,
             ChannelKind.PERSONAL,
             Metric.VIEWS,
-            curve=Curve(fractions={"1h": 0.33}, samples={"1h": 500}),
+            curve=Curve(fractions={"48m": 0.33}, samples={"48m": 500}),
             factor=0.44,
             spread=0.38,
             samples=500,
@@ -119,7 +119,7 @@ async def test_a_channel_with_enough_history_gets_a_median(
 
     async with database.session() as session:
         medians = await mature_medians(
-            session, Metric.VIEWS, mature_days=28, min_posts=30
+            session, Metric.VIEWS, mature_days=28, max_days=365, min_posts=30
         )
 
     assert medians[CHANNEL] == (1000.0, 40)
@@ -135,7 +135,7 @@ async def test_a_thin_channel_gets_none(database: Database) -> None:
 
     async with database.session() as session:
         medians = await mature_medians(
-            session, Metric.VIEWS, mature_days=28, min_posts=30
+            session, Metric.VIEWS, mature_days=28, max_days=365, min_posts=30
         )
 
     assert CHANNEL not in medians
@@ -159,7 +159,7 @@ async def test_maturity_is_measured_per_row(database: Database) -> None:
 
     async with database.session() as session:
         medians = await mature_medians(
-            session, Metric.VIEWS, mature_days=28, min_posts=30
+            session, Metric.VIEWS, mature_days=28, max_days=365, min_posts=30
         )
 
     assert medians == {}
@@ -171,7 +171,7 @@ async def test_a_chat_is_not_given_a_baseline(database: Database) -> None:
 
     async with database.session() as session:
         medians = await mature_medians(
-            session, Metric.VIEWS, mature_days=28, min_posts=30
+            session, Metric.VIEWS, mature_days=28, max_days=365, min_posts=30
         )
 
     assert medians == {}
@@ -263,7 +263,7 @@ async def test_baselines_read_back(database: Database) -> None:
     assert baseline is not None
     assert baseline.mature_median == 1000.0
     assert baseline.spread == 0.38
-    assert baseline.curve.fractions["1h"] == 0.33
+    assert baseline.curve.fractions["48m"] == 0.33
 
 
 async def test_a_refresh_replaces_rather_than_accumulates(
@@ -289,7 +289,7 @@ async def test_a_refresh_replaces_rather_than_accumulates(
             run,
             ChannelKind.PERSONAL,
             Metric.VIEWS,
-            curve=Curve(fractions={"1h": 0.4}, samples={"1h": 600}),
+            curve=Curve(fractions={"48m": 0.4}, samples={"48m": 600}),
             factor=0.5,
             spread=0.3,
             samples=600,
@@ -443,8 +443,8 @@ async def test_a_refresh_fits_and_publishes_one_run(
     assert baseline.mature_median == 1000.0
     # The reference band is the 8h one, so its fraction is 1 by
     # construction and the 1h one is the shape actually measured.
-    assert baseline.curve.fractions["8h"] == 1.0
-    assert 0.6 < baseline.curve.fractions["1h"] < 0.9
+    assert baseline.curve.fractions["420m"] == 1.0
+    assert 0.6 < baseline.curve.fractions["48m"] < 0.9
     assert baseline.factor == pytest.approx(0.44, rel=0.1)
     assert baseline.spread > 0
 
@@ -493,3 +493,166 @@ async def test_an_interrupted_refresh_leaves_the_old_one_in_use(
         still = await current_run(session)
     assert still is not None
     assert still.id == good.id
+
+
+# --- the window has two ends ----------------------------------------
+
+
+async def test_a_post_older_than_the_window_does_not_count(
+    database: Database,
+) -> None:
+    """Without the upper bound a channel is measured against every
+    version of itself it has ever been."""
+    await seed_channel(database, mature_posts=40, views=1000)
+    async with database.session() as session:
+        # Half the history is from a year ago, when the channel was small.
+        await session.execute(
+            text(
+                "UPDATE raw_messages SET fetched_at = "
+                "(payload->>'date')::timestamptz + interval '300 days', "
+                "payload = jsonb_set(payload, '{views}', '100') "
+                "WHERE msg_id <= 20"
+            )
+        )
+
+    async with database.session() as session:
+        bounded = await mature_medians(
+            session, Metric.VIEWS, mature_days=28, max_days=120, min_posts=15
+        )
+        unbounded = await mature_medians(
+            session, Metric.VIEWS, mature_days=28, max_days=99999, min_posts=15
+        )
+
+    # The bounded median sees only the channel as it is now.
+    assert bounded[CHANNEL] == (1000.0, 20)
+    assert unbounded[CHANNEL][1] == 40
+
+
+async def test_a_channel_with_history_only_outside_the_window_is_excluded(
+    database: Database,
+) -> None:
+    """Counted among the channels without a baseline, not silently absent."""
+    await seed_channel(database, mature_posts=40)
+    async with database.session() as session:
+        await session.execute(
+            text(
+                "UPDATE raw_messages SET fetched_at = "
+                "(payload->>'date')::timestamptz + interval '400 days'"
+            )
+        )
+
+    async with database.session() as session:
+        medians = await mature_medians(
+            session, Metric.VIEWS, mature_days=28, max_days=120, min_posts=30
+        )
+        in_scope = await count_in_scope(session)
+
+    assert medians == {}
+    assert in_scope == 1
+
+
+# --- a curve for every kind -----------------------------------------
+
+
+async def test_a_kind_too_thin_to_fit_borrows_the_pooled_curve(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`event` was 18 seed channels that could never be scored.
+
+    Not the "no partial baselines" rule being relaxed: the whole fit is
+    borrowed rather than assembled from two sources, and the row says so.
+    """
+    monkeypatch.setattr(settings, "baseline_min_channel_posts", 3)
+    monkeypatch.setattr(settings, "baseline_min_band_samples", 3)
+    await seed_history(database)
+    # A second channel of another kind, with one post — far too thin.
+    await seed_channel(database, OTHER, kind="event", mature_posts=3)
+    async with database.session() as session:
+        await session.execute(
+            text(
+                "UPDATE raw_messages SET fetched_at = "
+                "(payload->>'date')::timestamptz + interval '60 days' "
+                "WHERE channel_id = :c"
+            ),
+            {"c": OTHER},
+        )
+        await session.execute(
+            text(
+                "INSERT INTO raw_messages "
+                "(channel_id, msg_id, payload, fetched_at) VALUES "
+                "(:c, 900, CAST(:p AS jsonb), :f)"
+            ),
+            {
+                "c": OTHER,
+                "f": NOW,
+                "p": json.dumps(
+                    {
+                        "_": "Message",
+                        "id": 900,
+                        "date": (NOW - timedelta(hours=12)).isoformat(),
+                    }
+                ),
+            },
+        )
+        await session.execute(
+            text(
+                "INSERT INTO message_metrics "
+                "(channel_id, msg_id, observed_at, views) "
+                "VALUES (:c, 900, :at, 500)"
+            ),
+            {"c": OTHER, "at": NOW - timedelta(hours=4)},
+        )
+
+    summary = await refresh_baselines(database, now=NOW)
+
+    assert (ChannelKind.EVENT, Metric.VIEWS) in summary.borrowed
+    assert (ChannelKind.EVENT, Metric.VIEWS) not in summary.fitted
+    assert "borrowed the pooled curve" in summary.line()
+
+    async with database.session() as session:
+        rows = await session.execute(
+            text(
+                "SELECT borrowed FROM metric_baselines "
+                "WHERE kind = 'event' AND metric = 'views'"
+            )
+        )
+    assert rows.scalar_one() is True
+
+
+async def test_a_kind_that_can_be_fitted_keeps_its_own(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "baseline_min_channel_posts", 3)
+    monkeypatch.setattr(settings, "baseline_min_band_samples", 3)
+    await seed_history(database)
+
+    summary = await refresh_baselines(database, now=NOW)
+
+    assert (ChannelKind.PERSONAL, Metric.VIEWS) in summary.fitted
+    assert (ChannelKind.PERSONAL, Metric.VIEWS) not in summary.borrowed
+
+
+async def test_a_band_spread_is_stored_where_it_could_be_measured(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Null where the band was too thin, never a copy of the pooled figure.
+
+    Absent keeps "not measured here" legible; a copy would read as a
+    measurement that happened to agree.
+    """
+    monkeypatch.setattr(settings, "baseline_min_channel_posts", 3)
+    monkeypatch.setattr(settings, "baseline_min_band_samples", 3)
+    await seed_history(database)
+    await refresh_baselines(database, now=NOW)
+
+    async with database.session() as session:
+        rows = await session.execute(
+            text(
+                "SELECT band, spread FROM curve_points "
+                "WHERE kind = 'personal' AND metric = 'views'"
+            )
+        )
+        spreads = dict(rows.all())
+
+    assert spreads
+    assert any(value is not None for value in spreads.values())

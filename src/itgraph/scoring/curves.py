@@ -26,43 +26,83 @@ somebody reads the post.
 ratio: the dispersion of ``log(actual / expected)`` once the curve and
 the factor have done their work. Measured rather than assumed, and stored
 alongside, because it is the number that decides what a threshold means.
+
+It is measured **per band**, not once per metric. The first version of
+this module assumed it was flat across ages; measured over 20 039 scored
+readings it runs 1.18 at fifteen minutes and 0.98 at eight hours. One
+figure makes a threshold stricter at some ages than at others without
+saying so, which is the one thing a comparable score may not do.
 """
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
+from itertools import pairwise
 
 __all__ = [
     "AGE_BANDS",
+    "BAND_EDGES_MINUTES",
+    "REFERENCE_BAND",
     "Curve",
     "Observation",
     "band_of",
+    "fit_band_spreads",
     "fit_curve",
     "fit_factor",
     "fit_spread",
     "median",
 ]
 
-# The ages a curve is fitted at, each a window around one of the
-# collection schedule's offsets. Windows rather than points because
-# samples are irregular by design — quiet hours, an outage, a rate limit
-# — so a reading lands *near* its offset rather than on it.
+# The edges of the age bands, in minutes: contiguous from ten minutes to
+# the end of the alerting window, with no gaps between them.
 #
-# The upper edge is eight hours because that is where the schedule's
-# dense half ends and where views are 96% settled. Beyond it the curve is
-# flat enough that a band would be fitted on noise.
-AGE_BANDS: tuple[tuple[timedelta, timedelta, str], ...] = (
-    (timedelta(minutes=12), timedelta(minutes=21), "15m"),
-    (timedelta(minutes=24), timedelta(minutes=36), "30m"),
-    (timedelta(minutes=51), timedelta(minutes=75), "1h"),
-    (timedelta(minutes=108), timedelta(minutes=144), "2h"),
-    (timedelta(hours=3, minutes=30), timedelta(hours=4, minutes=42), "4h"),
-    (timedelta(hours=7), timedelta(hours=9), "8h"),
-)
+# **They used to be six narrow windows around the collection schedule's
+# offsets, and that was measured to be wrong.** Those six covered 273
+# minutes out of the window, so 84% of readings were discarded and 840 of
+# 3 459 posts were never scored at all — and not at random: 80–88% of
+# posts published between 11:00 and 17:00 got scored against 42% of those
+# published at 03:00, because sampling is irregular exactly where the
+# collector is asleep or busy. A post's chance of being measured must not
+# depend on the hour it was published.
+#
+# Scoring between the offsets was originally refused as interpolation of
+# a shape nobody had measured, and against a few hundred observations
+# that was right. The gaps now hold 2 000–3 300 readings *per hour*, so a
+# band there is measured like any other and `min_band_samples` still
+# keeps a thin one out.
+#
+# The spacing is geometric because growth is: a post changes more between
+# ten and twenty minutes than between eight and nine hours, so equal
+# bands would be fitted on nothing early and on noise late.
+BAND_EDGES_MINUTES = (10, 15, 22, 33, 48, 70, 105, 150, 220, 320, 420, 570)
+
+
+def _bands() -> tuple[tuple[timedelta, timedelta, str], ...]:
+    """Contiguous bands from the edges, each named for its lower edge."""
+    return tuple(
+        (
+            timedelta(minutes=low),
+            timedelta(minutes=high),
+            f"{low}m",
+        )
+        for low, high in pairwise(BAND_EDGES_MINUTES)
+    )
+
+
+AGE_BANDS: tuple[tuple[timedelta, timedelta, str], ...] = _bands()
 
 # The band the factor is measured against: a post's value here is what
 # the factor relates to its channel's mature median.
-REFERENCE_BAND = "8h"
+#
+# Still the band holding the eight-hour mark, so `factor` means what it
+# has always meant and the figures stored by earlier runs stay comparable
+# with the ones stored by later ones. With the window ending at 9.5h this
+# is also the last band, so no fitted fraction exceeds 1 today — that is
+# a consequence of where the window ends, not a rule, and a wider window
+# would simply fit fractions above 1 for the bands past it.
+REFERENCE_BAND = next(
+    name for low, high, name in AGE_BANDS if low <= timedelta(hours=8) < high
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,12 +146,12 @@ class Curve:
 
 
 def band_of(age: timedelta) -> str | None:
-    """Which fitted band an age falls in, or ``None`` between them.
+    """Which fitted band an age falls in, or ``None`` outside them all.
 
-    ``None`` rather than the nearest band: a reading at three hours sits
-    between the two-hour and four-hour fits, and inventing a value for it
-    would be interpolating a shape this module has not measured. Not
-    scoring a reading costs nothing — the post has other readings.
+    The bands are contiguous, so ``None`` now means only what it says:
+    the reading is younger than the first edge or older than the alerting
+    window. It no longer means "this age happens to sit between two
+    sample offsets", which is what it used to mean for 84% of readings.
     """
     for low, high, name in AGE_BANDS:
         if low <= age < high:
@@ -244,3 +284,22 @@ def fit_spread(
     centre = median(residuals)
     deviation = median([abs(value - centre) for value in residuals]) * 1.4826
     return deviation if deviation > 0 else None
+
+
+def fit_band_spreads(
+    residuals: Mapping[str, Sequence[float]], *, min_samples: int = 20
+) -> dict[str, float]:
+    """One spread per band, for the bands that have enough to measure.
+
+    A band absent from the result is not an error and not a zero: the
+    caller falls back to the metric's pooled spread, because a slightly
+    wrong ruler at one age costs far less than no scoring at that age.
+    That is the same trade the contiguous bands were introduced to make,
+    applied to the dispersion instead of the shape.
+    """
+    fitted = {}
+    for band, values in residuals.items():
+        spread = fit_spread(values, min_samples=min_samples)
+        if spread is not None:
+            fitted[band] = spread
+    return fitted

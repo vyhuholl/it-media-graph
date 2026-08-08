@@ -28,10 +28,10 @@ distinction worth having.
 
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 
-from itgraph.scoring.curves import Curve
+from itgraph.scoring.curves import Curve, band_of
 
 __all__ = [
     "Baseline",
@@ -52,12 +52,34 @@ class Baseline:
     by channel kind. A constant in the source would quietly outlive the
     measurement it came from and silently apply one metric's shape to
     another.
+
+    ``band_spreads`` is the same quantity measured per age band, and it
+    is what a reading is actually divided by. The pooled ``spread`` is
+    the fallback for a band with too few residuals to measure its own —
+    a slightly wrong ruler at one age costs far less than no scoring at
+    that age. Measured, the dispersion runs 1.18 at fifteen minutes
+    against 0.98 at eight hours, so one figure for all ages would make
+    the threshold mean different things at different points of a post's
+    life without saying so.
     """
 
     mature_median: float
     factor: float
     curve: Curve
     spread: float
+    band_spreads: dict[str, float] = field(default_factory=dict)
+
+    def spread_at(self, age: timedelta) -> float | None:
+        """The dispersion to divide this reading by, or ``None``.
+
+        ``None`` only where the age is outside every band, which is the
+        same condition that leaves it without an expectation — so a
+        caller that has an expectation always has a ruler for it.
+        """
+        band = band_of(age)
+        if band is None:
+            return None
+        return self.band_spreads.get(band, self.spread)
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,7 +152,8 @@ def score_metric(
     if observed is None or baseline is None:
         return None
     reference = expected(baseline, age)
-    if reference is None or baseline.spread <= 0:
+    dispersion = baseline.spread_at(age)
+    if reference is None or dispersion is None or dispersion <= 0:
         return None
 
     # A zero reading has no logarithm. Floored at half a unit rather than
@@ -143,7 +166,7 @@ def score_metric(
         age=age,
         observed=observed,
         expected=reference,
-        z=math.log(value / reference) / baseline.spread,
+        z=math.log(value / reference) / dispersion,
     )
 
 

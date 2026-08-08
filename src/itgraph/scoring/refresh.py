@@ -34,6 +34,7 @@ from itgraph.scoring.curves import (
     Curve,
     Observation,
     band_of,
+    fit_band_spreads,
     fit_curve,
     fit_factor,
     fit_spread,
@@ -58,10 +59,16 @@ class BaselineSummary:
     channels_in_scope: int
     channels_with_baseline: int
     fitted: list[tuple[ChannelKind, Metric]] = field(default_factory=list)
+    # Fitted from the pool across all kinds because this kind could not
+    # support its own. Reported separately from ``fitted`` and from
+    # ``skipped`` because it is neither: the channels are scored, and the
+    # number they are scored against is not their kind's own. A growing
+    # list here means the pooling is covering for something.
+    borrowed: list[tuple[ChannelKind, Metric]] = field(default_factory=list)
     # ``None`` in the kind position means the metric was not fitted for
     # any kind, which is a different statement from one kind failing and
-    # has to read differently — a metric absent from both lists would
-    # otherwise be unexplained.
+    # has to read differently — a metric absent from all three lists
+    # would otherwise be unexplained.
     skipped: list[tuple[ChannelKind | None, Metric, str]] = field(
         default_factory=list
     )
@@ -72,6 +79,11 @@ class BaselineSummary:
             f"{self.channels_in_scope} channel(s) have a baseline, "
             f"{len(self.fitted)} kind/metric pair(s) fitted"
         )
+        if self.borrowed:
+            pairs = ", ".join(
+                f"{kind}/{metric}" for kind, metric in self.borrowed
+            )
+            line += f"; borrowed the pooled curve: {pairs}"
         if self.skipped:
             reasons = ", ".join(
                 f"{kind or 'every kind'}/{metric} ({why})"
@@ -87,15 +99,21 @@ def _residuals(
     *,
     curve: Curve,
     factor: float,
-) -> list[float]:
-    """``log(actual / expected)`` for every observation that has both.
+) -> dict[str, list[float]]:
+    """``log(actual / expected)`` per age band, for those that have both.
 
     Computed against the curve and factor just fitted, not against a
     previous run's: the spread has to describe *this* estimate's error,
     or a threshold expressed in it would be measuring the difference
     between two vintages of baseline.
+
+    Grouped by band because the dispersion is not constant across a
+    post's life — measured, 1.18 at fifteen minutes against 0.98 at eight
+    hours. The caller both pools these and fits each band separately, so
+    a band too thin to speak for itself still has something to fall back
+    on.
     """
-    residuals: list[float] = []
+    residuals: dict[str, list[float]] = {}
     for entry in entries:
         band = band_of(entry.age)
         if band is None:
@@ -107,8 +125,60 @@ def _residuals(
         expected = median[0] * factor * fraction
         if expected <= 0 or entry.value <= 0:
             continue
-        residuals.append(math.log(entry.value / expected))
+        residuals.setdefault(band, []).append(math.log(entry.value / expected))
     return residuals
+
+
+@dataclass(frozen=True, slots=True)
+class Fit:
+    """A shape and its two rulers, fitted from one pool of observations."""
+
+    curve: Curve
+    factor: float
+    spread: float
+    band_spreads: dict[str, float]
+    samples: int
+
+
+def _fit(
+    entries: list[Observation], medians: dict[int, tuple[float, int]]
+) -> Fit | str:
+    """Everything one pool of observations supports, or why it does not.
+
+    Returns the reason as a string rather than ``None`` so a caller can
+    say which of the three steps failed. "Not fitted" without a reason is
+    the kind of silence this whole change exists to remove.
+    """
+    floor = settings.baseline_min_band_samples
+    curve = fit_curve(entries, min_samples=floor)
+    if not curve.fractions:
+        return "no band met the minimum"
+
+    factor = fit_factor(
+        entries,
+        {channel: value for channel, (value, _) in medians.items()},
+        min_samples=floor,
+    )
+    if factor is None:
+        return "too few posts with a mature median"
+
+    residuals = _residuals(entries, medians, curve=curve, factor=factor)
+    pooled = fit_spread(
+        [value for values in residuals.values() for value in values],
+        min_samples=floor,
+    )
+    if pooled is None:
+        # Without a spread there is no z, and one borrowed from another
+        # metric would apply that metric's shape to this one.
+        return "no measurable spread"
+
+    return Fit(
+        curve=curve,
+        factor=factor,
+        spread=pooled,
+        band_spreads=fit_band_spreads(residuals, min_samples=floor),
+        samples=len(entries),
+    )
 
 
 async def refresh_baselines(
@@ -140,6 +210,7 @@ async def refresh_baselines(
 
         scored: set[int] = set()
         fitted: list[tuple[ChannelKind, Metric]] = []
+        borrowed_pairs: list[tuple[ChannelKind, Metric]] = []
         skipped: list[tuple[ChannelKind | None, Metric, str]] = []
 
         for metric in Metric:
@@ -147,6 +218,7 @@ async def refresh_baselines(
                 session,
                 metric,
                 mature_days=settings.baseline_mature_days,
+                max_days=settings.baseline_mature_max_days,
                 min_posts=settings.baseline_min_channel_posts,
             )
             await store_channel_medians(session, run, metric, medians)
@@ -159,50 +231,44 @@ async def refresh_baselines(
                 # case. Recorded rather than passed over, so a metric
                 # missing from the fitted list has a stated reason.
                 skipped.append((None, metric, "nothing published it"))
+                continue
+
+            # The pooled fit, across every kind at once. A kind too thin
+            # to have a shape of its own takes this rather than going
+            # unscoreable — `event` is 18 seed channels that could never
+            # be scored however much history they accumulated.
+            pooled = _fit(
+                [entry for entries in by_kind.values() for entry in entries],
+                medians,
+            )
+
             for kind, entries in by_kind.items():
-                curve = fit_curve(
-                    entries,
-                    min_samples=settings.baseline_min_band_samples,
-                )
-                if not curve.fractions:
-                    skipped.append((kind, metric, "no band met the minimum"))
-                    continue
-
-                factor = fit_factor(
-                    entries,
-                    {
-                        channel: value
-                        for channel, (value, _) in medians.items()
-                    },
-                    min_samples=settings.baseline_min_band_samples,
-                )
-                if factor is None:
-                    skipped.append(
-                        (kind, metric, "too few posts with a mature median")
-                    )
-                    continue
-
-                spread = fit_spread(
-                    _residuals(entries, medians, curve=curve, factor=factor),
-                    min_samples=settings.baseline_min_band_samples,
-                )
-                if spread is None:
-                    # Without a spread there is no z, and a borrowed one
-                    # would apply another metric's shape to this one.
-                    skipped.append((kind, metric, "no measurable spread"))
-                    continue
+                fit = _fit(entries, medians)
+                borrowed = False
+                if isinstance(fit, str):
+                    if isinstance(pooled, str):
+                        skipped.append((kind, metric, fit))
+                        continue
+                    # The whole fit is borrowed, not the curve alone. A
+                    # kind that cannot support a shape cannot support a
+                    # factor or a spread either, and assembling one from
+                    # two sources is the partial baseline the rules
+                    # forbid — the flag is what makes this different.
+                    fit, borrowed = pooled, True
 
                 await store_curves(
                     session,
                     run,
                     kind,
                     metric,
-                    curve=curve,
-                    factor=factor,
-                    spread=spread,
-                    samples=len(entries),
+                    curve=fit.curve,
+                    factor=fit.factor,
+                    spread=fit.spread,
+                    band_spreads=fit.band_spreads,
+                    samples=fit.samples,
+                    borrowed=borrowed,
                 )
-                fitted.append((kind, metric))
+                (borrowed_pairs if borrowed else fitted).append((kind, metric))
 
         run.channels_with_baseline = len(scored)
         run.completed_at = moment
@@ -211,6 +277,7 @@ async def refresh_baselines(
             channels_in_scope=run.channels_in_scope,
             channels_with_baseline=len(scored),
             fitted=fitted,
+            borrowed=borrowed_pairs,
             skipped=skipped,
         )
 

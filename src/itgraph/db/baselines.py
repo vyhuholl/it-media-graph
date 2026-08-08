@@ -96,6 +96,7 @@ class Baselines:
     factors: dict[tuple[ChannelKind, Metric], float]
     spreads: dict[tuple[ChannelKind, Metric], float]
     curves: dict[tuple[ChannelKind, Metric], Curve]
+    band_spreads: dict[tuple[ChannelKind, Metric], dict[str, float]]
     channels_in_scope: int
 
     def for_channel(self, channel_id: int, metric: Metric) -> Baseline | None:
@@ -116,7 +117,11 @@ class Baselines:
         if median is None or factor is None or spread is None or curve is None:
             return None
         return Baseline(
-            mature_median=median, factor=factor, curve=curve, spread=spread
+            mature_median=median,
+            factor=factor,
+            curve=curve,
+            spread=spread,
+            band_spreads=self.band_spreads.get((kind, metric), {}),
         )
 
     @property
@@ -130,14 +135,24 @@ async def mature_medians(
     metric: Metric,
     *,
     mature_days: int,
+    max_days: int,
     min_posts: int,
 ) -> dict[int, tuple[float, int]]:
     """Each in-scope channel's median for one metric, and its sample count.
 
-    "Settled" is measured per row as ``fetched_at - date``, not against a
-    single cutoff date, because the backfill ran over a week and one
-    cutoff would mean four weeks for one channel and five for another —
-    the same correction ``notebooks/anomalous_posts.py`` makes.
+    **The window has two ends, and the upper one is load-bearing.** With
+    only a lower bound the median covered a channel's entire history: the
+    contributing post was 183 days old at the median, 332 at the 90th
+    percentile and eight years at the oldest. A channel that has grown
+    was then measured against every version of itself it had ever been,
+    so its ordinary posts read as remarkable — measured, per-channel bias
+    ran from +1.87 to −4.48 z, with 5% of channels biased by more than
+    the alert threshold itself.
+
+    Both ends are measured per row as ``fetched_at - date``, not against
+    cutoff dates, because the backfill ran over a week and one cutoff
+    would mean four weeks of maturity for one channel and five for
+    another — the same correction ``notebooks/anomalous_posts.py`` makes.
 
     A channel under ``min_posts`` is absent rather than present with a
     thin median. A median over a handful of posts is not a baseline, and
@@ -160,12 +175,18 @@ async def mature_medians(
                 AND b.failure_kind IS DISTINCT FROM 'permanent'
                 AND r.fetched_at - (r.payload->>'date')::timestamptz
                     >= make_interval(days => :mature_days)
+                AND r.fetched_at - (r.payload->>'date')::timestamptz
+                    < make_interval(days => :max_days)
             ) t
             WHERE v IS NOT NULL AND v > 0
             GROUP BY channel_id
             HAVING count(*) >= :min_posts
         """),
-        {"mature_days": mature_days, "min_posts": min_posts},
+        {
+            "mature_days": mature_days,
+            "max_days": max_days,
+            "min_posts": min_posts,
+        },
     )
     return {
         channel: (float(median), int(samples))
@@ -289,8 +310,17 @@ async def store_curves(
     factor: float,
     spread: float,
     samples: int,
+    band_spreads: dict[str, float] | None = None,
+    borrowed: bool = False,
 ) -> None:
-    """Write one kind's fitted shape and ruler for one metric."""
+    """Write one kind's fitted shape and rulers for one metric.
+
+    ``band_spreads`` carries the dispersion measured for each band; a
+    band absent from it stores ``NULL`` and falls back to the pooled
+    ``spread`` at scoring time. Absent rather than a copy of the pooled
+    figure, so "this band was not measured" stays legible afterwards
+    instead of looking like a measurement that happened to agree.
+    """
     session.add(
         MetricBaseline(
             run_id=run.id,
@@ -299,8 +329,10 @@ async def store_curves(
             factor=factor,
             spread=spread,
             samples=samples,
+            borrowed=borrowed,
         )
     )
+    spreads = band_spreads or {}
     session.add_all(
         CurvePoint(
             run_id=run.id,
@@ -308,6 +340,7 @@ async def store_curves(
             metric=metric,
             band=band,
             fraction=fraction,
+            spread=spreads.get(band),
             samples=curve.samples.get(band, 0),
         )
         for band, fraction in curve.fractions.items()
@@ -352,12 +385,15 @@ async def load_baselines(session: AsyncSession) -> Baselines | None:
 
     fractions: dict[tuple[ChannelKind, Metric], dict[str, float]] = {}
     counts: dict[tuple[ChannelKind, Metric], dict[str, int]] = {}
+    band_spreads: dict[tuple[ChannelKind, Metric], dict[str, float]] = {}
     for point in await session.scalars(
         select(CurvePoint).where(CurvePoint.run_id == run.id)
     ):
         key = (point.kind, point.metric)
         fractions.setdefault(key, {})[point.band] = point.fraction
         counts.setdefault(key, {})[point.band] = point.samples
+        if point.spread is not None:
+            band_spreads.setdefault(key, {})[point.band] = point.spread
 
     kinds = {
         channel_id: kind
@@ -379,5 +415,6 @@ async def load_baselines(session: AsyncSession) -> Baselines | None:
             key: Curve(fractions=value, samples=counts.get(key, {}))
             for key, value in fractions.items()
         },
+        band_spreads=band_spreads,
         channels_in_scope=run.channels_in_scope,
     )

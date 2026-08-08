@@ -31,8 +31,8 @@ POST = 500
 # hour, half by two. With a mature median of 1000 and a factor of 0.44, a
 # post is expected to hold 220 views at two hours.
 CURVE = Curve(
-    fractions={"15m": 0.17, "1h": 0.33, "2h": 0.50, "8h": 0.96},
-    samples={band: 500 for band in ("15m", "1h", "2h", "8h")},
+    fractions={"15m": 0.17, "48m": 0.33, "105m": 0.50, "420m": 0.96},
+    samples=dict.fromkeys(("15m", "48m", "105m", "420m"), 500),
 )
 EXPECTED_AT_2H = 1000.0 * 0.44 * 0.50
 
@@ -354,15 +354,15 @@ async def test_a_channel_that_publishes_no_reactions_scores_none(
     assert summary.crossed == 0
 
 
-async def test_a_reading_outside_every_band_is_not_scored(
+async def test_a_reading_outside_the_window_is_not_scored(
     database: Database,
 ) -> None:
-    """Three hours sits between the two-hour and four-hour fits."""
+    """Younger than the first band — the bands are contiguous above it."""
     await seed_post(database, published_ago=timedelta(hours=5))
     await seed_baselines(database)
     await snapshot(
         database,
-        age=timedelta(hours=3),
+        age=timedelta(minutes=5),
         published_ago=timedelta(hours=5),
         views=999_999,
     )

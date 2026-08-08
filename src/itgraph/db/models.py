@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import (
     ARRAY,
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     Enum,
@@ -1298,6 +1299,20 @@ class MetricBaseline(Base):
     for comments, and again by kind, from 0.26 on aggregators to 0.37 on
     personal channels. A constant in the source would apply one metric's
     shape to another and quietly outlive the measurement it came from.
+
+    It is now the **fallback**, not the ruler: the dispersion is measured
+    per age band on ``CurvePoint``, because it is not constant across a
+    post's life — 1.18 at fifteen minutes against 0.98 at eight hours.
+    This figure is what a band too thin to measure its own falls back to,
+    which is why it is still fitted and still stored.
+
+    ``borrowed`` records that this kind could not be fitted and took the
+    curve pooled across all kinds. It is not the "no partial baselines"
+    rule being relaxed — that rule forbids mixing measured and assumed
+    *silently*. A borrowed curve that travels with the fact that it was
+    borrowed can be reported, queried and withdrawn once the kind has
+    data of its own; without the flag it would be indistinguishable from
+    a measurement, which is the thing actually forbidden.
     """
 
     __tablename__ = "metric_baselines"
@@ -1316,10 +1331,15 @@ class MetricBaseline(Base):
     spread: Mapped[float] = mapped_column(Float)
     samples: Mapped[int] = mapped_column(Integer)
 
+    borrowed: Mapped[bool] = mapped_column(
+        Boolean, server_default=false(), default=False
+    )
+
     def __repr__(self) -> str:
         return (
             f"MetricBaseline(kind={self.kind.value!r}, "
-            f"metric={self.metric.value!r}, spread={self.spread})"
+            f"metric={self.metric.value!r}, spread={self.spread}"
+            f"{', borrowed' if self.borrowed else ''})"
         )
 
 
@@ -1335,6 +1355,14 @@ class CurvePoint(Base):
     quiet hours, a suspended laptop and a rate limit all move a reading
     away from its scheduled offset, and a curve fitted on exact ages
     would have almost no data.
+
+    ``spread`` is this band's own dispersion of ``log(actual/expected)``.
+    It lives here rather than on ``MetricBaseline`` because a band's
+    shape and a band's noise are two facts about the same band, and
+    keeping them apart would let a run store one without the other.
+    ``NULL`` means the band had too few residuals to measure its own and
+    the metric's pooled figure applies — absent rather than copied, so
+    "not measured here" stays legible after the fact.
     """
 
     __tablename__ = "curve_points"
@@ -1351,6 +1379,7 @@ class CurvePoint(Base):
     band: Mapped[str] = mapped_column(Text, primary_key=True)
 
     fraction: Mapped[float] = mapped_column(Float)
+    spread: Mapped[float | None] = mapped_column(Float)
     samples: Mapped[int] = mapped_column(Integer)
 
     def __repr__(self) -> str:

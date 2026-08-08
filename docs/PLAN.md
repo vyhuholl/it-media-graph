@@ -131,7 +131,25 @@ The remaining three numbers were measured rather than assumed, and none of them 
 
 The `factor` is the join between a curve normalised to eight hours and a median computed over thirty days; the `spread` is the dispersion of `log(actual/expected)`, which is what makes the score a z rather than a multiple. Hardcoding views' 0.38 across all four would have fired reaction alerts at half the intended distance into the tail — which is why the spread is stored beside each baseline rather than written into the code.
 
-**Comments are measured but do not alert.** 184 posts, a spread of 1.01, and a calibration that drifts across the age bands: too poorly measured to trust, and a metric that fires wrongly costs more than one that stays quiet. The baseline is computed anyway, so enabling it later is a setting rather than a re-fit.
+**Two corrections, measured five days later on 137 thousand readings.**
+
+*The spread is not flat across ages*, which this section originally assumed. It runs 1.18 at fifteen minutes against 0.98 at eight hours, so one figure per metric made the threshold stricter at some points of a post's life than at others without saying so. It is now fitted per age band, with the per-metric figure kept as the fallback for a band too thin to measure its own.
+
+*The channel median needs an upper bound as well as a lower one.* With only "at least 28 days old", the median contributing post was 183 days old, the 90th percentile 332, the oldest eight years — so a channel that had grown was scored against the channel it used to be. Measured, per-channel bias ran from +1.87 to −4.48 z, with 5% of channels biased by more than the alert threshold itself. Bounding the window to 28–120 days cuts the 95th percentile of that bias from 3.23 to 2.30, at the cost of the channels too quiet to fill it: 382 scorable rather than 465. The post minimum drops from 30 to 20 to pay part of that back, and the two are one decision rather than two settings.
+
+The age bands themselves were the larger error. Six narrow windows around the collection offsets covered 273 minutes of a 49-hour horizon, so 84% of readings were discarded and 840 of 3 459 posts were never scored at all — and not at random: 80–88% of posts published at midday got scored against 42% of those published at 03:00. They are now contiguous from ten minutes to the end of the alerting window.
+
+Correcting all three rescaled the score underneath the threshold, so **the threshold was re-priced on the same week: 3.3, not 3.0**, which reproduces the same volume of about six alerts a day. Fixing the reference and re-tuning the threshold in one step would have made it impossible to say which did what, so the order was fix, measure, then price.
+
+**Comments are measured but do not alert, and the reason is now structural rather than statistical.** Re-measured on twelve times the data — 2 301 posts against 184 — the median z moved only from −0.74 to −0.64 and the spread not at all, from 1.10 to 1.11. More collection will not fix it, because the problem is the instrument:
+
+```
+  share of readings that are exactly zero
+    comments   44.2%
+    views       0.0%
+```
+
+A log-ratio against a median cannot describe a counter that is zero in nearly half its observations. The baseline is computed anyway, so the measurement keeps accumulating; what enabling comments actually needs is a different model — whether a post drew any discussion at all, scored separately from how much.
 
 One threshold across all metrics — z 3.0, about nine alerts a day — because dividing by each metric's own spread is exactly what makes a z comparable, and tuning a threshold back per metric would undo it. One band rather than several: between z 3 and z 4 the volume falls only from nine a day to six, so a second band would say almost nothing about six of the nine posts that already alerted.
 

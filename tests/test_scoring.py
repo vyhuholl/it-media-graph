@@ -9,13 +9,16 @@ rather than an answer of zero.
 
 import math
 from datetime import timedelta
+from itertools import pairwise
 
 import pytest
 
 from itgraph.scoring.curves import (
+    AGE_BANDS,
     Curve,
     Observation,
     band_of,
+    fit_band_spreads,
     fit_curve,
     fit_factor,
     fit_spread,
@@ -24,17 +27,19 @@ from itgraph.scoring.curves import (
 from itgraph.scoring.score import Baseline, expected, score_metric, score_post
 
 # The measured shape of views, from `docs/PLAN.md`: a third of the
-# eight-hour value by an hour, half by two hours.
+# eight-hour value by an hour, half by two hours. Named by the band each
+# age now falls in — the bands are contiguous, so an hour is "48m" (the
+# band 48–70 minutes) rather than a window centred on the hour.
 VIEWS_CURVE = Curve(
     fractions={
         "15m": 0.17,
-        "30m": 0.22,
-        "1h": 0.33,
-        "2h": 0.50,
-        "4h": 0.76,
-        "8h": 0.96,
+        "22m": 0.22,
+        "48m": 0.33,
+        "105m": 0.50,
+        "220m": 0.76,
+        "420m": 0.96,
     },
-    samples={band: 500 for band in ("15m", "30m", "1h", "2h", "4h", "8h")},
+    samples=dict.fromkeys(("15m", "22m", "48m", "105m", "220m", "420m"), 500),
 )
 
 
@@ -59,20 +64,27 @@ def readings(*pairs: tuple[float, float]) -> list[Observation]:
 # --- bands ----------------------------------------------------------
 
 
-def test_a_reading_near_an_offset_lands_in_its_band() -> None:
-    """Windows, not points: samples are irregular by design."""
-    assert band_of(timedelta(minutes=14)) == "15m"
-    assert band_of(timedelta(minutes=18)) == "15m"
-    assert band_of(timedelta(minutes=62)) == "1h"
+def test_a_reading_lands_in_a_band_wherever_it_falls() -> None:
+    """Contiguous, so no age inside the window is homeless.
 
-
-def test_a_reading_between_bands_belongs_to_none() -> None:
-    """Better a gap than a shape nobody measured.
-
-    Three hours sits between the two-hour and four-hour fits; inventing
-    a fraction for it would be interpolating.
+    The six offset windows this replaced covered 273 minutes out of the
+    whole window, which discarded 84% of readings.
     """
-    assert band_of(timedelta(hours=3)) is None
+    assert band_of(timedelta(minutes=16)) == "15m"
+    assert band_of(timedelta(minutes=62)) == "48m"
+    # Three hours used to sit between the two-hour and four-hour fits.
+    assert band_of(timedelta(hours=3)) == "150m"
+
+
+def test_the_bands_leave_no_gap() -> None:
+    """The property the whole change rests on, asserted directly."""
+    for (_, high, _), (low, _, _) in pairwise(AGE_BANDS):
+        assert high == low
+
+
+def test_an_age_outside_the_window_belongs_to_no_band() -> None:
+    """`None` now means only what it says: outside, not between."""
+    assert band_of(timedelta(minutes=5)) is None
     assert band_of(timedelta(days=2)) is None
 
 
@@ -91,7 +103,7 @@ def test_the_curve_is_a_fraction_of_each_posts_own_reference() -> None:
     ]
     curve = fit_curve(small * 10 + large * 10, min_samples=5)
 
-    assert curve.fractions["1h"] == pytest.approx(0.33)
+    assert curve.fractions["48m"] == pytest.approx(0.33)
 
 
 def test_a_post_without_a_reference_reading_is_left_out() -> None:
@@ -111,10 +123,10 @@ def test_a_thin_band_is_omitted_rather_than_fitted() -> None:
 
     curve = fit_curve(observations, min_samples=20)
 
-    assert "8h" in curve.fractions
-    assert "1h" not in curve.fractions
+    assert "420m" in curve.fractions
+    assert "48m" not in curve.fractions
     # ...and the count is still reported, so the gap is explicable.
-    assert curve.samples["1h"] == 1
+    assert curve.samples["48m"] == 1
 
 
 def test_the_factor_joins_the_curve_to_history() -> None:
@@ -253,8 +265,8 @@ def test_a_channel_without_a_baseline_is_not_scored() -> None:
     assert score_metric("views", 500.0, timedelta(hours=1), None) is None
 
 
-def test_an_age_outside_every_band_is_not_scored() -> None:
-    assert score_metric("views", 500.0, timedelta(hours=3), baseline()) is None
+def test_an_age_outside_the_window_is_not_scored() -> None:
+    assert score_metric("views", 500.0, timedelta(days=2), baseline()) is None
 
 
 def test_a_reading_of_zero_is_still_scored() -> None:
@@ -295,3 +307,65 @@ def test_a_metric_can_be_measured_and_excluded_from_alerting() -> None:
     )
 
     assert [entry.metric for entry in scores] == ["views"]
+
+
+# --- the ruler changes with age -------------------------------------
+
+
+def test_the_spread_is_taken_from_the_readings_own_band() -> None:
+    """1.18 at fifteen minutes against 0.98 at eight hours, measured.
+
+    One figure for every age would make the threshold mean something
+    different at each point of a post's life without saying so, which is
+    the one thing a score comparable across posts may not do.
+    """
+    wide = Baseline(
+        mature_median=1000.0,
+        factor=0.44,
+        curve=VIEWS_CURVE,
+        spread=0.38,
+        band_spreads={"15m": 0.76, "420m": 0.38},
+    )
+    young, old = timedelta(minutes=16), timedelta(hours=8)
+    # The same excursion at both ages: three times what was expected.
+    early = score_metric("views", expected(wide, young) * 3, young, wide)
+    late = score_metric("views", expected(wide, old) * 3, old, wide)
+
+    assert early is not None and late is not None
+    assert early.times_expected == pytest.approx(late.times_expected)
+    # Identical in the raw, halved by the wider early ruler.
+    assert early.z == pytest.approx(late.z / 2)
+
+
+def test_a_band_without_its_own_spread_falls_back() -> None:
+    """A slightly wrong ruler at one age beats a hole at that age.
+
+    The same trade the contiguous bands were introduced to make, applied
+    to the dispersion rather than to the shape.
+    """
+    partial = Baseline(
+        mature_median=1000.0,
+        factor=0.44,
+        curve=VIEWS_CURVE,
+        spread=0.38,
+        band_spreads={"420m": 0.30},
+    )
+
+    scored = score_metric("views", 400.0, timedelta(minutes=16), partial)
+
+    assert scored is not None
+    assert partial.spread_at(timedelta(minutes=16)) == 0.38
+
+
+def test_fitting_skips_a_band_too_thin_to_measure() -> None:
+    """Absent, so the caller falls back rather than trusting four points."""
+    fitted = fit_band_spreads(
+        {
+            "15m": [n / 100 for n in range(-50, 51)],
+            "22m": [0.1, -0.1, 0.2],
+        },
+        min_samples=10,
+    )
+
+    assert "15m" in fitted
+    assert "22m" not in fitted

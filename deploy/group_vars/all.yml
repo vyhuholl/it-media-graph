@@ -36,9 +36,9 @@ score_interval: 15min
 # the virality section of src/itgraph/README.md.
 baselines_schedule: "Mon *-*-* 04:30:00"
 
-# The z a post's best metric must pass to raise an alert. Measured: 3.0
+# The z a post's best metric must pass to raise an alert. Measured: 3.3
 # gives about six alerts a day. Here rather than only in the code so it
 # can be moved after `itgraph score --replay --threshold N` says what the
-# move would have cost.
-alert_spike_z: 3.0
+# move would have cost — which is how this number was arrived at.
+alert_spike_z: 3.3
 backup_interval: 4h

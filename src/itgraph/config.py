@@ -303,10 +303,22 @@ class Settings(BaseSettings):
     # --- virality scoring ---------------------------------------------
     #
     # The threshold a post's highest-scoring metric must cross. Measured
-    # rather than chosen: over the collected snapshots the noise floor is
-    # near z 2 and the distribution flattens above 2.5, so 3.0 sits in
-    # the quiet part with room to move either way. It gives about nine
-    # alerts a day, at a median 3.1× the expected value.
+    # rather than chosen, and **re-priced once** — the number moved
+    # without the intent behind it moving.
+    #
+    # It began at 3.0, from a distribution whose noise floor sat near z 2
+    # and which flattened above 2.5. Correcting the reference then
+    # rescaled z underneath it: bounding the mature window dropped the
+    # median channel's baseline by 8% (275 of 381 channels went down),
+    # and fitting the curve where the readings actually are narrowed the
+    # personal/views spread from 0.389 to 0.321. Both are improvements
+    # and both push z up — a post that scored 3.0 on the old scale scores
+    # about 3.9 on this one.
+    #
+    # So 3.3, measured by replaying the same week the original 3.0 was
+    # measured on and taking the threshold that reproduces the same
+    # volume: 40 alerts over 7 days, 5.7 a day. Leaving 3.0 in place
+    # would have raised the volume by half without anyone deciding to.
     #
     # One threshold across all metrics, not one each. Per-metric
     # thresholds would equalise the volumes and thereby stop meaning
@@ -314,7 +326,7 @@ class Settings(BaseSettings):
     # for comments), so a z is comparable across metrics *because* it is
     # divided by its own spread, and tuning it back per metric would undo
     # exactly that.
-    alert_spike_z: float = Field(default=3.0, gt=0)
+    alert_spike_z: float = Field(default=3.3, gt=0)
 
     # Which metrics may raise an alert. A subset of what is *measured* —
     # baselines are computed for all four regardless, so enabling one is
@@ -347,14 +359,28 @@ class Settings(BaseSettings):
     # followed rather than averaged over a quarter.
     baseline_window_days: float = Field(default=14.0, gt=0)
 
-    # How settled a post must be to count toward a channel's median.
-    # Measured per row as `fetched_at - date`, never against one cutoff.
+    # How settled a post must be to count toward a channel's median, and
+    # how stale it may be before it stops counting. Both measured per row
+    # as `fetched_at - date`, never against one cutoff.
+    #
+    # **The upper bound and the post minimum are one decision.** Without
+    # an upper bound the median covered a channel's whole history and a
+    # grown channel was scored against its former self; bounding it costs
+    # coverage, and lowering the minimum is what buys the coverage back.
+    # Measured over the channels that could be measured:
+    #
+    #   window / min posts   channels   bias spread   p95 |bias|
+    #   unbounded / 30            465          1.05        3.23
+    #   28–180d   / 30            384          0.82        2.66
+    #   28–120d   / 30            332          0.78        2.39
+    #   28–120d   / 20            382          0.78        2.39
+    #
+    # 28–120d/20 and 28–180d/30 cost the same coverage and differ in
+    # bias, so: 120 days, minimum 20. Changing one of the two without the
+    # other lands on neither row of that table.
     baseline_mature_days: int = Field(default=28, ge=1)
-
-    # The minimum history behind a baseline. At 30 posts, 465 of the 544
-    # channels in the poll queue are scorable; the rest are reported as
-    # unscored rather than given a thin median.
-    baseline_min_channel_posts: int = Field(default=30, ge=1)
+    baseline_mature_max_days: int = Field(default=120, ge=2)
+    baseline_min_channel_posts: int = Field(default=20, ge=1)
 
     # The minimum observations behind one age band of one curve. A band
     # under it is omitted, which means posts of that age are not scored —
@@ -577,6 +603,27 @@ class Settings(BaseSettings):
                 f"not reach the last age band's upper edge ({edge} h): posts "
                 "old enough for that band would fall outside the window, so "
                 "the band could never be scored"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _the_mature_window_is_not_empty(self) -> Self:
+        """Refuse a window with no posts in it.
+
+        An upper bound at or below the lower one selects nothing, so
+        every channel loses its baseline at once — and the pass reports
+        that as "no channel has enough history", which is exactly what a
+        genuinely thin inventory looks like. The one moment the two are
+        distinguishable is here.
+        """
+        if self.baseline_mature_max_days <= self.baseline_mature_days:
+            raise ValueError(
+                f"baseline_mature_max_days "
+                f"({self.baseline_mature_max_days}) is not above "
+                f"baseline_mature_days ({self.baseline_mature_days}): the "
+                "mature window would be empty and every channel would lose "
+                "its baseline, which reads exactly like an inventory with "
+                "no history"
             )
         return self
 
