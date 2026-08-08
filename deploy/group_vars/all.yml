@@ -28,6 +28,12 @@ proxy_host: ""
 proxy_port: 1080
 proxy_username: ""
 
+# A laptop suspends when the lid closes, and a suspended collector loses
+# the snapshots it misses for good — history can be re-fetched, a reading
+# of a post's counters at age thirty minutes cannot. Set true and the
+# playbook masks the sleep targets and tells logind to ignore the lid.
+host_is_laptop: false
+
 swap_size: 2G
 alerts_interval: 15min
 score_interval: 15min

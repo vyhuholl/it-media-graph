@@ -156,6 +156,59 @@
         state: present
       tags: [base]
 
+    # A laptop's default is to suspend when the lid closes, and a
+    # suspended collector does not merely pause — the snapshots it misses
+    # are gone for good. History can be re-fetched; a reading of a post's
+    # counters at age thirty minutes cannot be taken later, because the
+    # post will not be thirty minutes old again. That is the whole reason
+    # `watch` runs as its own phase, and a closed lid quietly undoes it.
+    #
+    # Off by default: on a rented machine there is no lid and masking
+    # sleep would be noise in the unit list.
+    - name: Sleep is masked on a laptop
+      become: true
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        masked: true
+      loop:
+        - sleep.target
+        - suspend.target
+        - hibernate.target
+        - hybrid-sleep.target
+      when: host_is_laptop | default(false) | bool
+      tags: [base, laptop]
+
+    # Belt to the masking's braces, and it earns its place: masked
+    # targets make a suspend *fail*, which logind logs as an error on
+    # every lid close. This makes it not try.
+    #
+    # A drop-in rather than an edit to logind.conf, so a package upgrade
+    # replacing that file does not silently take the setting with it.
+    - name: Somewhere to put the logind drop-in
+      become: true
+      ansible.builtin.file:
+        path: /etc/systemd/logind.conf.d
+        state: directory
+        mode: "0755"
+      when: host_is_laptop | default(false) | bool
+      tags: [base, laptop]
+
+    - name: The lid switch does nothing on a laptop
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/systemd/logind.conf.d/10-itgraph-no-sleep.conf
+        mode: "0644"
+        content: |
+          # Managed by Ansible. A closed lid must not stop collection:
+          # missed metric snapshots cannot be taken later.
+          [Login]
+          HandleLidSwitch=ignore
+          HandleLidSwitchExternalPower=ignore
+          HandleLidSwitchDocked=ignore
+      when: host_is_laptop | default(false) | bool
+      notify: Reload logind
+      tags: [base, laptop]
+
     # ---------------------------------------------------------------- repo
 
     - name: Clone the repository
@@ -359,7 +412,7 @@
         - itgraph-baselines.timer
         - itgraph-backup.service
         - itgraph-backup.timer
-      notify: reload systemd
+      notify: Reload systemd
       tags: [services]
 
     - name: Flush unit changes before starting anything
@@ -394,6 +447,28 @@
       tags: [services]
 
     # -------------------------------------------------------------- verify
+
+    # Checked rather than assumed, for the same reason the proxy route is:
+    # a laptop that still suspends looks exactly like one that does not
+    # until a night has passed and the snapshots are already lost.
+    - name: Sleep really is masked
+      ansible.builtin.command: systemctl is-enabled sleep.target
+      register: sleep_state
+      changed_when: false
+      failed_when: false
+      when: host_is_laptop | default(false) | bool
+      tags: [verify]
+
+    - name: A laptop cannot suspend
+      ansible.builtin.assert:
+        that: sleep_state.stdout | trim == "masked"
+        fail_msg: >-
+          sleep.target is "{{ sleep_state.stdout | trim }}", not masked. A
+          closed lid will stop collection, and missed metric snapshots
+          cannot be taken later.
+        quiet: true
+      when: host_is_laptop | default(false) | bool
+      tags: [verify]
 
     - name: The inventory came across
       ansible.builtin.command: >-
@@ -459,7 +534,16 @@
       tags: [verify]
 
   handlers:
+    # Handler names are matched literally and case-sensitively, and a
+    # notify with no matching handler is a hard error rather than a
+    # warning — so these have to read exactly as the `notify:` lines do.
     - name: Reload systemd
       become: true
       ansible.builtin.systemd:
         daemon_reload: true
+
+    - name: Reload logind
+      become: true
+      ansible.builtin.systemd:
+        name: systemd-logind
+        state: restarted
