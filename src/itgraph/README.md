@@ -55,6 +55,8 @@ DATABASE_URL=postgresql+asyncpg://itgraph:itgraph@localhost:5433/itgraph_scratch
 
 Копии лежат в `~/itgraph-backups`, вне репозитория: дамп содержит ваши подписки. Имена в UTC с суффиксом `Z` — дамп, снятый в 13:08 по Москве, называется `...T100802Z`.
 
+Рядом с дампами каждый уровень держит симлинк на свой последний **проверенный** дамп — `weekly/full-LATEST.dump` и `daily/inventory-LATEST.dump`. Он нужен, чтобы восстановление и деплой называли путь, а не выбирали файл глазами: выбрать вчерашний дамп для переезда — значит потерять сутки снимков счётчиков, а их, в отличие от истории, не пересобрать. Симлинк относительный, поэтому переживает копирование каталога на другую машину.
+
 ```bash
 make backup            # снять то, что назрело
 make backup-full       # полный дамп прямо сейчас
@@ -79,7 +81,7 @@ docker compose exec -T postgres psql -U itgraph -d postgres \
   -c 'CREATE DATABASE itgraph_restore_test'
 docker compose exec -T postgres bash -c \
   'cat > /tmp/r.dump && pg_restore -U itgraph -d itgraph_restore_test --no-owner /tmp/r.dump' \
-  < ~/itgraph-backups/weekly/full-XXXXXXXXTXXXXXXZ.dump
+  < ~/itgraph-backups/weekly/full-LATEST.dump
 docker compose exec -T postgres psql -U itgraph -d itgraph_restore_test \
   -c 'SELECT status, count(*) FROM channels GROUP BY status'
 ```

@@ -9,6 +9,14 @@ account, re-fetchable — so full dumps are rarer and fewer are kept.
 Every dump is read back with ``pg_restore --list`` before it counts. A
 file that cannot be restored is not a backup, and the failure has to
 surface when it is written rather than when it is needed.
+
+Each tier also keeps a ``…-LATEST.dump`` symlink to its newest verified
+dump, so that a restore — or the deploy playbook, which ships one of
+these to a new host — names a stable path instead of the operator
+picking a timestamped file by eye. Picking by eye is not a cosmetic
+risk: choosing yesterday's dump for a migration silently loses a day of
+metric snapshots, and snapshots are the one thing here that cannot be
+re-collected.
 """
 
 import logging
@@ -30,6 +38,7 @@ __all__ = [
     "BackupKind",
     "due_kinds",
     "is_due",
+    "latest_link",
     "prune",
     "run_backup",
     "take_backup",
@@ -46,6 +55,11 @@ INVENTORY_TABLES = ("channels", "backfill_state")
 # 10:08, and without the Z that reads as a machine with the wrong clock.
 # UTC also spares the ordering an hour that repeats every autumn.
 STAMP_FORMAT = "%Y%m%dT%H%M%SZ"
+
+# What the stable pointer is called, per tier: `full-LATEST.dump`,
+# `inventory-LATEST.dump`. Not a timestamp, deliberately — the whole
+# point is a name that does not change.
+LATEST = "LATEST"
 
 
 class BackupError(RuntimeError):
@@ -102,11 +116,19 @@ def existing(directory: Path, kind: BackupKind) -> list[Path]:
     A file whose name carries no readable timestamp is ignored rather
     than allowed to raise: this directory belongs to the operator, and
     something they dropped in it must not stop the next backup.
+
+    Symlinks are skipped before that check and without a word, because
+    the ``LATEST`` pointer is one and matches the glob. Warning about it
+    on every run would be noise that teaches the operator to skim past
+    this log line — which is the line that reports the genuinely odd
+    file this function exists to tolerate.
     """
     if not directory.is_dir():
         return []
     dated = []
     for path in directory.glob(f"{kind.name}-*.dump"):
+        if path.is_symlink():
+            continue
         moment = _timestamp_of(path)
         if moment is None:
             logger.warning("ignoring %s: no timestamp in the name", path.name)
@@ -244,8 +266,52 @@ def take_backup(
         scratch.unlink(missing_ok=True)
         raise
 
+    # Only now, past the verification: a pointer to an archive that does
+    # not restore would be worse than no pointer at all.
+    _point_latest_at(path, kind)
+
     logger.info("%s: %d bytes, %d entries", path.name, size, entries)
     return Backup(path=path, kind=kind.name, size=size, entries=entries)
+
+
+def latest_link(directory: Path, kind: BackupKind) -> Path:
+    """Where this tier's stable pointer lives."""
+    return directory / f"{kind.name}-{LATEST}.dump"
+
+
+def _point_latest_at(path: Path, kind: BackupKind) -> None:
+    """Repoint this tier's ``LATEST`` at a dump that has been verified.
+
+    **Relative, never absolute.** This directory gets copied and rsynced
+    — that is what it is for — and an absolute target breaks the moment
+    it is read from another path or another machine.
+
+    Replaced through a temporary name so the pointer is never briefly
+    absent: ``symlink_to`` refuses an existing path, and unlinking first
+    would leave a window in which a restore finds nothing.
+
+    A failure here does **not** fail the backup: the dump is written and
+    verified, and losing a convenience pointer must not turn a good
+    backup into a missing one. But the stale link is removed rather than
+    left, because absent makes the next restore stop and say so, while
+    stale makes it quietly ship last week's data.
+    """
+    link = latest_link(path.parent, kind)
+    scratch = path.parent / f".{kind.name}-{LATEST}.dump.new"
+    try:
+        scratch.unlink(missing_ok=True)
+        scratch.symlink_to(path.name)
+        scratch.replace(link)
+    except OSError as exc:
+        scratch.unlink(missing_ok=True)
+        link.unlink(missing_ok=True)
+        logger.warning(
+            "could not point %s at %s (%s); the dump itself is fine, "
+            "but a restore will have to name the file",
+            link.name,
+            path.name,
+            exc,
+        )
 
 
 def prune(root: Path, kind: BackupKind) -> list[Path]:

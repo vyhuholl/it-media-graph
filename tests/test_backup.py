@@ -4,6 +4,8 @@ No Docker and no Postgres: ``subprocess.run`` is replaced, so what is
 under test is the decision-making, not pg_dump.
 """
 
+import os
+import shutil
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -20,6 +22,7 @@ from itgraph.db.backup import (
     full_kind,
     inventory_kind,
     is_due,
+    latest_link,
     prune,
     run_backup,
     take_backup,
@@ -233,3 +236,132 @@ def test_nothing_is_pruned_when_the_dump_fails(
         run_backup(tmp_path, kinds=[full_kind()], now=NOW)
 
     assert len(list((tmp_path / "weekly").iterdir())) == 10
+
+
+# --- the LATEST pointer ---------------------------------------------
+
+
+def test_a_dump_gets_a_stable_name_to_restore_from(
+    tmp_path: Path, fake_run: list[list[str]]
+) -> None:
+    """So a restore names a path instead of picking a file by eye."""
+    backup = take_backup(full_kind(), tmp_path, now=NOW)
+
+    link = latest_link(tmp_path / "weekly", full_kind())
+    assert link.is_symlink()
+    assert link.resolve() == backup.path.resolve()
+
+
+def test_the_pointer_is_relative(
+    tmp_path: Path, fake_run: list[list[str]]
+) -> None:
+    """This directory is rsynced and copied — that is what it is for.
+
+    An absolute target breaks the moment the backups are read from
+    another path or another machine, which is exactly the moment a
+    restore is happening.
+    """
+    take_backup(full_kind(), tmp_path, now=NOW)
+
+    link = latest_link(tmp_path / "weekly", full_kind())
+    assert not Path(os.readlink(link)).is_absolute()
+
+    moved = tmp_path.parent / "carried-elsewhere"
+    shutil.copytree(tmp_path, moved, symlinks=True)
+    assert (moved / "weekly" / "full-LATEST.dump").exists()
+
+
+def test_a_later_dump_repoints_it(
+    tmp_path: Path, fake_run: list[list[str]]
+) -> None:
+    take_backup(full_kind(), tmp_path, now=NOW)
+    second = take_backup(full_kind(), tmp_path, now=NOW + timedelta(days=7))
+
+    link = latest_link(tmp_path / "weekly", full_kind())
+    assert link.resolve() == second.path.resolve()
+
+
+def test_each_tier_gets_its_own_pointer(
+    tmp_path: Path, fake_run: list[list[str]]
+) -> None:
+    take_backup(inventory_kind(), tmp_path, now=NOW)
+    take_backup(full_kind(), tmp_path, now=NOW)
+
+    assert (tmp_path / "daily" / "inventory-LATEST.dump").is_symlink()
+    assert (tmp_path / "weekly" / "full-LATEST.dump").is_symlink()
+
+
+def test_the_pointer_is_not_a_dump(
+    tmp_path: Path, fake_run: list[list[str]], caplog: pytest.LogCaptureFixture
+) -> None:
+    """It matches the glob, so it has to be excluded deliberately.
+
+    Silently, too: a warning on every run is noise that teaches the
+    operator to skim past the line that reports a genuinely odd file.
+    """
+    take_backup(full_kind(), tmp_path, now=NOW)
+
+    with caplog.at_level("WARNING"):
+        found = existing(tmp_path / "weekly", full_kind())
+
+    assert len(found) == 1
+    assert not found[0].is_symlink()
+    assert "LATEST" not in caplog.text
+
+
+def test_pruning_leaves_the_pointer_alone(
+    tmp_path: Path, fake_run: list[list[str]]
+) -> None:
+    """It is not a dump, so it must not count toward `keep` either."""
+    for week in range(6):
+        take_backup(full_kind(), tmp_path, now=NOW + timedelta(days=7 * week))
+    newest = take_backup(
+        full_kind(), tmp_path, now=NOW + timedelta(days=7 * 6)
+    )
+    prune(tmp_path, full_kind())
+
+    link = latest_link(tmp_path / "weekly", full_kind())
+    assert link.is_symlink()
+    assert link.resolve() == newest.path.resolve()
+    assert len(existing(tmp_path / "weekly", full_kind())) == (
+        full_kind().keep
+    )
+
+
+def test_a_failed_dump_does_not_move_the_pointer(
+    tmp_path: Path, fake_run: list[list[str]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pointer to an archive that does not restore is worse than none."""
+    good = take_backup(full_kind(), tmp_path, now=NOW)
+
+    def failing(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[Any]:
+        return subprocess.CompletedProcess(args, 1, b"", b"disk full")
+
+    monkeypatch.setattr(backup_module.subprocess, "run", failing)
+    with pytest.raises(BackupError):
+        take_backup(full_kind(), tmp_path, now=NOW + timedelta(days=7))
+
+    link = latest_link(tmp_path / "weekly", full_kind())
+    assert link.resolve() == good.path.resolve()
+
+
+def test_an_unwritable_pointer_does_not_lose_the_backup(
+    tmp_path: Path, fake_run: list[list[str]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The dump is verified and on disk; that is the backup.
+
+    Failing the run because a convenience pointer could not be written
+    would turn a cosmetic problem into a missing backup. The stale link
+    goes, though — absent makes the next restore stop and say so, while
+    stale makes it quietly ship last week's data.
+    """
+    take_backup(full_kind(), tmp_path, now=NOW)
+
+    def refuse(self: Path, target: Any) -> None:
+        raise OSError("symlinks not supported here")
+
+    monkeypatch.setattr(Path, "symlink_to", refuse)
+    second = take_backup(full_kind(), tmp_path, now=NOW + timedelta(days=7))
+
+    assert second.path.exists()
+    assert not latest_link(tmp_path / "weekly", full_kind()).exists()
