@@ -10,7 +10,7 @@ cp inventory.ini.example inventory.ini            # вписать адрес и
 cp group_vars/secrets.vault.yml.example group_vars/secrets.vault.yml
 $EDITOR group_vars/secrets.vault.yml
 ansible-vault encrypt group_vars/secrets.vault.yml
-$EDITOR group_vars/all.yml                        # пути к сессии и дампу
+$EDITOR group_vars/all.yml                        # репозиторий, пути к сессии и дампу
 
 ansible-playbook playbook.yml --ask-vault-pass
 ```
@@ -122,14 +122,27 @@ gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'no
 
 ## Секреты
 
-`group_vars/secrets.vault.yml` шифруется ansible-vault и **коммитится в
-таком виде**. Не коммитятся пароль от хранилища и любые незашифрованные
-переменные — это в `.gitignore`:
+`group_vars/secrets.vault.yml` шифруется ansible-vault и **в репозиторий
+не попадает** — он в `.gitignore` вместе с `inventory.ini`. Так ничего не
+зависит от того, устоит ли шифр, и случайный `git add .` ничего не
+раскрывает.
+
+Обратная сторона: секреты **не резервируются репозиторием**. Свежий клон
+приезжает без них, а потеря этой машины — потеря их всех. Держите копию
+там же, где храните api hash.
 
 ```
+inventory.ini
+secrets.vault.yml
 deploy/.vault-pass
 deploy/group_vars/secrets.yml
 ```
+
+**Эндпоинт прокси лежит там же, а не в `all.yml`.** Он не просто
+учётные данные: это адрес, с которого, как известно, ходит коллектор, —
+ровно то, что прокси и существует скрывать, — а `all.yml` коммитится
+открытым. Хост, порт, логин и пароль едут вместе, чтобы настройка прокси
+была одной правкой в одном зашифрованном файле.
 
 Файл сессии в репозиторий не попадает никогда: он в `.gitignore` по маске
 `*.session`, а плейбук берёт его по пути с вашей машины.
@@ -145,8 +158,9 @@ ansible-playbook playbook.yml --tags verify     # только проверки
 
 ## Что остаётся руками
 
-**Прокси.** Плейбук кладёт настройки и проверяет, что маршрут не прямой, но
-сам эндпоинт вы получаете у провайдера VPN. Проверить до запуска:
+**Прокси.** Плейбук кладёт настройки (из `secrets.vault.yml`) и проверяет,
+что маршрут не прямой, но сам эндпоинт вы получаете у провайдера VPN.
+Проверить до запуска:
 
 ```bash
 curl -s --socks5 ХОСТ:ПОРТ https://api.ipify.org

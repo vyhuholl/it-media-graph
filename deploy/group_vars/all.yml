@@ -20,13 +20,13 @@ db_port: 5433
 telegram_session: itgraph.session
 watch_timezone: Europe/Moscow
 
-# Only MTProto goes through this. The bot speaks Bot API over ordinary
-# HTTPS and needs no proxy. Leave proxy_host empty for a direct
-# connection.
-proxy_type: socks5
-proxy_host: ""
-proxy_port: 1080
-proxy_username: ""
+# The proxy endpoint lives in secrets.vault.yml, not here. It is not
+# merely a credential: it is the address the collector's traffic is
+# known to come from, which is what the proxy exists to keep private —
+# and this file is committed in the clear. Host, port, username and
+# password travel together so that configuring the proxy is one edit in
+# one encrypted file, rather than a split that invites the host into the
+# wrong half. Leave them empty there for a direct connection.
 
 # A laptop suspends when the lid closes, and a suspended collector loses
 # the snapshots it misses for good — history can be re-fetched, a reading

@@ -19,6 +19,10 @@
 *.dump
 itgraph-backups/
 
+# Ansible secrets
+inventory.ini
+secrets.vault.yml
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -239,7 +243,8 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Ansible: the vault password and any un-encrypted variables. The
-# encrypted vault file itself is safe to commit and is committed; these
-# two are what would give it away.
+# encrypted vault file is ignored too — see the "Ansible secrets" block
+# near the top — so nothing about the proxy endpoint or the bot token
+# leaves this machine, and none of it rests on the cipher holding.
 deploy/.vault-pass
 deploy/group_vars/secrets.yml
