@@ -105,6 +105,26 @@
       changed_when: true
       tags: [base]
 
+    # **Kept current, not merely present.** uv carries its own index of
+    # downloadable interpreters, so a uv older than the pinned Python
+    # cannot fetch it: `uv python install 3.14.3` answers "No download
+    # found" and `uv sync` fails with "No interpreter found", neither of
+    # which points at uv's age. Installing only when absent left a host
+    # that had uv from some earlier day silently unable to build the
+    # environment — two machines configured "the same" and not the same.
+    - name: Keep uv current
+      ansible.builtin.command: "{{ uv }} self update"
+      register: uv_update
+      changed_when: "'Upgraded' in uv_update.stdout"
+      # A uv installed by a package manager refuses to update itself, and
+      # that is not a reason to stop: it is only a reason to say so.
+      failed_when:
+        - uv_update.rc != 0
+        - "'self-update is only available' not in uv_update.stderr"
+      when: uv_binary.stat.exists
+      tags: [base]
+
+
     - name: Firewall allows ssh and nothing else
       become: true
       community.general.ufw:
@@ -220,6 +240,19 @@
         dest: "{{ repo_dir }}"
         version: "{{ itgraph_repo_version | default('master') }}"
         update: true
+      tags: [repo]
+
+    # The pinned interpreter, fetched explicitly rather than left to
+    # `uv sync`, so a version uv cannot supply fails here — where the
+    # message names Python — rather than inside a dependency install
+    # that reports only "No interpreter found". Reads `.python-version`
+    # from the checkout, so it has to follow the clone.
+    - name: The pinned Python is available
+      ansible.builtin.command: "{{ uv }} python install"
+      args:
+        chdir: "{{ repo_dir }}"
+      register: python_install
+      changed_when: "'Installed' in python_install.stderr"
       tags: [repo]
 
     - name: Install dependencies
