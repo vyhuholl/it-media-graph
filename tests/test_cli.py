@@ -1166,6 +1166,15 @@ def test_watch_polls_and_reports(
 
     from fakes import FakeChannel, FakeHistoryMessage
 
+    from itgraph.config import settings as live_settings
+
+    # Equal bounds switch the window off. Without this the test polls
+    # nothing between 02:00 and 07:00 Moscow time and fails for five
+    # hours every night — `tests/test_watch.py` has carried the same
+    # fixture from the start, and this one was simply missed.
+    monkeypatch.setattr(live_settings, "watch_quiet_from_hour", 0)
+    monkeypatch.setattr(live_settings, "watch_quiet_to_hour", 0)
+
     use_test_database(monkeypatch, database_url)
     seed_seed_channel(database_url, 1000000001, "example")
 
