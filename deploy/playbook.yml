@@ -307,10 +307,44 @@
       when: not (force_restore | default(false) | bool)
       tags: [data]
 
+    # `copy_links` is load-bearing: `itgraph_dump_src` points at
+    # `full-LATEST.dump`, which is a symlink, and `synchronize` defaults
+    # to `archive: yes` — rsync `-a`, which includes `-l` and copies a
+    # symlink *as a symlink*. The destination then dangles at a filename
+    # that exists only on the operator's machine, and the restore fails
+    # with a bare "No such file or directory" that says nothing about
+    # why. `-L` sends what the link points at.
     - name: Ship the dump
       ansible.posix.synchronize:
         src: "{{ itgraph_dump_src }}"
         dest: /tmp/itgraph.dump
+        copy_links: true
+      when: existing_channels.stdout | trim | int == 0
+            or (force_restore | default(false) | bool)
+      tags: [data]
+
+    # Checked before the restore rather than after: `pg_restore` reading
+    # a missing or empty file reports it as a shell redirect error, which
+    # names neither the dump nor the reason.
+    - name: The dump arrived
+      ansible.builtin.stat:
+        path: /tmp/itgraph.dump
+      register: shipped_dump
+      when: existing_channels.stdout | trim | int == 0
+            or (force_restore | default(false) | bool)
+      tags: [data]
+
+    - name: The dump is a real file with something in it
+      ansible.builtin.assert:
+        that:
+          - shipped_dump.stat.exists
+          - shipped_dump.stat.isreg
+          - shipped_dump.stat.size > 0
+        fail_msg: >-
+          /tmp/itgraph.dump did not arrive as a readable file. Check that
+          {{ itgraph_dump_src }} exists on this machine and that
+          `make backup-full` has run since the last schema change.
+        quiet: true
       when: existing_channels.stdout | trim | int == 0
             or (force_restore | default(false) | bool)
       tags: [data]

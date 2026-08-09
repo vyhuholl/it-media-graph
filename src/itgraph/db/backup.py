@@ -286,6 +286,11 @@ def _point_latest_at(path: Path, kind: BackupKind) -> None:
     — that is what it is for — and an absolute target breaks the moment
     it is read from another path or another machine.
 
+    A reader that *sends* this file elsewhere has to resolve the link
+    itself. ``rsync -a`` copies a symlink as a symlink and the copy then
+    dangles at a name that exists only here; the deploy playbook passes
+    ``copy_links`` for exactly this reason.
+
     Replaced through a temporary name so the pointer is never briefly
     absent: ``symlink_to`` refuses an existing path, and unlinking first
     would leave a window in which a restore finds nothing.
