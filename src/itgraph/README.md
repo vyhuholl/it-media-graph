@@ -14,6 +14,7 @@ CLI-утилита для сбора и разметки базы айтишны
 
 ## Требования
 - [uv](https://docs.astral.sh/uv/) — Python-окружением управляет он, `python` и `pip` напрямую не используются
+- Python **3.14.3**, закреплён в `.python-version` точной версией. Не `3.14`: под такой запрос uv на машине без релизного 3.14 подставляет бету, а `pydantic` на `3.14.0b2` падает при импорте (`_eval_type() got an unexpected keyword argument 'prefer_fwd_module'`). Одинаковый интерпретатор на всех машинах — это то, ради чего пин вообще существует
 - Docker (для Postgres)
 - `api_id` и `api_hash` с [my.telegram.org](https://my.telegram.org)
 
