@@ -1,5 +1,14 @@
 ---
-# Non-secret settings. Secrets live in secrets.vault.yml, encrypted.
+# Non-secret settings. Secrets live beside this file in
+# secrets.vault.yml, encrypted.
+#
+# Both are in `group_vars/all/` — a **directory**, not two files named
+# `all.yml` and `secrets.vault.yml`. `group_vars/<name>.yml` names an
+# inventory *group*, so a file called `secrets.vault.yml` is variables
+# for a group named `secrets.vault`; no such group exists, so it is
+# silently never read and every secret in it goes missing. Inside a
+# `group_vars/all/` directory the filenames mean nothing and everything
+# is loaded for the `all` group, which is what was wanted.
 
 itgraph_repo_url: https://github.com/vyhuholl/it-media-graph.git
 itgraph_repo_version: master

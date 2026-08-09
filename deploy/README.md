@@ -7,10 +7,10 @@ Ansible-плейбук, поднимающий сбор на чистой Ubuntu
 ```bash
 ansible-galaxy install -r requirements.yml
 cp inventory.ini.example inventory.ini            # вписать адрес и пользователя
-cp group_vars/secrets.vault.yml.example group_vars/secrets.vault.yml
-$EDITOR group_vars/secrets.vault.yml
-ansible-vault encrypt group_vars/secrets.vault.yml
-$EDITOR group_vars/all.yml                        # репозиторий, пути к сессии и дампу
+cp group_vars/all/secrets.vault.yml.example group_vars/all/secrets.vault.yml
+$EDITOR group_vars/all/secrets.vault.yml
+ansible-vault encrypt group_vars/all/secrets.vault.yml
+$EDITOR group_vars/all/main.yml                   # репозиторий, пути к сессии и дампу
 
 ansible-playbook playbook.yml --ask-vault-pass
 ```
@@ -62,7 +62,7 @@ make backup-full
 ## Если разворачиваете на ноутбук
 
 ```yaml
-# group_vars/all.yml
+# group_vars/all/main.yml
 host_is_laptop: true
 ```
 
@@ -122,7 +122,7 @@ gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'no
 
 ## Секреты
 
-`group_vars/secrets.vault.yml` шифруется ansible-vault и **в репозиторий
+`group_vars/all/secrets.vault.yml` шифруется ansible-vault и **в репозиторий
 не попадает** — он в `.gitignore` вместе с `inventory.ini`. Так ничего не
 зависит от того, устоит ли шифр, и случайный `git add .` ничего не
 раскрывает.
@@ -135,10 +135,18 @@ gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'no
 inventory.ini
 secrets.vault.yml
 deploy/.vault-pass
-deploy/group_vars/secrets.yml
+deploy/group_vars/all/secrets.yml
 ```
 
-**Эндпоинт прокси лежит там же, а не в `all.yml`.** Он не просто
+**Переменные лежат в каталоге `group_vars/all/`, а не двумя файлами рядом.**
+Это не вкусовщина: `group_vars/<имя>.yml` задаёт переменные для **группы
+инвентаря** с таким именем, поэтому файл `group_vars/secrets.vault.yml`
+Ansible считает переменными группы `secrets.vault`. Такой группы нет — файл
+молча не читается, и все секреты из него пропадают, а плейбук падает на
+проверке «не найден telegram_api_hash». Внутри каталога `group_vars/all/`
+имена файлов не значат ничего, и читается всё.
+
+**Эндпоинт прокси лежит в секретах, а не в `main.yml`.** Он не просто
 учётные данные: это адрес, с которого, как известно, ходит коллектор, —
 ровно то, что прокси и существует скрывать, — а `all.yml` коммитится
 открытым. Хост, порт, логин и пароль едут вместе, чтобы настройка прокси

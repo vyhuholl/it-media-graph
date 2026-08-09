@@ -247,4 +247,4 @@ __marimo__/
 # near the top — so nothing about the proxy endpoint or the bot token
 # leaves this machine, and none of it rests on the cipher holding.
 deploy/.vault-pass
-deploy/group_vars/secrets.yml
+deploy/group_vars/all/secrets.yml
