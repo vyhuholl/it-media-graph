@@ -35,9 +35,12 @@
           - telegram_api_hash is defined
           - bot_db_password is defined
         fail_msg: >-
-          Set itgraph_session_src and itgraph_dump_src in group_vars/all.yml,
-          and the secrets in group_vars/secrets.vault.yml. Nothing here can
-          be invented for you.
+          Set itgraph_session_src and itgraph_dump_src in
+          group_vars/all/main.yml, and the secrets in
+          group_vars/all/secrets.vault.yml — note the `all/` directory,
+          a file named group_vars/secrets.vault.yml is read as variables
+          for a group called `secrets.vault` and silently ignored.
+          Nothing here can be invented for you.
         quiet: true
       tags: [always]
 
@@ -227,15 +230,18 @@
       changed_when: "'Installed' in uv_sync.stderr or 'Resolved' in uv_sync.stderr"
       tags: [repo]
 
-    # An override rather than an edit to the tracked compose file: the
-    # repository's version publishes Postgres on every interface, which is
-    # harmless on a laptop and an open database on a rented host. Patching
-    # the tracked file would fight `git pull` forever.
-    - name: Compose override — bind Postgres to loopback
-      ansible.builtin.template:
-        src: docker-compose.override.yml.j2
-        dest: "{{ repo_dir }}/docker-compose.override.yml"
-        mode: "0644"
+    # No compose override here, deliberately. Binding Postgres to
+    # loopback is done in the tracked `docker-compose.yaml`, because an
+    # override cannot do it: Compose appends to a `ports` list rather
+    # than replacing it, so the override published the port twice and
+    # the container failed to start with "address already in use".
+    #
+    # A leftover `docker-compose.override.yml` from an earlier run would
+    # still be picked up, so it is removed rather than merely not written.
+    - name: No stale compose override
+      ansible.builtin.file:
+        path: "{{ repo_dir }}/docker-compose.override.yml"
+        state: absent
       tags: [repo]
 
     - name: Configuration

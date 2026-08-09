@@ -7,8 +7,17 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-itgraph}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-itgraph}
       POSTGRES_DB: ${POSTGRES_DB:-itgraph}
+    # Loopback only. Nothing outside this machine has any business
+    # reaching the database, and the password here has a default — on a
+    # laptop that means the home network, on a rented host the internet.
+    #
+    # Bound here rather than in a compose override, because an override
+    # cannot do it: Compose *appends* to a `ports` list instead of
+    # replacing it, so an override adds a second publisher for the same
+    # port and the container fails to start with "address already in
+    # use" — while the wide binding it meant to remove stays.
     ports:
-      - "${POSTGRES_PORT:-5433}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
