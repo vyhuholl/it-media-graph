@@ -1,5 +1,3 @@
 {
-  "enabledPlugins": {
-    "openspec-auto-archive@openspec-tools": true
-  }
+  "enabledPlugins": {}
 }
