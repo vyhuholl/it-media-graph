@@ -367,17 +367,61 @@
       failed_when: false
       tags: [data]
 
+    # Rows are not the same thing as a database. An interrupted
+    # `pg_restore --clean` drops the enum types, recreates them with new
+    # OIDs and stops part way, leaving columns pointing at OIDs that no
+    # longer exist. Postgres answers any query touching them with
+    # "cache lookup failed for type NNNN", which surfaces as a SQLAlchemy
+    # traceback in a service log days later and names nothing useful.
+    #
+    # This is the check that tells wreckage from data.
+    - name: Is what is already here internally consistent
+      ansible.builtin.command: >-
+        docker exec -i itgraph-postgres psql -U {{ db_user }} -d {{ db_name }} -tAc
+        "SELECT count(*) FROM pg_attribute a
+         JOIN pg_class c ON c.oid = a.attrelid AND c.relkind = 'r'
+         JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = 'public'
+         WHERE a.attnum > 0 AND NOT a.attisdropped
+           AND NOT EXISTS (SELECT 1 FROM pg_type t WHERE t.oid = a.atttypid)"
+      register: dangling_types
+      changed_when: false
+      failed_when: false
+      tags: [data]
+
+    - name: Decide whether to restore
+      ansible.builtin.set_fact:
+        restore_needed: >-
+          {{ (existing_channels.stdout | trim | int == 0)
+             or (dangling_types.stdout | trim | int > 0)
+             or (force_restore | default(false) | bool) }}
+      tags: [data]
+
+    - name: Say so when a broken database is being replaced
+      ansible.builtin.debug:
+        msg: >-
+          {{ dangling_types.stdout | trim }} column(s) reference a type that
+          no longer exists — the sign of a `pg_restore` that did not finish.
+          Restoring over it rather than protecting it: half a database is
+          not data worth keeping, and keeping it is how the failure
+          reaches a service log instead of this screen.
+      when:
+        - existing_channels.stdout | trim | int > 0
+        - dangling_types.stdout | trim | int > 0
+      tags: [data]
+
     # The one destructive step in the playbook. A re-run must not be a way
-    # to lose the hand-reviewed inventory, so it happens only into an empty
-    # database unless the operator says otherwise on the command line.
+    # to lose the hand-reviewed inventory, so it happens only into a
+    # database that is empty — or incoherent, which is not the same as
+    # holding something worth protecting — unless the operator says
+    # otherwise on the command line.
     - name: Refuse to restore over existing data
       ansible.builtin.assert:
-        that: existing_channels.stdout | trim | int == 0
+        that: restore_needed | bool
         fail_msg: >-
-          {{ existing_channels.stdout | trim }} channels already here.
-          Re-run with -e force_restore=true only if you mean to replace them.
+          {{ existing_channels.stdout | trim }} channels already here, and
+          the schema is coherent. Re-run with -e force_restore=true only
+          if you mean to replace them.
         quiet: true
-      when: not (force_restore | default(false) | bool)
       tags: [data]
 
     # `copy_links` is load-bearing: `itgraph_dump_src` points at
@@ -392,8 +436,7 @@
         src: "{{ itgraph_dump_src }}"
         dest: /tmp/itgraph.dump
         copy_links: true
-      when: existing_channels.stdout | trim | int == 0
-            or (force_restore | default(false) | bool)
+      when: restore_needed | bool
       tags: [data]
 
     # Checked before the restore rather than after: `pg_restore` reading
@@ -403,8 +446,7 @@
       ansible.builtin.stat:
         path: /tmp/itgraph.dump
       register: shipped_dump
-      when: existing_channels.stdout | trim | int == 0
-            or (force_restore | default(false) | bool)
+      when: restore_needed | bool
       tags: [data]
 
     - name: The dump is a real file with something in it
@@ -418,8 +460,7 @@
           {{ itgraph_dump_src }} exists on this machine and that
           `make backup-full` has run since the last schema change.
         quiet: true
-      when: existing_channels.stdout | trim | int == 0
-            or (force_restore | default(false) | bool)
+      when: restore_needed | bool
       tags: [data]
 
     - name: Restore
@@ -430,8 +471,38 @@
           pg_restore -U {{ db_user }} -d {{ db_name }}
           --no-owner --clean --if-exists < /tmp/itgraph.dump
       changed_when: true
-      when: existing_channels.stdout | trim | int == 0
-            or (force_restore | default(false) | bool)
+      when: restore_needed | bool
+      tags: [data]
+
+    # `pg_restore` exits zero on a partial restore more readily than one
+    # would like, and the damage it leaves is invisible until something
+    # queries an affected column. Asked here, where the answer can still
+    # stop the deployment, rather than at 03:00 in a service log.
+    - name: The restored database is coherent
+      ansible.builtin.command: >-
+        docker exec -i itgraph-postgres psql -U {{ db_user }} -d {{ db_name }} -tAc
+        "SELECT count(*) FROM pg_attribute a
+         JOIN pg_class c ON c.oid = a.attrelid AND c.relkind = 'r'
+         JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = 'public'
+         WHERE a.attnum > 0 AND NOT a.attisdropped
+           AND NOT EXISTS (SELECT 1 FROM pg_type t WHERE t.oid = a.atttypid)"
+      register: dangling_after
+      changed_when: false
+      when: restore_needed | bool
+      tags: [data]
+
+    - name: Nothing points at a type that is gone
+      ansible.builtin.assert:
+        that: dangling_after.stdout | trim | int == 0
+        fail_msg: >-
+          The restore left {{ dangling_after.stdout | trim }} column(s)
+          referencing a type that no longer exists, so it did not finish.
+          Queries touching them fail with "cache lookup failed for type".
+          Wipe and try again — `docker compose down -v && docker compose
+          up -d` in {{ repo_dir }} — and check the dump restores on the
+          machine that made it.
+        quiet: true
+      when: restore_needed | bool
       tags: [data]
 
     - name: Remove the dump from the host
