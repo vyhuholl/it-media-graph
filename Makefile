@@ -1,4 +1,4 @@
-.PHONY: format lint typecheck test validate ci \
+.PHONY: lint typecheck test validate ansible-lint \
 	backup backup-full backup-install backup-uninstall backup-status backup-log
 
 RUN_CMD := uv run
@@ -7,18 +7,23 @@ lint:
 	$(RUN_CMD) ruff check --fix .
 	$(RUN_CMD) ruff format .
 
-lint-check:
-	$(RUN_CMD) ruff check .
-	$(RUN_CMD) ruff format --check .
-
+# --all-groups: `bot` and `data` are not default groups, so a bare
+# `uv run` leaves aiogram, pandas and networkx uninstalled and mypy
+# reports the whole bot package as unresolved imports.
 typecheck:
-	$(RUN_CMD) mypy src/
+	$(RUN_CMD) --all-groups mypy src/
 
 test:
 	$(RUN_CMD) pytest -q --cov=src
 
-validate: lint typecheck test
-ci: lint-check typecheck test
+# -c: the config lives in deploy/ but this runs from the repo root, and
+# ansible-lint only looks in the cwd — without it the file is linted as
+# input instead of read as config, and `profile: production` is not
+# enforced at all.
+ansible-lint:
+	$(RUN_CMD) ansible-lint -c deploy/.ansible-lint
+
+validate: lint typecheck test ansible-lint
 
 backup:
 	$(RUN_CMD) itgraph backup

@@ -3,5 +3,7 @@ collections:
   # `synchronize`, for shipping a ~180 MB dump without pushing it through
   # the connection plugin in base64 chunks.
   - name: ansible.posix
+    version: ">=2.0.0,<3.0.0"
   # `ufw`
   - name: community.general
+    version: ">=11.0.0,<12.0.0"

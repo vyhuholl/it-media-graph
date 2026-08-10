@@ -21,6 +21,10 @@
 - name: Deploy itgraph collection
   hosts: collector
   become: false
+  # Nothing here reads a fact: `ansible_user` comes from the inventory,
+  # and the probe's date is taken on the controller. Gathering would be
+  # a round trip per run, on every tag, for nothing.
+  gather_facts: false
 
   vars:
     repo_dir: "/home/{{ ansible_user }}/itgraph"
@@ -89,8 +93,10 @@
       ansible.builtin.meta: reset_connection
       tags: [base]
 
+    # `command -v` is a shell builtin — `command:` cannot run it, and
+    # `which` is not installed on a minimal Ubuntu image.
     - name: Where docker actually is
-      ansible.builtin.shell: command -v docker
+      ansible.builtin.shell: command -v docker  # noqa: command-instead-of-shell
       register: docker_path
       changed_when: false
       tags: [base, config, repo]
@@ -132,7 +138,7 @@
     - name: Keep uv current
       ansible.builtin.command: "timeout 20 {{ uv }} self update"
       register: uv_update
-      changed_when: "'pgraded' in uv_update.stdout"
+      changed_when: uv_update.stdout is search('(?i)upgraded')
       failed_when: false
       when: uv_binary.stat.exists
       tags: [base]
@@ -167,11 +173,9 @@
     # a `derive` batch, and the fattest process is Postgres.
     - name: Swap file
       become: true
-      ansible.builtin.command: "{{ item }}"
-      args:
+      ansible.builtin.command:
+        cmd: fallocate -l {{ swap_size | default('2G') }} /swapfile
         creates: /swapfile
-      loop:
-        - fallocate -l {{ swap_size | default('2G') }} /swapfile
       tags: [base]
 
     - name: Swap permissions
@@ -214,7 +218,7 @@
     # sleep would be noise in the unit list.
     - name: Sleep is masked on a laptop
       become: true
-      ansible.builtin.systemd:
+      ansible.builtin.systemd_service:
         name: "{{ item }}"
         masked: true
       loop:
@@ -242,16 +246,11 @@
 
     - name: The lid switch does nothing on a laptop
       become: true
-      ansible.builtin.copy:
+      ansible.builtin.template:
+        src: 10-itgraph-no-sleep.conf.j2
         dest: /etc/systemd/logind.conf.d/10-itgraph-no-sleep.conf
         mode: "0644"
-        content: |
-          # Managed by Ansible. A closed lid must not stop collection:
-          # missed metric snapshots cannot be taken later.
-          [Login]
-          HandleLidSwitch=ignore
-          HandleLidSwitchExternalPower=ignore
-          HandleLidSwitchDocked=ignore
+        backup: true
       when: host_is_laptop | default(false) | bool
       notify: Reload logind
       tags: [base, laptop]
@@ -350,10 +349,13 @@
       ansible.builtin.command: >-
         docker exec -i itgraph-postgres psql -U {{ db_user }} -d postgres -tAc
         "DO $$ BEGIN
-           IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='itgraph_bot')
-           THEN CREATE ROLE itgraph_bot NOLOGIN; END IF;
-         END $$;"
-      changed_when: false
+          IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='itgraph_bot')
+          THEN CREATE ROLE itgraph_bot NOLOGIN;
+                RAISE NOTICE 'role_created';
+          END IF;
+        END $$;"
+      register: bot_role
+      changed_when: "'role_created' in bot_role.stderr"
       tags: [data]
 
     - name: How much is already in this database
@@ -424,7 +426,6 @@
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: >-
-          set -o pipefail &&
           docker exec -i itgraph-postgres
           pg_restore -U {{ db_user }} -d {{ db_name }}
           --no-owner --clean --if-exists < /tmp/itgraph.dump
@@ -439,10 +440,26 @@
         state: absent
       tags: [data]
 
+    # The password goes in on stdin, not in the command line: `no_log`
+    # hides it from Ansible's output but does nothing about /proc, where
+    # an argument is readable by any local user for as long as psql runs.
+    #
+    # `''` is SQL's own escape for a quote inside a literal. Not the
+    # `quote` filter — that is *shell* quoting, and it returns a bare
+    # word for anything shell-safe, so an ordinary password would arrive
+    # as `PASSWORD hunter2` and be a syntax error.
+    #
+    # ON_ERROR_STOP because `psql -f` exits 0 on a failed statement. Then
+    # the role keeps its NOLOGIN password, the playbook says `changed`,
+    # and the bot cannot connect for a reason nothing here reported.
     - name: Give the bot role its password
-      ansible.builtin.command: >-
-        docker exec -i itgraph-postgres psql -U {{ db_user }} -d {{ db_name }} -c
-        "ALTER ROLE itgraph_bot LOGIN PASSWORD '{{ bot_db_password }}'"
+      ansible.builtin.command:
+        cmd: >-
+          docker exec -i itgraph-postgres
+          psql -U {{ db_user }} -d {{ db_name }} -v ON_ERROR_STOP=1 -f -
+        stdin: >-
+          ALTER ROLE itgraph_bot LOGIN PASSWORD
+          '{{ bot_db_password | replace("'", "''") }}'
       changed_when: true
       no_log: true
       tags: [data]
@@ -512,6 +529,7 @@
         src: "{{ item }}.j2"
         dest: "/etc/systemd/system/{{ item }}"
         mode: "0644"
+        backup: true
       loop:
         - itgraph-watch.service
         - itgraph-bot.service
@@ -532,7 +550,7 @@
 
     - name: Long-running services
       become: true
-      ansible.builtin.systemd:
+      ansible.builtin.systemd_service:
         name: "{{ item }}"
         enabled: true
         state: started
@@ -546,7 +564,7 @@
     # nothing takes a dump until this exists.
     - name: Timers
       become: true
-      ansible.builtin.systemd:
+      ansible.builtin.systemd_service:
         name: "{{ item }}"
         enabled: true
         state: started
@@ -562,8 +580,10 @@
     # Checked rather than assumed, for the same reason the proxy route is:
     # a laptop that still suspends looks exactly like one that does not
     # until a night has passed and the snapshots are already lost.
+    # `systemd:` has no query mode — it can only assert a state, which
+    # would mask exactly the drift this check exists to catch.
     - name: Sleep really is masked
-      ansible.builtin.command: systemctl is-enabled sleep.target
+      ansible.builtin.command: systemctl is-enabled sleep.target  # noqa: command-instead-of-module
       register: sleep_state
       changed_when: false
       failed_when: false
@@ -596,13 +616,22 @@
         quiet: true
       tags: [verify]
 
+    # One real request. It writes to the raw layer — a probe that did not
+    # would not prove anything — so it reports `changed` rather than
+    # claiming otherwise. That is the honest version of the
+    # `changed_when: false` this task used to carry.
+    #
+    # `--since` is required by the CLI and only bounds the walk, so the
+    # date is taken on the controller. Reading it from `ansible_date_time`
+    # would mean gathering facts on every run of every tag for one string.
     - name: One real request, to prove the session and the route
       ansible.builtin.command: >-
-        {{ uv }} run itgraph backfill --since {{ ansible_date_time.date }} --limit 1
+        {{ uv }} run itgraph backfill
+        --since {{ '%Y-%m-%d' | strftime }} --limit 1
       args:
         chdir: "{{ repo_dir }}"
       register: probe
-      changed_when: false
+      changed_when: true
       tags: [verify]
 
     # Reads the line `build_client` logs at connect time. A deployment
@@ -640,7 +669,7 @@
       ansible.builtin.debug:
         msg: >-
           {{ seed_count.stdout | trim }} seed channels ·
-          {{ alembic_current.stdout_lines | last }} ·
+          {{ alembic_current.stdout_lines | default(['schema not checked']) | last }} ·
           {{ watch_status.stdout_lines | join(' · ') }}
       tags: [verify]
 
@@ -650,11 +679,11 @@
     # warning — so these have to read exactly as the `notify:` lines do.
     - name: Reload systemd
       become: true
-      ansible.builtin.systemd:
+      ansible.builtin.systemd_service:
         daemon_reload: true
 
     - name: Reload logind
       become: true
-      ansible.builtin.systemd:
+      ansible.builtin.systemd_service:
         name: systemd-logind
         state: restarted

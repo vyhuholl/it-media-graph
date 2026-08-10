@@ -22,6 +22,16 @@ repos:
         types: [python]
         exclude: '(^|/)migrations/'
 
+      - id: ansible-lint
+        name: ansible-lint
+        entry: make ansible-lint
+        language: system
+        pass_filenames: false
+        # `files`, not `types: [python]` — the playbook and the templates
+        # are the files this lints, and a hook keyed on Python never fires
+        # for a commit that only touches deploy/.
+        files: ^deploy/
+
       - id: typecheck
         name: mypy
         entry: make typecheck

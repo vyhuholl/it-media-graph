@@ -4,17 +4,17 @@ Analytics over the IT-media graph: who reposts, mentions and comments on whom. T
 Roadmap and phase breakdown live in `docs/PLAN.md`. Read it before proposing architectural changes — most "obvious improvements" are already scheduled for a later phase, or were deliberately rejected.
 
 ## Hard rules
-1. **Never run Python directly.** Always `uv run <cmd>` — no bare `python`, no `pip`, no activating a venv. Dependencies change via `uv add` / `uv add --dev`, never by hand-editing `pyproject.toml`.
+1. **Never run Python directly.** Always `uv run <cmd>` — no bare `python`, no `pip`, no activating a venv. Dependencies change via `uv add` / `uv add --dev`, never by hand-editing `pyproject.toml`. Ansible tooling is also run via `uv run`.
 2. **Run `make validate` after every change that touches code.** Fix what it reports before declaring the task done. Never report success on a red validate.
 3. **Never commit secrets or personal data.** See "Never commit" below. If it looks like a secret has to live in a file, stop and ask.
 
 ## Commands
 ```bash
 make lint          # ruff check --fix + ruff format
-make lint-check    # non-mutating variant, used by CI
 make typecheck     # mypy src/
 make test          # pytest
-make validate      # lint + typecheck + test   <- after every change
+make ansible-lint  # ansible-lint over deploy/
+make validate      # lint + typecheck + test + ansible-lint   <- after every change
 
 uv run alembic revision --autogenerate -m "..."
 uv run alembic upgrade head
@@ -36,10 +36,10 @@ uv run itgraph --help    # CLI entrypoint (typer)
 
 ## Testing
 - **No network in tests.** Telethon is mocked; fixtures are saved, anonymized payloads under `tests/fixtures/`.
-- Real `api_id` / `api_hash` / session files never appear in tests or in CI. Do not add them to GitHub Secrets "just to test the collector for real".
+- Real `api_id` / `api_hash` / session files never appear in tests. There is no CI to add them to, and adding one to run the collector "for real" is not a reason to bring it back.
 - Fake credentials are spelled out in words (`test-api-hash`, `fake-…`), never as plausible-looking hex. `tests/` is deliberately **not** excluded from the gitleaks hook, so a realistic fake trips it — and the fix is to make the value obviously fake, not to add an exclude, a `# gitleaks:allow`, or a fingerprint allowlist. A fake that looks real also costs a human reviewer the ability to tell the difference.
 - Tests use a separate database (`itgraph_test`) on the same Postgres instance, created and dropped by a fixture in `conftest.py`. That fixture refuses to run against a database whose name does not end in `_test` — never weaken the check.
-- Migrations are exercised in CI against a throwaway Postgres — keep them working.
+- **There is no CI.** One person works on this repository, so pre-commit is the whole gate: ruff and ansible-lint on commit, mypy and pytest on push. Nothing runs after a push — a hook skipped with `--no-verify` is not caught anywhere later.
 
 ## Never commit
 - `.env`, `*.session`, `*.session-journal` — a session file is full account access

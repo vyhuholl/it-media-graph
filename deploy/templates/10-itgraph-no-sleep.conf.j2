@@ -1,0 +1,10 @@
+# {{ ansible_managed }}
+#
+# A closed lid must not stop collection: missed metric snapshots cannot
+# be taken later. Belt to the masked sleep targets' braces — masking makes
+# a suspend *fail*, which logind logs as an error on every lid close; this
+# makes it not try.
+[Login]
+HandleLidSwitch=ignore
+HandleLidSwitchExternalPower=ignore
+HandleLidSwitchDocked=ignore
