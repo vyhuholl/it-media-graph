@@ -89,6 +89,12 @@
       ansible.builtin.meta: reset_connection
       tags: [base]
 
+    - name: Where docker actually is
+      ansible.builtin.shell: command -v docker
+      register: docker_path
+      changed_when: false
+      tags: [base, config, repo]
+
     - name: Is uv already here
       ansible.builtin.stat:
         path: "{{ uv }}"

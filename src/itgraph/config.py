@@ -3,6 +3,7 @@
 Import ``settings`` from here; no other module reads ``os.environ``.
 """
 
+import shutil
 from enum import StrEnum
 from pathlib import Path
 from typing import Self
@@ -424,9 +425,19 @@ class Settings(BaseSettings):
     # There is no pg_dump on the host — it runs inside the Postgres
     # container, addressed by the fixed name docker-compose.yaml gives it.
     postgres_container: str = "itgraph-postgres"
-    # An absolute path because launchd starts jobs with a bare PATH that
-    # does not include /usr/local/bin.
-    docker_binary: Path = Path("/usr/local/bin/docker")
+    # An absolute path, because launchd starts jobs with a bare PATH that
+    # does not include /usr/local/bin — a bare `docker` works from a
+    # shell and fails from the backup agent.
+    #
+    # Resolved from PATH when there is one, so the same code works on a
+    # Mac (Docker Desktop, /usr/local/bin) and on Ubuntu (/usr/bin)
+    # without either being written into the source. The fallback is the
+    # macOS location precisely because the case it covers is launchd,
+    # where PATH is too bare to answer. A deployment should still set
+    # DOCKER_BINARY explicitly rather than rely on this.
+    docker_binary: Path = Path(
+        shutil.which("docker") or "/usr/local/bin/docker"
+    )
 
     # The inventory is small and irreplaceable, so it is kept deep. Full
     # dumps carry the raw layer, which is large and — expensively —
