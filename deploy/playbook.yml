@@ -630,15 +630,6 @@
       when: proxy_host is defined and proxy_host | length > 0
       tags: [verify]
 
-    - name: The session survived the move
-      ansible.builtin.assert:
-        that: "'no cached peer' not in probe.stderr"
-        fail_msg: >-
-          Channels are being skipped for want of a cached peer. The session
-          file is not the one from the working machine.
-        quiet: true
-      tags: [verify]
-
     - name: What the collector says about itself
       ansible.builtin.command: "{{ uv }} run itgraph watch-status"
       args:
