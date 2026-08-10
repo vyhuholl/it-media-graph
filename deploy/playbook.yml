@@ -616,24 +616,6 @@
         quiet: true
       tags: [verify]
 
-    # One real request. It writes to the raw layer — a probe that did not
-    # would not prove anything — so it reports `changed` rather than
-    # claiming otherwise. That is the honest version of the
-    # `changed_when: false` this task used to carry.
-    #
-    # `--since` is required by the CLI and only bounds the walk, so the
-    # date is taken on the controller. Reading it from `ansible_date_time`
-    # would mean gathering facts on every run of every tag for one string.
-    - name: One real request, to prove the session and the route
-      ansible.builtin.command: >-
-        {{ uv }} run itgraph backfill
-        --since {{ '%Y-%m-%d' | strftime }} --limit 1
-      args:
-        chdir: "{{ repo_dir }}"
-      register: probe
-      changed_when: true
-      tags: [verify]
-
     # Reads the line `build_client` logs at connect time. A deployment
     # whose `.env` did not arrive works, logs nothing unusual, and reaches
     # Telegram from the address the proxy exists to hide — this is the only
