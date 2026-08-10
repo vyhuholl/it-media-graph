@@ -15,7 +15,7 @@ this is where an outsider can first be seen:
 """
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -28,11 +28,17 @@ from aiogram.types import (
 from sqlalchemy import func, select
 
 from itgraph.bot.app import Sender
+from itgraph.bot.render import age_phrase
 from itgraph.config import settings
-from itgraph.db.alerts import failing_alerts, record_verdict
+from itgraph.db.alerts import (
+    failing_alerts,
+    outstanding_alerts,
+    record_verdict,
+)
 from itgraph.db.models import Alert, AlertVerdict
 from itgraph.db.poll import queue_lag
 from itgraph.db.session import Database
+from itgraph.schedule import quiet_until
 
 __all__ = ["BotSender", "build_dispatcher", "verdict_keyboard"]
 
@@ -119,25 +125,21 @@ def build_dispatcher(database: Database, chat_id: int) -> Dispatcher:
         ``/status@name`` form this now accepts. Button presses arrive
         either way.
         """
+        now = datetime.now(UTC)
         async with database.session() as session:
-            lag = await queue_lag(session, now=datetime.now(UTC))
+            lag = await queue_lag(session, now=now)
             stuck = await failing_alerts(
                 session, attempts=settings.alert_failure_report_after
             )
-            raised, outstanding, newest = (
+            waiting = await outstanding_alerts(session)
+            raised, newest = (
                 await session.execute(
-                    select(
-                        func.count(Alert.id),
-                        func.count(Alert.id).filter(
-                            Alert.delivered_at.is_(None)
-                        ),
-                        func.max(Alert.raised_at),
-                    )
+                    select(func.count(Alert.id), func.max(Alert.raised_at))
                 )
             ).one()
 
         lines = [
-            f"оповещений всего: {raised}, не доставлено: {outstanding}",
+            f"оповещений всего: {raised}, не доставлено: {waiting.total}",
             (
                 f"последнее поднято: {newest:%Y-%m-%d %H:%M} UTC"
                 if newest
@@ -148,6 +150,45 @@ def build_dispatcher(database: Database, chat_id: int) -> Dispatcher:
                 f"просрочено: {lag.overdue}"
             ),
         ]
+
+        # Quiet hours are the benign reason for a queue that is not
+        # moving, and saying so is what stops "waiting" from reading as
+        # "broken". Without this line the two are the same observation.
+        release = quiet_until(
+            now,
+            start=settings.alert_quiet_from_hour,
+            end=settings.alert_quiet_to_hour,
+            zone=settings.watch_timezone,
+        )
+        if release is not None:
+            lines.append(
+                f"🌙 тихие часы до {release:%H:%M} — доставка приостановлена"
+            )
+
+        waited = waiting.oldest_wait(now)
+        if waiting.total:
+            line = f"ждут отправки: {waiting.total}"
+            if waited is not None:
+                line += f", самое старое {age_phrase(waited)}"
+            if waiting.never_attempted:
+                line += f", попыток не было у {waiting.never_attempted}"
+            lines.append(line)
+
+        # Nothing has tried, nothing is holding them back, and they have
+        # been there far longer than a poll interval: that is a delivery
+        # loop which is not running, and it is invisible in every other
+        # signal — the service is `active` and this command answers.
+        if (
+            release is None
+            and waiting.total
+            and waiting.never_attempted == waiting.total
+            and waited is not None
+            and waited > timedelta(seconds=settings.alert_poll_seconds * 10)
+        ):
+            lines.append(
+                "⚠️ ни одной попытки отправки — похоже, доставка не работает"
+            )
+
         if stuck:
             lines.append(f"⚠️ застряло при отправке: {stuck}")
         await message.answer("\n".join(lines))

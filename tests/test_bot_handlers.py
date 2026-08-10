@@ -10,7 +10,7 @@ group, so the bug ships and surfaces the day the alerts are shared.
 """
 
 from collections.abc import AsyncGenerator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -211,3 +211,99 @@ async def test_the_two_interactions_are_registered(database_url: str) -> None:
 
     assert len(dispatcher.message.handlers) == 1
     assert len(dispatcher.callback_query.handlers) == 1
+
+
+# --- what /status can tell apart ------------------------------------
+
+
+async def raise_one(database_url: str, *, ago: timedelta) -> None:
+    """One alert nothing has tried to send, raised some time ago."""
+    from sqlalchemy import text
+
+    database = Database(database_url)
+    try:
+        async with database.session() as session:
+            await session.execute(
+                text(
+                    "INSERT INTO channels (tg_id, username, title, "
+                    "discovered_via, status) VALUES "
+                    "(1, 'example', 'Example', 'manual', 'seed') "
+                    "ON CONFLICT DO NOTHING"
+                )
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO raw_messages (channel_id, msg_id, payload) "
+                    'VALUES (1, 1, \'{"_": "Message"}\'::jsonb) '
+                    "ON CONFLICT DO NOTHING"
+                )
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO alerts (kind, channel_id, msg_id, band, "
+                    "value, raised_at) VALUES "
+                    "('repost_cascade', 1, 1, 2, 2, :at)"
+                ),
+                {"at": datetime.now(UTC) - ago},
+            )
+    finally:
+        await database.dispose()
+
+
+async def test_status_says_nothing_has_tried_to_send(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The state that cost an evening: alerts waiting, attempts zero.
+
+    Undelivered-and-failing and undelivered-and-untouched mean opposite
+    things — a send that keeps failing against a delivery loop that is
+    not running — and only the second is invisible in every other
+    signal. The service is `active`, this command answers, and the queue
+    does not move.
+    """
+    from itgraph.config import settings
+
+    monkeypatch.setattr(settings, "alert_quiet_from_hour", 0)
+    monkeypatch.setattr(settings, "alert_quiet_to_hour", 0)
+    await raise_one(database_url, ago=timedelta(hours=7))
+
+    _, replies = await feed(database_url, OPERATOR, text="/status")
+
+    assert "попыток не было у 1" in replies[0]
+    assert "доставка не работает" in replies[0]
+
+
+async def test_status_does_not_cry_broken_during_quiet_hours(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Held is not stuck, and the difference has to be stated.
+
+    Quiet hours leave alerts with no attempts by design. Reporting that
+    as a fault would teach the operator to ignore the one line that
+    means something.
+    """
+    from itgraph.config import settings
+
+    monkeypatch.setattr(settings, "alert_quiet_from_hour", 0)
+    monkeypatch.setattr(settings, "alert_quiet_to_hour", 23)
+    await raise_one(database_url, ago=timedelta(hours=7))
+
+    _, replies = await feed(database_url, OPERATOR, text="/status")
+
+    assert "тихие часы" in replies[0]
+    assert "доставка не работает" not in replies[0]
+
+
+async def test_status_is_quiet_when_there_is_nothing_waiting(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A healthy bot says its counts and nothing alarming."""
+    from itgraph.config import settings
+
+    monkeypatch.setattr(settings, "alert_quiet_from_hour", 0)
+    monkeypatch.setattr(settings, "alert_quiet_to_hour", 0)
+
+    _, replies = await feed(database_url, OPERATOR, text="/status")
+
+    assert "⚠️" not in replies[0]
+    assert "ждут отправки" not in replies[0]

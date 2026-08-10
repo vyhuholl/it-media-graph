@@ -34,6 +34,7 @@ __all__ = [
     "in_quiet_window",
     "next_channel_poll",
     "next_sample_at",
+    "quiet_until",
     "sample_offsets",
     "window_size",
 ]
@@ -235,3 +236,29 @@ def in_quiet_hours(moment: datetime) -> bool:
         end=settings.watch_quiet_to_hour,
         zone=settings.watch_timezone,
     )
+
+
+def quiet_until(
+    moment: datetime, *, start: int, end: int, zone: str
+) -> datetime | None:
+    """When this quiet window lets go, or ``None`` if it is not holding.
+
+    Exists so a status command can say "paused until 07:00" rather than
+    leave the reader to work it out. A paused loop and a stuck one look
+    identical from the outside — "2 due now, oldest overdue by 5h" is
+    exactly what both produce — and telling them apart is the whole job
+    of a status command in a system whose healthy state is silence.
+
+    Returned as a moment rather than a duration because the answer a
+    reader wants is a clock time they can compare against their own.
+    """
+    from zoneinfo import ZoneInfo
+
+    if not in_quiet_window(moment, start=start, end=end, zone=zone):
+        return None
+
+    local = moment.astimezone(ZoneInfo(zone))
+    release = local.replace(hour=end, minute=0, second=0, microsecond=0)
+    if release <= local:
+        release += timedelta(days=1)
+    return release

@@ -1274,6 +1274,47 @@ def test_watch_status_needs_no_lease(
     assert "snapshots:" in result.output
 
 
+def test_watch_status_says_when_it_is_paused(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    """Paused and stuck look identical without this line.
+
+    "2 due now, oldest overdue by 5h" is exactly what the quiet window
+    produces, so a status command that does not name it reports the
+    healthy state and the broken one in the same words.
+    """
+    from itgraph.config import settings as live_settings
+
+    use_test_database(monkeypatch, database_url)
+    seed_seed_channel(database_url, 1000000001, "example")
+    monkeypatch.setattr(live_settings, "watch_quiet_from_hour", 0)
+    monkeypatch.setattr(live_settings, "watch_quiet_to_hour", 23)
+
+    result = runner.invoke(app, ["watch-status"])
+
+    assert result.exit_code == 0, result.output
+    assert "quiet hours until" in result.output
+    assert "not polling" in result.output
+
+
+def test_watch_status_says_nothing_about_quiet_hours_outside_them(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    """The line has to be absent when it does not apply, or it stops
+    carrying information."""
+    from itgraph.config import settings as live_settings
+
+    use_test_database(monkeypatch, database_url)
+    seed_seed_channel(database_url, 1000000001, "example")
+    monkeypatch.setattr(live_settings, "watch_quiet_from_hour", 0)
+    monkeypatch.setattr(live_settings, "watch_quiet_to_hour", 0)
+
+    result = runner.invoke(app, ["watch-status"])
+
+    assert result.exit_code == 0, result.output
+    assert "quiet hours" not in result.output
+
+
 def test_alerts_reports_what_it_raised(
     monkeypatch: pytest.MonkeyPatch, database_url: str
 ) -> None:

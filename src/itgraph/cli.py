@@ -608,9 +608,11 @@ def watch_status() -> None:
     """
     from datetime import timedelta
 
+    from itgraph.config import settings
     from itgraph.db.metrics import count_snapshots
     from itgraph.db.poll import queue_lag
     from itgraph.db.session import Database
+    from itgraph.schedule import quiet_until
 
     async def run() -> None:
         database = Database()
@@ -633,6 +635,22 @@ def watch_status() -> None:
         )
         if lag.oldest_due_at is not None:
             typer.echo(f"oldest overdue by {now - lag.oldest_due_at}")
+
+        # A paused loop and a stuck one produce the same two lines above
+        # — "2 due now, oldest overdue by 5h" is exactly what the quiet
+        # window looks like from outside. Saying which one this is, is
+        # the entire job of a status command here.
+        release = quiet_until(
+            now,
+            start=settings.watch_quiet_from_hour,
+            end=settings.watch_quiet_to_hour,
+            zone=settings.watch_timezone,
+        )
+        if release is not None:
+            typer.echo(
+                f"quiet hours until {release:%H:%M} {release.tzname()} "
+                "— not polling; the queue catches up afterwards"
+            )
         typer.echo(
             f"snapshots: {hour} in the last hour, {day} in the last day, "
             f"{total} in all"

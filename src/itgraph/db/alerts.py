@@ -34,6 +34,7 @@ from itgraph.scoring.score import Spike
 __all__ = [
     "CHANNEL",
     "AlertEvidence",
+    "OutstandingAlerts",
     "PendingAlert",
     "alert_evidence",
     "claim_undelivered",
@@ -43,6 +44,7 @@ __all__ = [
     "listen",
     "mark_delivered",
     "mark_failed",
+    "outstanding_alerts",
     "raise_cascades",
     "raise_spikes",
     "raised_bands",
@@ -314,6 +316,47 @@ async def record_verdict(
             index_elements=[AlertFeedback.alert_id],
             set_={"verdict": statement.excluded.verdict, "given_at": at},
         )
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class OutstandingAlerts:
+    """What is waiting, and whether anything has tried to send it.
+
+    ``never_attempted`` is the distinction the status report was missing
+    and an operator spent an evening rediscovering with psql. An alert
+    that has failed twice and one that nothing has ever picked up are
+    both "undelivered", and they mean opposite things: the first is a
+    send that keeps failing, the second is a delivery loop that is not
+    running. Only the second is invisible everywhere else.
+    """
+
+    total: int
+    never_attempted: int
+    oldest_raised_at: datetime | None
+
+    def oldest_wait(self, now: datetime) -> timedelta | None:
+        """How long the oldest outstanding alert has been waiting."""
+        if self.oldest_raised_at is None:
+            return None
+        return now - self.oldest_raised_at
+
+
+async def outstanding_alerts(session: AsyncSession) -> OutstandingAlerts:
+    """Everything undelivered, counted the way the two failures differ."""
+    total, never, oldest = (
+        await session.execute(
+            select(
+                func.count(Alert.id),
+                func.count(Alert.id).filter(Alert.attempts == 0),
+                func.min(Alert.raised_at),
+            ).where(Alert.delivered_at.is_(None))
+        )
+    ).one()
+    return OutstandingAlerts(
+        total=int(total or 0),
+        never_attempted=int(never or 0),
+        oldest_raised_at=oldest,
     )
 
 

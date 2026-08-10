@@ -23,6 +23,7 @@ from itgraph.db.models import AlertKind
 __all__ = [
     "Carrier",
     "RenderedAlert",
+    "age_phrase",
     "digest",
     "render_cascade",
     "render_spike",
@@ -75,7 +76,10 @@ def post_link(username: str | None, msg_id: int) -> str | None:
     return f"https://t.me/{username}/{msg_id}" if username else None
 
 
-def _age(age: timedelta) -> str:
+def age_phrase(age: timedelta) -> str:
+    """A duration as a person reads it. Public because the status
+    handler wants the same wording, and two formatters drifting apart
+    would make the same interval read two ways in one conversation."""
     minutes = max(int(age.total_seconds()) // 60, 0)
     if minutes < 60:
         return f"{minutes} мин назад"
@@ -123,7 +127,7 @@ def render_cascade(
     )
     lines = [
         f"🔁 <b>{families}</b> независимых источника(ов) репостят",
-        f"{who} · {_age(now - published_at)}",
+        f"{who} · {age_phrase(now - published_at)}",
     ]
 
     link = post_link(channel_username, msg_id)
@@ -189,7 +193,7 @@ def render_spike(
     label = SPIKE_LABEL.get(kind, "📈 Активность")
     lines = [
         f"{label} — {_magnitude(z)} (z {z:.1f})",
-        f"{who} · {_age(now - published_at)}",
+        f"{who} · {age_phrase(now - published_at)}",
     ]
 
     link = post_link(channel_username, msg_id)
