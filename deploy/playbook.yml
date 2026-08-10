@@ -105,25 +105,43 @@
       changed_when: true
       tags: [base]
 
-    # **Kept current, not merely present.** uv carries its own index of
-    # downloadable interpreters, so a uv older than the pinned Python
-    # cannot fetch it: `uv python install 3.14.3` answers "No download
-    # found" and `uv sync` fails with "No interpreter found", neither of
-    # which points at uv's age. Installing only when absent left a host
-    # that had uv from some earlier day silently unable to build the
-    # environment — two machines configured "the same" and not the same.
+    # Why an update at all: uv carries its own index of downloadable
+    # interpreters, so a uv older than the pinned Python cannot fetch it.
+    # `uv python install` then answers "No download found" and `uv sync`
+    # "No interpreter found", neither of which points at uv's age.
+    # Installing only when absent left a host carrying uv from some
+    # earlier day quietly unable to build the environment.
+    #
+    # **Best effort, and deliberately unable to fail the run.** The
+    # update is a means; the requirement is that the pinned interpreter
+    # installs, and that is asserted after the clone where the message
+    # can say so. This step reaches raw.githubusercontent.com, which is
+    # not reachable from every network a collector runs on, and stopping
+    # a deployment because an update server timed out would trade a real
+    # problem for an imaginary one.
+    #
+    # Bounded by `timeout` because `uv self update` retries for about
+    # ninety seconds before giving up — ninety seconds spent on every run
+    # of a step that is allowed to fail.
     - name: Keep uv current
-      ansible.builtin.command: "{{ uv }} self update"
+      ansible.builtin.command: "timeout 20 {{ uv }} self update"
       register: uv_update
-      changed_when: "'Upgraded' in uv_update.stdout"
-      # A uv installed by a package manager refuses to update itself, and
-      # that is not a reason to stop: it is only a reason to say so.
-      failed_when:
-        - uv_update.rc != 0
-        - "'self-update is only available' not in uv_update.stderr"
+      changed_when: "'pgraded' in uv_update.stdout"
+      failed_when: false
       when: uv_binary.stat.exists
       tags: [base]
 
+    - name: Say so when uv could not be updated
+      ansible.builtin.debug:
+        msg: >-
+          uv could not check for updates (rc={{ uv_update.rc }}). Harmless
+          on its own. But if the pinned Python fails to install below, a
+          uv older than that release is the likely reason — it carries its
+          own index of what is downloadable.
+      when:
+        - uv_binary.stat.exists
+        - uv_update.rc | default(0) != 0
+      tags: [base]
 
     - name: Firewall allows ssh and nothing else
       become: true
@@ -253,6 +271,20 @@
         chdir: "{{ repo_dir }}"
       register: python_install
       changed_when: "'Installed' in python_install.stderr"
+      failed_when: false
+      tags: [repo]
+
+    - name: The pinned Python really installed
+      ansible.builtin.assert:
+        that: python_install.rc == 0
+        fail_msg: >-
+          Could not install the Python pinned in .python-version —
+          {{ python_install.stderr | trim }}
+          If that reads "No download found", the uv on this host is older
+          than the pinned release and does not know it exists. Reinstall
+          it by hand and re-run:
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+        quiet: true
       tags: [repo]
 
     - name: Install dependencies
