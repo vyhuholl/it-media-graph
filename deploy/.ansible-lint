@@ -2,3 +2,19 @@
 # .ansible-lint
 
 profile: production
+
+# The encrypted vault file. ansible-lint opens every `group_vars` file it
+# finds, cannot decrypt this one without the password, and says so twice
+# per run — noise that teaches whoever reads the output to skim past
+# warnings, which is the opposite of what a linter is for.
+#
+# The path is relative to the working directory, not to this file:
+# `make ansible-lint` runs from the repository root and points at this
+# config with `-c`.
+#
+# Excluded rather than given the password: there is nothing in an
+# `$ANSIBLE_VAULT` blob for a linter to check, and handing a secret to
+# `make validate` so it can decline to find anything would be a strictly
+# worse trade.
+exclude_paths:
+  - deploy/group_vars/all/secrets.vault.yml
