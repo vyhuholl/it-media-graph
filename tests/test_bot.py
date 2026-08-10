@@ -5,6 +5,7 @@ message says, when an alert is held, what happens when a send fails —
 lives behind the `Sender` seam, which is the reason that seam exists.
 """
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -331,3 +332,80 @@ async def test_the_alert_id_travels_with_the_message(
     await deliver_once(database, sender, BotStats(), now=NOW)
 
     assert sender.messages[0][1] is not None
+
+
+# --- supervision ----------------------------------------------------
+
+
+async def test_a_sibling_that_raises_ends_the_wait() -> None:
+    """The failure this exists for: delivery dies, the bot looks alive.
+
+    Waiting only on `stop` left the exception unread inside a task
+    object nobody awaited, and — because that object stayed referenced —
+    asyncio never even logged it. The process kept answering /status
+    while alerts piled up undelivered.
+    """
+    from itgraph.bot.app import supervise
+
+    async def dies() -> None:
+        raise RuntimeError("the delivery loop fell over")
+
+    async def forever() -> None:
+        await asyncio.Event().wait()
+
+    stop = asyncio.Event()
+    doomed = asyncio.create_task(dies())
+    other = asyncio.create_task(forever())
+
+    await asyncio.wait_for(supervise([doomed, other], stop=stop), timeout=2)
+
+    assert stop.is_set()
+    other.cancel()
+    with pytest.raises(RuntimeError, match="fell over"):
+        await doomed
+
+
+async def test_a_sibling_that_returns_also_ends_the_wait() -> None:
+    """Polling exiting cleanly is no more survivable than it crashing:
+    what is left is a bot that delivers and hears nothing."""
+    from itgraph.bot.app import supervise
+
+    async def finishes() -> None:
+        return None
+
+    async def forever() -> None:
+        await asyncio.Event().wait()
+
+    stop = asyncio.Event()
+    done = asyncio.create_task(finishes())
+    other = asyncio.create_task(forever())
+
+    await asyncio.wait_for(supervise([done, other], stop=stop), timeout=2)
+
+    assert stop.is_set()
+    other.cancel()
+
+
+async def test_an_ordinary_shutdown_leaves_the_siblings_alone() -> None:
+    """SIGTERM sets `stop`; nothing has failed and nothing may be
+    reported as having failed."""
+    from itgraph.bot.app import supervise
+
+    async def forever() -> None:
+        await asyncio.Event().wait()
+
+    stop = asyncio.Event()
+    first = asyncio.create_task(forever())
+    second = asyncio.create_task(forever())
+
+    async def ask_to_stop() -> None:
+        await asyncio.sleep(0.01)
+        stop.set()
+
+    asyncio.create_task(ask_to_stop())
+    await asyncio.wait_for(supervise([first, second], stop=stop), timeout=2)
+
+    assert not first.done()
+    assert not second.done()
+    first.cancel()
+    second.cancel()

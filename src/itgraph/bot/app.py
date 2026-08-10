@@ -23,9 +23,11 @@ to tell you when something happened.
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from itgraph.bot.render import (
     Carrier,
@@ -48,7 +50,7 @@ from itgraph.db.models import AlertDelivery, AlertKind
 from itgraph.db.session import Database
 from itgraph.schedule import in_quiet_window
 
-__all__ = ["BotStats", "Sender", "deliver_once", "run_bot"]
+__all__ = ["BotStats", "Sender", "deliver_once", "run_bot", "supervise"]
 
 logger = logging.getLogger(__name__)
 
@@ -307,3 +309,39 @@ async def run_bot(
             )
 
     return stats
+
+
+async def supervise(
+    siblings: Sequence[asyncio.Task[Any]], *, stop: asyncio.Event
+) -> None:
+    """Wait until any sibling finishes, then ask the rest to stop.
+
+    **Returning is the point, including when a sibling returns by
+    raising.** The bot runs delivery and the aiogram handlers as
+    siblings, and waiting only on ``stop`` made a dead one invisible: if
+    delivery raised, its exception sat unread inside a task object
+    nobody awaited until shutdown — and because that object stayed
+    referenced, even asyncio's "Task exception was never retrieved"
+    never fired. The process kept answering ``/status``, systemd kept
+    reporting ``active``, and alerts piled up undelivered for hours in
+    complete silence. Silence is this system's healthy state, so it is
+    the one failure mode it cannot afford to have.
+
+    This only ends the waiting. The caller must then await each task, so
+    that whatever killed a sibling is raised rather than discarded, and
+    the process exits non-zero for ``Restart=always`` to act on.
+    """
+    halted = asyncio.create_task(stop.wait())
+    try:
+        await asyncio.wait(
+            [*siblings, halted], return_when=asyncio.FIRST_COMPLETED
+        )
+    finally:
+        # Set unconditionally: a sibling that died has already stopped
+        # doing its half, and leaving the other half running would be a
+        # bot that receives commands and delivers nothing — precisely
+        # the state this exists to end.
+        stop.set()
+        halted.cancel()
+        with suppress(asyncio.CancelledError):
+            await halted

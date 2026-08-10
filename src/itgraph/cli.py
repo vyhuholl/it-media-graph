@@ -812,7 +812,7 @@ def bot() -> None:
 
     from aiogram import Bot
 
-    from itgraph.bot.app import run_bot
+    from itgraph.bot.app import run_bot, supervise
     from itgraph.bot.handlers import BotSender, build_dispatcher
 
     # Inside the body, like every other import that reads the
@@ -865,11 +865,24 @@ def bot() -> None:
             polling = asyncio.create_task(
                 dispatcher.start_polling(telegram, handle_signals=False)
             )
-            await stop.wait()
+
+            # Whichever of the two ends first ends the bot. Waiting only
+            # on `stop` here let a dead sibling go unnoticed for hours:
+            # see `bot.app.supervise` for what that looked like from the
+            # outside.
+            await supervise([delivery, polling], stop=stop)
+
             await dispatcher.stop_polling()
             with suppress(asyncio.CancelledError):
                 polling.cancel()
                 await polling
+
+            # Asked rather than discarded. Either await re-raises what
+            # killed that task, so the process exits non-zero and
+            # `Restart=always` gets something to act on — with the
+            # traceback in the journal instead of silence.
+            if polling.done() and not polling.cancelled():
+                polling.result()
             stats = await delivery
         finally:
             await telegram.session.close()
