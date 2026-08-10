@@ -7,11 +7,8 @@ lint:
 	$(RUN_CMD) ruff check --fix .
 	$(RUN_CMD) ruff format .
 
-# --all-groups: `bot` and `data` are not default groups, so a bare
-# `uv run` leaves aiogram, pandas and networkx uninstalled and mypy
-# reports the whole bot package as unresolved imports.
 typecheck:
-	$(RUN_CMD) --all-groups mypy src/
+	$(RUN_CMD) mypy src/
 
 test:
 	$(RUN_CMD) pytest -q --cov=src

@@ -627,6 +627,7 @@ name = "it-media-graph"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "aiogram" },
     { name = "alembic" },
     { name = "asyncpg" },
     { name = "pydantic-settings" },
@@ -638,9 +639,6 @@ dependencies = [
 ]
 
 [package.dev-dependencies]
-bot = [
-    { name = "aiogram" },
-]
 data = [
     { name = "networkx" },
     { name = "numpy" },
@@ -659,6 +657,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiogram", specifier = ">=3.30.0" },
     { name = "alembic", specifier = ">=1.18.5" },
     { name = "asyncpg", specifier = ">=0.31.0" },
     { name = "pydantic-settings", specifier = ">=2.14.2" },
@@ -670,7 +669,6 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
-bot = [{ name = "aiogram", specifier = ">=3.30.0" }]
 data = [
     { name = "networkx", specifier = ">=3.6.1" },
     { name = "numpy", specifier = ">=2.5.1" },
