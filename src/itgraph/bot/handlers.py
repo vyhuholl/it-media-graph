@@ -16,6 +16,7 @@ this is where an outsider can first be seen:
 
 import logging
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -46,6 +47,8 @@ logger = logging.getLogger(__name__)
 
 USEFUL = "useful"
 BORING = "boring"
+
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
 def verdict_keyboard(alert_id: int) -> InlineKeyboardMarkup:
@@ -141,7 +144,7 @@ def build_dispatcher(database: Database, chat_id: int) -> Dispatcher:
         lines = [
             f"оповещений всего: {raised}, не доставлено: {waiting.total}",
             (
-                f"последнее поднято: {newest:%Y-%m-%d %H:%M} UTC"
+                f"последнее поднято: {newest.astimezone(MOSCOW_TZ):%Y-%m-%d %H:%M} UTC"
                 if newest
                 else "ни одного оповещения ещё не было"
             ),
