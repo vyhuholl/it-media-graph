@@ -315,6 +315,7 @@ def main() -> None:
             {
                 "families": families,
                 "sources": sources,
+                "channel_id": channel_id,
                 "title": title,
                 "username": username,
                 "status": status,
