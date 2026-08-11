@@ -177,6 +177,7 @@ POSTS = """
 COLUMNS = [
     "families",
     "sources",
+    "channel_id",
     "title",
     "username",
     "status",
