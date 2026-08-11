@@ -8,7 +8,7 @@ re-tried as often as the operator likes.
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 from itgraph.affiliation.detect import Candidate, Detection
@@ -28,6 +28,7 @@ from itgraph.db.channels import (
 from itgraph.db.models import (
     AboutDirection,
     AffiliationDecision,
+    AffiliationRun,
     DiscoverySource,
     EdgeKind,
 )
@@ -377,3 +378,102 @@ async def test_the_hidden_pair_is_stored_and_reachable(
         rows = await list_candidates(session, seeds_only=False)
 
     assert [row.channel_b for row in rows] == [B]
+
+
+async def test_a_run_from_before_the_handle_signal_reads_back(
+    database: Database,
+) -> None:
+    """The two named-handle parameters are nullable, and null is the
+    honest value for a run that predates the signal.
+
+    Inserted the way such a row exists on disk — without the two columns
+    — because a server default would have claimed the run used a
+    parameter it never saw.
+    """
+    await seed(database)
+    async with database.session() as session:
+        await session.execute(
+            text(
+                "INSERT INTO affiliation_runs ("
+                "min_out_edges, max_share_min, min_token_length, "
+                "max_token_channels, min_mutual_edges, edge_kinds, "
+                "weight_about, weight_token, weight_share, weight_mutual, "
+                "channels_scored, with_description, refs_outside_inventory"
+                ") VALUES (20, 0.7, 4, 3, 5, ARRAY['forward'], "
+                "1.0, 0.6, 0.8, 0.5, 3, 1, 0)"
+            )
+        )
+
+    async with database.session() as session:
+        run = (
+            await session.execute(
+                select(AffiliationRun).order_by(AffiliationRun.id)
+            )
+        ).scalar_one()
+        assert run.max_handle_token_channels is None
+        assert run.weight_handle is None
+
+
+async def test_a_lower_handle_cap_clears_the_evidence_it_no_longer_supports(
+    database: Database,
+) -> None:
+    """A signal that stops firing must stop claiming it did — while the
+    decision taken on it stays exactly where it was."""
+    await seed(database)
+    await store(
+        database,
+        [
+            Candidate(
+                pair=(A, B),
+                score=1.0,
+                handle_token="gonzo",
+                handle_token_channels=3,
+            )
+        ],
+    )
+    async with database.session() as session:
+        await confirm_affiliation(session, [A, B])
+
+    await store(
+        database,
+        [Candidate(pair=(A, B), score=0.0)],
+        thresholds=Thresholds(max_handle_token_channels=2),
+    )
+
+    async with database.session() as session:
+        rows = await list_candidates(session, include_decided=True)
+        run = (
+            (
+                await session.execute(
+                    select(AffiliationRun).order_by(AffiliationRun.id.desc())
+                )
+            )
+            .scalars()
+            .first()
+        )
+
+    assert rows[0].handle_token is None
+    assert rows[0].handle_token_channels is None
+    assert rows[0].decision is AffiliationDecision.CONFIRMED
+    assert run is not None
+    assert run.max_handle_token_channels == 2
+
+
+async def test_a_run_records_the_handle_parameters(
+    database: Database,
+) -> None:
+    await seed(database)
+    async with database.session() as session:
+        await record_run(
+            session,
+            a_detection(),
+            thresholds=Thresholds(max_handle_token_channels=7),
+            weights=Weights(handle=1.5),
+            edge_kinds=BOTH_KINDS,
+        )
+
+    async with database.session() as session:
+        run = (await session.execute(select(AffiliationRun))).scalar_one()
+
+    assert run.max_handle_token_channels == 7
+    assert run.weight_handle == 1.5

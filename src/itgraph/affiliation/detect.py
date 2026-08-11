@@ -1,4 +1,4 @@
-"""Merging the four signals into one ranked list of candidate pairs.
+"""Merging the five signals into one ranked list of candidate pairs.
 
 The union of what the signals found, not the intersection. One signal is
 enough to propose a pair, and that is a measurement rather than a
@@ -24,6 +24,7 @@ from itgraph.affiliation.signals import (
     Weights,
     description_references,
     mutual_density,
+    named_handle_tokens,
     ordered,
     outgoing_concentration,
     shared_username_tokens,
@@ -90,6 +91,8 @@ class Candidate:
     about_direction: AboutDirection | None = None
     shared_token: str | None = None
     shared_token_channels: int | None = None
+    handle_token: str | None = None
+    handle_token_channels: int | None = None
     out_share: float | None = None
     out_share_edges: int | None = None
     out_share_src: int | None = None
@@ -139,7 +142,13 @@ def validate_parameters(
             "max_token_channels must be at least 2 — a token on one channel "
             f"is shared with nobody, got {thresholds.max_token_channels}"
         )
-    for name in ("about", "share", "token", "mutual"):
+    if thresholds.max_handle_token_channels < 2:
+        raise InvalidParameterError(
+            "max_handle_token_channels must be at least 2 — a handle on one "
+            "channel is shared with nobody, got "
+            f"{thresholds.max_handle_token_channels}"
+        )
+    for name in ("about", "handle", "share", "token", "mutual"):
         value = getattr(weights, name)
         if value < 0:
             raise InvalidParameterError(
@@ -180,8 +189,32 @@ def detect(
         entry.score += weights.about * about_signal.strength
         entry.about_direction = about_signal.direction
 
+    # Before the rarity signal, because what it fires on is what the
+    # rarity signal must not read a second time.
+    handle_signals = named_handle_tokens(
+        inventory.usernames, inventory.descriptions, thresholds=thresholds
+    )
+    for handle_signal in handle_signals:
+        entry = entry_for(handle_signal.pair)
+        entry.score += weights.handle * handle_signal.strength
+        entry.handle_token = handle_signal.token
+        entry.handle_token_channels = handle_signal.token_channels
+
+    # A signed handle and a rare token are two readings of *one*
+    # observation — these usernames share this token — so the handle
+    # signal's tokens are withheld from the rarity signal and the
+    # observation contributes once. Summing both would rank a pair whose
+    # token happens to be signed above a pair carrying a token plus an
+    # independent edge signal, and the score orders a reading list.
+    #
+    # Measured when the rule was written: it changes no shown pair. The
+    # seven signed groups small enough for both signals to fire had every
+    # pair already excluded as one family or as a chat with its parent,
+    # and the two that produce anything sit above the rarity cap. Settled
+    # on principle while it was still free.
+    signed = frozenset(signal.token for signal in handle_signals)
     for token_signal in shared_username_tokens(
-        inventory.usernames, thresholds=thresholds
+        inventory.usernames, thresholds=thresholds, excluding=signed
     ):
         entry = entry_for(token_signal.pair)
         entry.score += weights.token * token_signal.strength

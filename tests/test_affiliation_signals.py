@@ -1,4 +1,4 @@
-"""The four affiliation signals, one shape at a time.
+"""The five affiliation signals, one shape at a time.
 
 Pure functions over plain mappings: no database, no network, no fixture
 beyond a dict. Each signal is tested where it fires, where it does not,
@@ -10,6 +10,7 @@ from itgraph.affiliation.signals import (
     Thresholds,
     description_references,
     mutual_density,
+    named_handle_tokens,
     outgoing_concentration,
     shared_username_tokens,
 )
@@ -361,3 +362,190 @@ def test_the_tie_break_does_not_depend_on_username_order() -> None:
     )
 
     assert forwards[0].token == backwards[0].token
+
+
+# --- named handle tokens ----------------------------------------------
+
+
+def test_a_signed_handle_proposes_every_pair_in_the_group() -> None:
+    """The shape the signal was written for: one hub, three satellites,
+    one handle, and the hub's description signing it."""
+    signals = named_handle_tokens(
+        {
+            A: "tg_gonzo",
+            B: "logs_gonzo",
+            C: "files_gonzo",
+            D: "braindump_gonzo",
+        },
+        {A: "Канал про ИИ\n\nБлоггер @gonzo\nИмя: Олег"},
+        thresholds=Thresholds(),
+    )
+
+    assert {signal.pair for signal in signals} == {
+        (A, B),
+        (A, C),
+        (A, D),
+        (B, C),
+        (B, D),
+        (C, D),
+    }
+    assert {signal.token for signal in signals} == {"gonzo"}
+    assert {signal.token_channels for signal in signals} == {4}
+
+
+def test_a_handle_named_by_a_channel_that_does_not_carry_it() -> None:
+    """The carrier requirement is the whole precision of the signal.
+
+    Without it a description naming a big brand pulls every channel of
+    that brand into one group on a stranger's say-so — measured, that is
+    `@yandex` across 13 usernames, and 27 pairs becoming 105.
+    """
+    signals = named_handle_tokens(
+        {A: "yandex_cup", B: "yandex_weather", C: "someone_else"},
+        {C: "Пишу про поиск, много про @yandex"},
+        thresholds=Thresholds(),
+    )
+
+    assert signals == []
+
+
+def test_a_larger_group_is_not_weaker_evidence() -> None:
+    """The rarity formula collapses at its cap; this one must not."""
+    two = named_handle_tokens(
+        {A: "tg_alpha", B: "logs_alpha"},
+        {A: "@alpha"},
+        thresholds=Thresholds(),
+    )
+    five = named_handle_tokens(
+        {
+            A: "tg_gonzo",
+            B: "logs_gonzo",
+            C: "files_gonzo",
+            D: "braindump_gonzo",
+            1005: "chat_gonzo",
+        },
+        {A: "@gonzo"},
+        thresholds=Thresholds(),
+    )
+
+    assert min(signal.strength for signal in five) >= max(
+        signal.strength for signal in two
+    )
+
+
+def test_a_handle_beginning_with_a_digit_is_read() -> None:
+    """`1red2black` cannot be a Telegram username and is still the handle
+    an author signs five channels with."""
+    signals = named_handle_tokens(
+        {A: "tg_1red2black", B: "logs_1red2black"},
+        {A: "Блоггер @1red2black\nYouTube: https://youtube.com/@1red2black"},
+        thresholds=Thresholds(),
+    )
+
+    assert [signal.pair for signal in signals] == [(A, B)]
+    assert signals[0].token == "1red2black"
+
+
+def test_a_handle_naming_no_channel_is_evidence_all_the_same() -> None:
+    """The signal never resolves a handle, so naming nothing costs it
+    nothing — `@gonzo` is no channel here and still signs two."""
+    signals = named_handle_tokens(
+        {A: "tg_gonzo", B: "logs_gonzo"},
+        {A: "@gonzo"},
+        thresholds=Thresholds(),
+    )
+
+    assert [signal.pair for signal in signals] == [(A, B)]
+
+
+def test_a_handle_on_too_many_channels_proposes_nothing() -> None:
+    """The cap bounds d(d−1)/2, and says nothing about credibility."""
+    signals = named_handle_tokens(
+        {A: "tg_gonzo", B: "logs_gonzo", C: "files_gonzo"},
+        {A: "@gonzo"},
+        thresholds=Thresholds(max_handle_token_channels=2),
+    )
+
+    assert signals == []
+
+
+def test_a_handle_below_the_length_floor_proposes_nothing() -> None:
+    signals = named_handle_tokens(
+        {A: "tg_gonzo", B: "logs_gonzo"},
+        {A: "@gonzo"},
+        thresholds=Thresholds(min_token_length=6),
+    )
+
+    assert signals == []
+
+
+def test_a_group_with_no_description_anywhere_proposes_nothing() -> None:
+    signals = named_handle_tokens(
+        {A: "tg_gonzo", B: "logs_gonzo"},
+        {},
+        thresholds=Thresholds(),
+    )
+
+    assert signals == []
+
+
+def test_an_empty_description_signs_nothing() -> None:
+    """Three of the four channels this signal was written for hold `''`
+    rather than no row at all."""
+    signals = named_handle_tokens(
+        {A: "tg_gonzo", B: "logs_gonzo"},
+        {A: "", B: ""},
+        thresholds=Thresholds(),
+    )
+
+    assert signals == []
+
+
+def test_a_tie_between_two_signed_handles_is_broken_the_same_way_always() -> (
+    None
+):
+    """`_tokens` returns a set, and its iteration order for strings moves
+    with `PYTHONHASHSEED`. The stored handle is what the operator reviews
+    the pair on, so it may not depend on the seed."""
+    usernames = {A: "fake_gonzo_main", B: "fake_gonzo_pod"}
+    descriptions = {A: "@fake и @gonzo"}
+
+    first = named_handle_tokens(
+        usernames, descriptions, thresholds=Thresholds()
+    )
+    again = named_handle_tokens(
+        dict(reversed(list(usernames.items()))),
+        descriptions,
+        thresholds=Thresholds(),
+    )
+
+    # `gonzo` over `fake`, the same total order the rarity signal uses:
+    # equal claim, longer token.
+    assert [signal.token for signal in first] == ["gonzo"]
+    assert [signal.token for signal in again] == ["gonzo"]
+
+
+def test_a_signed_token_is_withheld_from_the_rarity_signal() -> None:
+    """One observation, one contribution — the exclusion is what keeps a
+    shared token from being read twice."""
+    usernames = {A: "tg_gonzo", B: "logs_gonzo"}
+
+    unfiltered = shared_username_tokens(usernames, thresholds=Thresholds())
+    filtered = shared_username_tokens(
+        usernames, thresholds=Thresholds(), excluding=frozenset({"gonzo"})
+    )
+
+    assert [signal.token for signal in unfiltered] == ["gonzo"]
+    assert filtered == []
+
+
+def test_excluding_a_token_leaves_a_weaker_one_standing() -> None:
+    """Excluding the strongest token must not drop the pair, only demote
+    it to the next claim the two usernames actually share."""
+    usernames = {A: "fake_gonzo_main", B: "fake_gonzo_pod"}
+
+    filtered = shared_username_tokens(
+        usernames, thresholds=Thresholds(), excluding=frozenset({"gonzo"})
+    )
+
+    assert [signal.token for signal in filtered] == ["fake"]

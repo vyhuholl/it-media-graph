@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     # Under `TYPE_CHECKING` because importing it for real would pull in
     # `settings`, and `itgraph --help` has to work before there is a
     # `.env` to read.
+    from itgraph.affiliation.run import DetectionSummary
     from itgraph.db.affiliation import CandidateRow
     from itgraph.tg.backfill import FloodWaitTooLong
 
@@ -1079,6 +1080,8 @@ def _evidence(row: CandidateRow) -> str:
         parts.append(f"about:{row.about_direction}")
     if row.shared_token is not None:
         parts.append(f"token:{row.shared_token}/{row.shared_token_channels}")
+    if row.handle_token is not None:
+        parts.append(f"handle:{row.handle_token}/{row.handle_token_channels}")
     if row.out_share is not None:
         source = "a" if row.out_share_src == row.channel_a else "b"
         parts.append(
@@ -1087,6 +1090,66 @@ def _evidence(row: CandidateRow) -> str:
     if row.edges_a_to_b is not None:
         parts.append(f"mutual:{row.edges_a_to_b}/{row.edges_b_to_a}")
     return "  ".join(parts)
+
+
+def _candidate_row(row: CandidateRow) -> str:
+    """One pair on one line: both sides, their statuses, and the why."""
+    return (
+        f"{row.score:>6.3f}  "
+        f"{_side(row.username_a, row.title_a, row.channel_a):<40}"
+        f"{row.status_a.value:<10} "
+        f"{_side(row.username_b, row.title_b, row.channel_b):<40}"
+        f"{row.status_b.value:<10} {_evidence(row)}"
+    )
+
+
+def _candidate_lines(summary: DetectionSummary) -> list[str]:
+    """The review list, with the pairs one handle proposed kept together.
+
+    A family of five channels is nine pairs and **one** decision, so the
+    pairs a named handle proposed are printed as a block rather than
+    scattered down a list ordered by score. The block sits where its
+    highest-scoring pair sits, so nothing outranks it that did not
+    outrank that pair.
+
+    Grouping is presentation only. `--limit` still bounds *pairs*, which
+    is why a truncated block says how many of its own are missing rather
+    than quietly showing part of a family as if it were the whole one.
+    """
+    lines: list[str] = []
+    emitted: set[str] = set()
+    for row in summary.rows:
+        token = row.handle_token
+        if token is None:
+            lines.append(_candidate_row(row))
+            continue
+        if token in emitted:
+            # Pulled up into the block at its first appearance.
+            continue
+        emitted.add(token)
+        group = summary.groups[token]
+        shown = [
+            other for other in summary.rows if other.handle_token == token
+        ]
+        # "2 of 4 channels" where a filter has narrowed the group, so a
+        # heading beside evidence reading `handle:atom/4` cannot look
+        # like a miscount. Bare when nothing was narrowed.
+        channels = (
+            f"{len(group.members)} channels"
+            if len(group.members) == group.carriers
+            else f"{len(group.members)} of {group.carriers} channels"
+        )
+        pairs = "pair" if group.pairs == 1 else "pairs"
+        head = f"@{token} — {channels}, {group.pairs} {pairs}"
+        hidden = group.pairs - len(shown)
+        if hidden:
+            head += f", {hidden} not shown"
+        lines.append(head)
+        lines.extend(f"  {_candidate_row(other)}" for other in shown)
+        # The confirmation, ready to run: retyping five usernames is
+        # where a decision of this shape gets made wrong.
+        lines.append(f"  itgraph family {' '.join(group.members)}")
+    return lines
 
 
 @app.command()
@@ -1125,9 +1188,20 @@ def affiliates(
             "--min-mutual-edges", help="Edges needed each way to count."
         ),
     ] = DEFAULT_THRESHOLDS.min_mutual_edges,
+    max_handle_token_channels: Annotated[
+        int,
+        typer.Option(
+            "--max-handle-token-channels",
+            help="Most channels one signed handle may name.",
+        ),
+    ] = DEFAULT_THRESHOLDS.max_handle_token_channels,
     weight_about: Annotated[
         float, typer.Option("--weight-about", help="Weight of a description.")
     ] = DEFAULT_WEIGHTS.about,
+    weight_handle: Annotated[
+        float,
+        typer.Option("--weight-handle", help="Weight of a signed handle."),
+    ] = DEFAULT_WEIGHTS.handle,
     weight_share: Annotated[
         float, typer.Option("--weight-share", help="Weight of concentration.")
     ] = DEFAULT_WEIGHTS.share,
@@ -1168,9 +1242,13 @@ def affiliates(
     It proposes and never decides: no run of this command writes a family
     link. Confirm a pair with `itgraph family`.
 
-    Four signals, and they rarely agree with each other, so any one of
+    Five signals, and they rarely agree with each other, so any one of
     them is enough to propose a pair and the weights mostly decide which
     list you read first.
+
+    The pairs one signed handle proposed are printed as a block with the
+    `itgraph family` line that would confirm them: an author's five
+    channels are nine pairs and one decision.
 
     Only pairs with at least one seed in them are shown; the rest are
     still computed and stored, and `--any-status` shows them. Nothing is
@@ -1189,9 +1267,11 @@ def affiliates(
         min_token_length=min_token_length,
         max_token_channels=max_token_channels,
         min_mutual_edges=min_mutual_edges,
+        max_handle_token_channels=max_handle_token_channels,
     )
     weights = Weights(
         about=weight_about,
+        handle=weight_handle,
         share=weight_share,
         token=weight_token,
         mutual=weight_mutual,
@@ -1221,14 +1301,8 @@ def affiliates(
         if not summary.rows:
             return
         typer.echo("")
-        for row in summary.rows:
-            typer.echo(
-                f"{row.score:>6.3f}  "
-                f"{_side(row.username_a, row.title_a, row.channel_a):<40}"
-                f"{row.status_a.value:<10} "
-                f"{_side(row.username_b, row.title_b, row.channel_b):<40}"
-                f"{row.status_b.value:<10} {_evidence(row)}"
-            )
+        for line in _candidate_lines(summary):
+            typer.echo(line)
 
     try:
         _run(run())

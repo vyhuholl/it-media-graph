@@ -68,6 +68,8 @@ class CandidateRow:
     about_direction: str | None
     shared_token: str | None
     shared_token_channels: int | None
+    handle_token: str | None
+    handle_token_channels: int | None
     out_share: float | None
     out_share_edges: int | None
     out_share_src: int | None
@@ -203,11 +205,13 @@ async def record_run(
         min_token_length=thresholds.min_token_length,
         max_token_channels=thresholds.max_token_channels,
         min_mutual_edges=thresholds.min_mutual_edges,
+        max_handle_token_channels=thresholds.max_handle_token_channels,
         edge_kinds=[kind.value for kind in edge_kinds],
         weight_about=weights.about,
         weight_token=weights.token,
         weight_share=weights.share,
         weight_mutual=weights.mutual,
+        weight_handle=weights.handle,
         channels_scored=detection.channels_scored,
         with_description=detection.with_description,
         refs_outside_inventory=detection.refs_outside_inventory,
@@ -243,6 +247,8 @@ async def upsert_candidates(
             "about_direction": candidate.about_direction,
             "shared_token": candidate.shared_token,
             "shared_token_channels": candidate.shared_token_channels,
+            "handle_token": candidate.handle_token,
+            "handle_token_channels": candidate.handle_token_channels,
             "out_share": candidate.out_share,
             "out_share_edges": candidate.out_share_edges,
             "out_share_src": candidate.out_share_src,
@@ -268,6 +274,10 @@ async def upsert_candidates(
                 "shared_token": statement.excluded.shared_token,
                 "shared_token_channels": (
                     statement.excluded.shared_token_channels
+                ),
+                "handle_token": statement.excluded.handle_token,
+                "handle_token_channels": (
+                    statement.excluded.handle_token_channels
                 ),
                 "out_share": statement.excluded.out_share,
                 "out_share_edges": statement.excluded.out_share_edges,
@@ -356,6 +366,8 @@ async def list_candidates(
             ),
             shared_token=candidate.shared_token,
             shared_token_channels=candidate.shared_token_channels,
+            handle_token=candidate.handle_token,
+            handle_token_channels=candidate.handle_token_channels,
             out_share=candidate.out_share,
             out_share_edges=candidate.out_share_edges,
             out_share_src=candidate.out_share_src,

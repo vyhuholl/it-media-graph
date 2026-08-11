@@ -13,6 +13,7 @@ What it may not do is decide. No path from here writes
 """
 
 import logging
+from collections import defaultdict
 from dataclasses import dataclass
 
 from itgraph.affiliation.detect import detect, validate_parameters
@@ -27,9 +28,38 @@ from itgraph.db.affiliation import (
 from itgraph.db.models import EdgeKind
 from itgraph.db.session import Database
 
-__all__ = ["DetectionSummary", "run_detection"]
+__all__ = ["DetectionSummary", "HandleGroup", "run_detection"]
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class HandleGroup:
+    """The channels one named handle is asking about, and how many pairs.
+
+    Computed over the *unbounded* review list, so a block the caller's
+    limit truncates can still say how many of its pairs are not shown,
+    and can still name every channel a confirmation would have to
+    mention. Reading either off the truncated rows would quietly
+    understate both.
+
+    ``members`` holds each channel as the operator would type it — the
+    username where there is one, the id otherwise — because what this
+    exists for is a confirmation line they do not have to reassemble by
+    hand.
+
+    ``carriers`` is how many channels the handle names in total, which is
+    usually more than ``members``: a channel whose every pair is already
+    decided, or one in a pair with no seed on either side, carries the
+    handle and is not being asked about. Both numbers are shown, because
+    a block headed "2 channels" beside evidence reading ``handle:atom/4``
+    otherwise looks like a miscount rather than a filter.
+    """
+
+    token: str
+    pairs: int
+    members: list[str]
+    carriers: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +79,8 @@ class DetectionSummary:
     with_description: int
     refs_outside_inventory: int
     rows: list[CandidateRow]
+    # Keyed by handle, for the rows in `rows` that carry one.
+    groups: dict[str, HandleGroup]
 
     def line(self) -> str:
         line = (
@@ -74,10 +106,13 @@ class DetectionSummary:
         ]
         if self.with_description == 0:
             # Said in these words on purpose: a signal that could not run
-            # anywhere has not found nothing, it has looked nowhere.
+            # anywhere has not found nothing, it has looked nowhere. Two
+            # signals read descriptions, so both are silent here and
+            # naming one of them would misreport the other as having
+            # looked and found nothing.
             lines.append(
-                "  the description signal produced nothing for lack of "
-                "data — run `itgraph metadata` first"
+                "  the description and named-handle signals produced "
+                "nothing for lack of data — run `itgraph metadata` first"
             )
         if self.refs_outside_inventory:
             lines.append(
@@ -141,6 +176,7 @@ async def run_detection(
         )
         rows = reviewable[:limit] if limit is not None else reviewable
 
+    groups = _handle_groups(reviewable)
     return DetectionSummary(
         proposed=len(detection.candidates),
         awaiting_review=len(reviewable),
@@ -148,4 +184,38 @@ async def run_detection(
         with_description=detection.with_description,
         refs_outside_inventory=detection.refs_outside_inventory,
         rows=rows,
+        groups=groups,
     )
+
+
+def _handle_groups(rows: list[CandidateRow]) -> dict[str, HandleGroup]:
+    """The named-handle groups in a review list, keyed by handle.
+
+    A member appears here only through a pair still awaiting review,
+    which is the right membership for a confirmation line: a channel
+    whose every pair is already decided is in the family already, and
+    naming it again would ask for a decision that has been made.
+    """
+    pairs: dict[str, int] = defaultdict(int)
+    members: dict[str, dict[int, str]] = defaultdict(dict)
+    carriers: dict[str, int] = {}
+    for row in rows:
+        token = row.handle_token
+        if token is None:
+            continue
+        pairs[token] += 1
+        members[token][row.channel_a] = row.username_a or str(row.channel_a)
+        members[token][row.channel_b] = row.username_b or str(row.channel_b)
+        carriers[token] = row.handle_token_channels or 0
+    return {
+        token: HandleGroup(
+            token=token,
+            pairs=count,
+            # By id, so the confirmation line is the same from run to run.
+            members=[
+                reference for _, reference in sorted(members[token].items())
+            ],
+            carriers=carriers[token],
+        )
+        for token, count in pairs.items()
+    }

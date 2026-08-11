@@ -911,6 +911,13 @@ class AffiliationRun(Base):
     max_token_channels: Mapped[int] = mapped_column(Integer)
     min_mutual_edges: Mapped[int] = mapped_column(Integer)
 
+    # The named-handle signal's own cap, and its weight below. **Nullable
+    # where every other parameter here is not**, and the asymmetry is a
+    # statement rather than an oversight: a run recorded before that
+    # signal existed genuinely had no such parameter, and a server
+    # default would claim it ran under one it never saw.
+    max_handle_token_channels: Mapped[int | None] = mapped_column(Integer)
+
     # Which edge kinds the two edge-based signals counted. Text rather
     # than the enum: an array of a Postgres enum is awkward to migrate,
     # and this column is read by a human, not joined on.
@@ -920,6 +927,8 @@ class AffiliationRun(Base):
     weight_token: Mapped[float] = mapped_column(Float)
     weight_share: Mapped[float] = mapped_column(Float)
     weight_mutual: Mapped[float] = mapped_column(Float)
+    # Nullable for the same reason as the cap above.
+    weight_handle: Mapped[float | None] = mapped_column(Float)
 
     # What the run could see. `refs_outside_inventory` counts handles
     # parsed out of descriptions that name no channel the inventory
@@ -1017,6 +1026,18 @@ class AffiliationCandidate(Base):
     # token on two channels is an author, on eleven it is a subject.
     shared_token: Mapped[str | None] = mapped_column(Text)
     shared_token_channels: Mapped[int | None] = mapped_column(Integer)
+
+    # The handle a channel signed its own work with, and how many
+    # channels carry it as a username token. Both values repeat across
+    # every pair of one group, and that is the point: grouping the review
+    # list is then a `GROUP BY` over rows the reader already has. A table
+    # of groups would be the alternative, and a worse one — a group has
+    # no attributes beyond these two, decisions are per-pair so it would
+    # carry no decision column, and a stored membership can disagree with
+    # the pairs, which is the failure `channel_families` exists to make
+    # impossible.
+    handle_token: Mapped[str | None] = mapped_column(Text)
+    handle_token_channels: Mapped[int | None] = mapped_column(Integer)
 
     # The concentration signal: what share of one channel's outgoing
     # edges went to the other, the denominator that share was taken over,

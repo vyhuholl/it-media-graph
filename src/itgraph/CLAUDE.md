@@ -26,7 +26,7 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `derive/edges.py` | The derivation pass: raw messages → edges; touches no network |
 | `derive/metrics.py` | Pure reading of a payload into the four counters; absent is never zero |
 | `derive/` | Deriving graph data from the raw layer |
-| `affiliation/signals.py` | The four signals that suggest two channels share an author; pure functions over mappings |
+| `affiliation/signals.py` | The five signals that suggest two channels share an author; pure functions over mappings. Holds a second, deliberately looser handle pattern — it may not be pointed at `derive/references.py`, and the docstring says why |
 | `affiliation/detect.py` | Merging the signals into one ranked candidate list; the parameters and their validation |
 | `affiliation/run.py` | The detection pass: load, score, store, report. Touches no network |
 | `affiliation/` | Recognizing that several channels have one author. Proposes; never decides |

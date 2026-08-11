@@ -678,6 +678,53 @@ def seed_affiliation_fixture(url: str) -> None:
     asyncio.run(build())
 
 
+def seed_handle_group_fixture(url: str) -> None:
+    """Three channels sharing a handle, one of them signing it.
+
+    The shape the named-handle signal was written for: a hub whose
+    description reads "@gonzo" and satellites whose usernames carry the
+    same token. No edges and no cross-references, so nothing but that
+    signal can propose these pairs.
+    """
+    import asyncio
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    async def build() -> None:
+        engine = create_async_engine(url)
+        try:
+            async with (
+                async_sessionmaker(engine)() as session,
+                session.begin(),
+            ):
+                await session.execute(
+                    text(
+                        "INSERT INTO channels "
+                        "(tg_id, username, title, discovered_via, status) "
+                        "VALUES "
+                        "(:a, 'tg_gonzo', 'Hub', 'manual', 'seed'), "
+                        "(:b, 'logs_gonzo', 'Logs', 'manual', 'seed'), "
+                        "(:c, 'files_gonzo', 'Files', 'manual', 'seed')"
+                    ),
+                    {"a": KNOWN, "b": KNOWN + 1, "c": KNOWN + 2},
+                )
+                await session.execute(
+                    text(
+                        "INSERT INTO raw_channels (channel_id, payload) "
+                        "VALUES (:a, :payload)"
+                    ),
+                    {
+                        "a": KNOWN,
+                        "payload": '{"full_chat": {"about": "@gonzo"}}',
+                    },
+                )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(build())
+
+
 def test_affiliates_ranks_pairs_and_shows_its_evidence(
     monkeypatch: pytest.MonkeyPatch, database_url: str
 ) -> None:
@@ -1565,3 +1612,80 @@ def test_verbose_brings_the_unhandled_update_log_back(
 
     assert result.exit_code == 0
     assert logging.getLogger("aiogram.event").level != logging.WARNING
+
+
+def test_affiliates_prints_a_handle_group_as_one_block(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    """Three channels are three pairs and one decision, so they are
+    printed together with the command that would confirm them."""
+    use_test_database(monkeypatch, database_url)
+    seed_handle_group_fixture(database_url)
+
+    result = runner.invoke(app, ["affiliates"])
+
+    assert result.exit_code == 0, result.output
+    assert "@gonzo — 3 channels, 3 pairs" in result.output
+    assert "handle:gonzo/3" in result.output
+    assert "itgraph family tg_gonzo logs_gonzo files_gonzo" in result.output
+    # One block, not one heading per pair.
+    assert result.output.count("@gonzo — ") == 1
+
+
+def test_affiliates_reports_the_pairs_a_limit_hides_from_a_group(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    """The bound still counts pairs, so part of a family must not read as
+    the whole of one."""
+    use_test_database(monkeypatch, database_url)
+    seed_handle_group_fixture(database_url)
+
+    result = runner.invoke(app, ["affiliates", "--limit", "2"])
+
+    assert result.exit_code == 0, result.output
+    assert "@gonzo — 3 channels, 3 pairs, 1 not shown" in result.output
+    assert result.output.count("handle:gonzo/3") == 2
+
+
+def test_affiliates_handle_cap_reaches_the_signal(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    seed_handle_group_fixture(database_url)
+
+    result = runner.invoke(
+        app, ["affiliates", "--max-handle-token-channels", "2"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "handle:" not in result.output
+    # The rarity signal reads the token instead, now that no signed
+    # handle is claiming it.
+    assert "token:gonzo/3" in result.output
+
+
+def test_affiliates_handle_weight_reaches_the_score(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    seed_handle_group_fixture(database_url)
+
+    default = runner.invoke(app, ["affiliates"])
+    heavier = runner.invoke(app, ["affiliates", "--weight-handle", "2.0"])
+
+    assert " 1.000  " in default.output
+    assert " 2.000  " in heavier.output
+
+
+def test_affiliates_refuses_a_handle_cap_below_two(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    seed_handle_group_fixture(database_url)
+
+    result = runner.invoke(
+        app, ["affiliates", "--max-handle-token-channels", "1"]
+    )
+
+    assert result.exit_code != 0
+    assert "max_handle_token_channels" in result.output

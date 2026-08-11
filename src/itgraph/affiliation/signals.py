@@ -1,4 +1,4 @@
-"""The four signals that suggest two channels share an author.
+"""The five signals that suggest two channels share an author.
 
 Pure functions over plain mappings — no session, no engine, no network.
 Every input is data the project already holds: the inventory's usernames,
@@ -27,11 +27,20 @@ implemented, and two behave differently from the obvious expectation:
 They also barely corroborate each other: mutual-about and shared-token
 overlap in zero pairs, mutual-about and mutual-edges in zero,
 concentration and shared-token in 6 of 19. So the combined score is not a
-consensus measure — it interleaves four nearly disjoint lists, and the
+consensus measure — it interleaves nearly disjoint lists, and the
 weights decide the merge order. Nothing here may therefore require two
 signals before proposing a pair.
+
+A fifth signal was added after the four above had run for a fortnight,
+because a whole shape of family turned out to be invisible to all of
+them at once: a main channel with satellites sharing a handle. The
+rarity cap is what hides it — the more channels an author runs under one
+handle, the more that handle looks like a subject — so the fifth signal
+reads the handle itself, and the note on :func:`named_handle_tokens` says
+how it separates one from the other.
 """
 
+import re
 from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -44,6 +53,7 @@ __all__ = [
     "DEFAULT_WEIGHTS",
     "AboutResult",
     "AboutSignal",
+    "HandleSignal",
     "MutualSignal",
     "ShareSignal",
     "Thresholds",
@@ -51,9 +61,31 @@ __all__ = [
     "Weights",
     "description_references",
     "mutual_density",
+    "named_handle_tokens",
     "outgoing_concentration",
     "shared_username_tokens",
 ]
+
+# A handle as it is written in a description, deliberately looser than
+# `_TEXT_MENTION` in `derive/references.py`: the first character may be a
+# digit, which no Telegram username may be.
+#
+# The two patterns answer different questions and have different failure
+# modes, which is why this one may never migrate over there. That one
+# asks "is this a channel I can look up?", and every match becomes a
+# `pending_mentions` key, a row in the resolve queue and eventually a
+# request — so a handle that cannot resolve costs quota. This one asks
+# "is this string a username token my inventory already carries?", and
+# every match is joined against a closed set of some two thousand
+# tokens. **The pattern can afford to be loose because the join is
+# against a closed set**: a match that is nobody's username token forms
+# no candidate and is never stored, resolved or reported.
+#
+# What it buys, measured: the handle `@1red2black` signs five channels
+# of one author and is invisible to the strict pattern, which finds
+# eight groups where this one finds nine — and the ninth is the family
+# the whole signal was written for.
+_HANDLE = re.compile(r"@([A-Za-z0-9][A-Za-z0-9_]{3,31})")
 
 # A pair, always stored with the smaller id first. Sorting by id rather
 # than by whichever signal found it is what makes two signals reaching
@@ -85,6 +117,13 @@ class Thresholds:
     max_token_channels: int = 3
     # 45 pairs at 5, 62 at 3.
     min_mutual_edges: int = 5
+    # The named-handle signal's own cap, and not a rarity threshold: a
+    # signed handle is evidence however many channels carry it, so this
+    # bounds the d(d−1)/2 pairs one token can produce and nothing else.
+    # It binds nothing on the corpus it was set against — the largest
+    # signed group there is 5 — and exists so that a brand suffix landing
+    # on 40 channels cannot arrive as 780 pairs in one block.
+    max_handle_token_channels: int = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +138,13 @@ class Weights:
     """
 
     about: float = 1.0
+    # Level with a mutual description reference, and above everything
+    # else the corpus produces — concentration reaches 0.8, mutual
+    # density 0.5, a one-way description 0.5. That matches the measured
+    # precision rather than flattering it: of the nine groups the signal
+    # finds, seven reproduce families the operator had already confirmed
+    # or linked by hand, and no subject word qualifies at all.
+    handle: float = 1.0
     share: float = 0.8
     token: float = 0.6
     mutual: float = 0.5
@@ -141,6 +187,16 @@ class AboutResult:
 @dataclass(frozen=True, slots=True)
 class TokenSignal:
     """Two usernames sharing a token, and how rare that token is."""
+
+    pair: Pair
+    strength: float
+    token: str
+    token_channels: int
+
+
+@dataclass(frozen=True, slots=True)
+class HandleSignal:
+    """Two channels carrying a handle one of them signed its work with."""
 
     pair: Pair
     strength: float
@@ -251,9 +307,20 @@ def description_references(
 
 
 def shared_username_tokens(
-    usernames: Mapping[int, str], *, thresholds: Thresholds
+    usernames: Mapping[int, str],
+    *,
+    thresholds: Thresholds,
+    excluding: frozenset[str] = frozenset(),
 ) -> list[TokenSignal]:
     """Pairs proposed by a username token rare enough to mean something.
+
+    ``excluding`` names tokens already read by another signal — in
+    practice the handles :func:`named_handle_tokens` fired on. They are
+    skipped rather than filtered afterwards, so a pair whose *strongest*
+    token is a signed handle can still be proposed here on a weaker one
+    it also shares. Reading one shared token twice would count a single
+    observation twice and rank the pair above one carrying a token plus
+    an independent edge signal.
 
     Strength is ``(M + 1 − d) / M`` for a token carried by ``d`` channels
     under a cap of ``M``: rarest scores highest, and a token at the cap
@@ -281,7 +348,7 @@ def shared_username_tokens(
     cap = thresholds.max_token_channels
     for token, channels in by_token.items():
         count = len(channels)
-        if count < 2 or count > cap:
+        if count < 2 or count > cap or token in excluding:
             continue
         strength = (cap + 1 - count) / cap
         for index, first in enumerate(channels):
@@ -314,6 +381,82 @@ def _beats(
         len(other_token),
         token,
     )
+
+
+def named_handle_tokens(
+    usernames: Mapping[int, str],
+    descriptions: Mapping[int, str],
+    *,
+    thresholds: Thresholds,
+) -> list[HandleSignal]:
+    """Pairs proposed by a handle an author signed their own work with.
+
+    A username token counts when **a channel carrying it names it as a
+    handle in its own description** — `tg_1red2black`'s `about` reads
+    "Блоггер @1red2black", and `1red2black` is the token its username
+    and four sibling usernames share. Every pair among the carriers is
+    then proposed.
+
+    **The carrier requirement is the whole precision of the signal**, and
+    it is measured rather than assumed. Accepting a handle named in *any*
+    description admits `@yandex` — carried by 13 usernames and named by a
+    channel that is not one of them — and turns 27 pairs into 105. The
+    reading is "an author signing their own work"; a third party naming a
+    brand is a different fact, and on this corpus it is the noisy one.
+
+    **Strength is a flat ``1.0``, whatever ``d``.** The rarity formula
+    used by :func:`shared_username_tokens` is deliberately not reused:
+    ``(M + 1 − d) / M`` collapses to ``1/M`` exactly at the cap, so
+    raising that cap to admit a five-channel family also ranks it last —
+    the behaviour this signal exists to route around. Five channels
+    signing one handle are not weaker evidence than two.
+
+    Where two signed handles reach one pair the stronger claim wins by
+    the same total order :func:`_beats` applies to shared tokens — longer
+    token, then alphabetical. Arbitrary as a claim and essential as an
+    ordering: `_tokens` returns a *set*, whose iteration order for
+    strings moves with the interpreter's hash seed, and the stored handle
+    is what the operator reviews the pair on.
+    """
+    by_token: dict[str, list[int]] = defaultdict(list)
+    carried: dict[int, set[str]] = {}
+    for channel_id, username in usernames.items():
+        tokens = _tokens(username, thresholds.min_token_length)
+        carried[channel_id] = tokens
+        for token in tokens:
+            by_token[token].append(channel_id)
+
+    # A handle is only read from the description of a channel whose own
+    # username carries it, which is also what applies `min_token_length`
+    # here: `carried` was built under it, so a handle shorter than the
+    # minimum is in no channel's token set and signs nothing.
+    signed: set[str] = set()
+    for channel_id, about in descriptions.items():
+        tokens = carried.get(channel_id, set())
+        for match in _HANDLE.finditer(about):
+            handle = match.group(1).lower()
+            if handle in tokens:
+                signed.add(handle)
+
+    strongest: dict[Pair, HandleSignal] = {}
+    cap = thresholds.max_handle_token_channels
+    for token in sorted(signed):
+        channels = by_token[token]
+        count = len(channels)
+        if count < 2 or count > cap:
+            continue
+        for index, first in enumerate(channels):
+            for second in channels[index + 1 :]:
+                pair = ordered(first, second)
+                current = strongest.get(pair)
+                if current is None or _beats(1.0, token, 1.0, current.token):
+                    strongest[pair] = HandleSignal(
+                        pair=pair,
+                        strength=1.0,
+                        token=token,
+                        token_channels=count,
+                    )
+    return list(strongest.values())
 
 
 def outgoing_concentration(

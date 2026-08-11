@@ -234,3 +234,114 @@ def test_counting_no_edge_kinds_is_refused() -> None:
 
 def test_the_defaults_are_valid() -> None:
     validate_parameters(Thresholds(), Weights(), BOTH_KINDS)
+
+
+def test_a_named_handle_proposes_every_pair_in_its_group() -> None:
+    """The whole group, from one channel's description signing it."""
+    result = detect(
+        inventory(
+            usernames={A: "tg_gonzo", B: "logs_gonzo", C: "files_gonzo"},
+            descriptions={A: "Блоггер @gonzo"},
+        ),
+        thresholds=Thresholds(),
+        weights=Weights(),
+    )
+
+    assert {candidate.pair for candidate in result.candidates} == {
+        (A, B),
+        (A, C),
+        (B, C),
+    }
+    assert all(
+        candidate.handle_token == "gonzo" for candidate in result.candidates
+    )
+    assert all(
+        candidate.handle_token_channels == 3 for candidate in result.candidates
+    )
+
+
+def test_a_signed_token_contributes_once() -> None:
+    """Both signals read one observation — these usernames share this
+    token — so the score must not add them up."""
+    signed = detect(
+        inventory(
+            usernames={A: "tg_gonzo", B: "logs_gonzo"},
+            descriptions={A: "@gonzo"},
+        ),
+        thresholds=Thresholds(),
+        weights=Weights(),
+    )
+
+    assert len(signed.candidates) == 1
+    candidate = signed.candidates[0]
+    assert candidate.handle_token == "gonzo"
+    # The rarity signal was withheld, so it claims nothing here.
+    assert candidate.shared_token is None
+    assert candidate.score == pytest.approx(Weights().handle)
+
+
+def test_a_handle_and_an_edge_signal_both_show_on_one_pair() -> None:
+    """Independent evidence still accumulates — it is only the *same*
+    observation that may not be counted twice."""
+    result = detect(
+        inventory(
+            usernames={A: "tg_gonzo", B: "logs_gonzo"},
+            descriptions={A: "@gonzo"},
+            edges={(A, B): 25},
+        ),
+        thresholds=Thresholds(),
+        weights=Weights(),
+    )
+
+    candidate = result.candidates[0]
+    assert candidate.handle_token == "gonzo"
+    assert candidate.out_share == pytest.approx(1.0)
+    assert candidate.score > Weights().handle
+
+
+def test_a_handle_group_skips_a_chat_and_its_parent() -> None:
+    """A discussion chat carries the family handle too, and its link to
+    the channel is already recorded."""
+    result = detect(
+        inventory(
+            usernames={A: "tg_gonzo", B: "chat_gonzo", C: "logs_gonzo"},
+            descriptions={A: "@gonzo"},
+            linked_to={B: A},
+        ),
+        thresholds=Thresholds(),
+        weights=Weights(),
+    )
+
+    assert {candidate.pair for candidate in result.candidates} == {
+        (A, C),
+        (B, C),
+    }
+
+
+def test_a_handle_group_skips_a_pair_already_in_one_family() -> None:
+    result = detect(
+        inventory(
+            usernames={A: "tg_gonzo", B: "logs_gonzo", C: "files_gonzo"},
+            descriptions={A: "@gonzo"},
+            family_of={A: A, B: A, C: C},
+        ),
+        thresholds=Thresholds(),
+        weights=Weights(),
+    )
+
+    assert {candidate.pair for candidate in result.candidates} == {
+        (A, C),
+        (B, C),
+    }
+
+
+def test_a_handle_cap_below_two_is_refused() -> None:
+    with pytest.raises(InvalidParameterError, match="max_handle_token"):
+        validate_parameters(
+            Thresholds(max_handle_token_channels=1), Weights(), BOTH_KINDS
+        )
+
+
+def test_a_negative_handle_weight_is_refused() -> None:
+    with pytest.raises(InvalidParameterError, match="handle"):
+        validate_parameters(Thresholds(), Weights(handle=-1.0), BOTH_KINDS)
