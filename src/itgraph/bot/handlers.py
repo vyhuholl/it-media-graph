@@ -144,7 +144,7 @@ def build_dispatcher(database: Database, chat_id: int) -> Dispatcher:
         lines = [
             f"оповещений всего: {raised}, не доставлено: {waiting.total}",
             (
-                f"последнее поднято: {newest.astimezone(MOSCOW_TZ):%Y-%m-%d %H:%M} UTC"
+                f"последнее поднято: {newest.astimezone(MOSCOW_TZ):%Y-%m-%d %H:%M} MSK"
                 if newest
                 else "ни одного оповещения ещё не было"
             ),
