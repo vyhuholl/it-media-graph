@@ -16,14 +16,18 @@ says nothing about who influences whom — left in, it hands the largest family
 the top of every centrality ranking.
 """
 
+import os
 import math
 from datetime import UTC, datetime
 from pathlib import Path
 
 import networkx as nx
 import psycopg
+from dotenv import load_dotenv()
 
-DSN = "postgresql://itgraph:itgraph@localhost:5433/itgraph"
+load_dotenv()
+
+DSN = os.environ("DATABASE_URL")
 OUT = Path(__file__).resolve().parent.parent / "data" / "seed_graph.gexf"
 
 HALF_LIFE_DAYS = 90.0

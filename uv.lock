@@ -645,6 +645,7 @@ data = [
     { name = "openpyxl" },
     { name = "pandas" },
     { name = "psycopg", extra = ["binary"] },
+    { name = "python-dotenv" },
 ]
 dev = [
     { name = "ansible-lint" },
@@ -675,6 +676,7 @@ data = [
     { name = "openpyxl", specifier = ">=3.1.5" },
     { name = "pandas", specifier = ">=3.0.5" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.4" },
+    { name = "python-dotenv", specifier = ">=1.2.2" },
 ]
 dev = [
     { name = "ansible-lint", specifier = ">=26.6.0" },

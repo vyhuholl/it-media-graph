@@ -40,16 +40,20 @@ most outward-facing channel in the inventory.
 """
 
 import math
+import os
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 import psycopg
+from dotenv import load_dotenv()
 from openpyxl.comments import Comment
 from openpyxl.utils import get_column_letter
 
-DSN = "postgresql://itgraph:itgraph@localhost:5433/itgraph"
+load_dotenv()
+
+DSN = os.environ("DATABASE_URL")
 OUT = (
     Path(__file__).resolve().parent.parent / "data" / "channel_scorecard.xlsx"
 )
