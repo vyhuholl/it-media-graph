@@ -157,7 +157,7 @@ The system SHALL add every channel referenced from an in-scope source that is no
 
 ### Requirement: Reference Resolution
 
-The system SHALL provide `itgraph resolve`, obtaining username and title for channels that entered the inventory by reference. The mention queue SHALL be worked in order of how many distinct channels mention each username, most first, so that a bounded run spends the daily quota on the references carrying the most independent evidence.
+The system SHALL provide `itgraph resolve`, obtaining username and title for channels that entered the inventory by reference. The mention queue SHALL be worked in order of how many distinct channels mention each username, most first, so that a bounded run spends the daily quota on the references carrying the most independent evidence. A run MAY be narrowed to a single channel named by its Telegram id, in which case that channel is the whole run; the named channel SHALL still be subject to the queue's own rules, and a channel outside the queue SHALL be refused without a request being made.
 
 #### Scenario: An identifier is resolved
 
@@ -245,6 +245,52 @@ The system SHALL provide `itgraph resolve`, obtaining username and title for cha
 
 - **WHEN** derivation runs
 - **THEN** no request is made to Telegram
+
+#### Scenario: A run can be narrowed to one named channel
+
+- **GIVEN** several channels awaiting resolution and a non-empty mention queue
+- **WHEN** resolution runs naming the Telegram id of one of those channels
+- **THEN** exactly one request is made, for that channel
+- **AND** no other channel awaiting resolution is requested
+- **AND** no pending username is requested
+- **AND** the outcome is recorded and reported the way an unnamed run records it
+
+#### Scenario: A named id the inventory does not hold is refused
+
+- **GIVEN** a Telegram id that matches no channel record
+- **WHEN** resolution runs naming that id
+- **THEN** the command exits with a non-zero status
+- **AND** no request is made to Telegram
+- **AND** no channel record is created
+
+#### Scenario: A named channel that is already resolved is refused
+
+- **GIVEN** a channel whose username and title are already stored
+- **WHEN** resolution runs naming its id
+- **THEN** the command exits with a non-zero status
+- **AND** no request is made to Telegram
+- **AND** the stored identity is left untouched
+
+#### Scenario: A named channel that failed before is retried only when asked
+
+- **GIVEN** a channel awaiting resolution that a previous run failed on
+- **WHEN** resolution runs naming its id without being asked to retry past failures
+- **THEN** the command exits with a non-zero status
+- **AND** no request is made to Telegram
+- **AND** the message says the channel failed before and how to retry it
+
+#### Scenario: A named channel is retried when past failures are asked for
+
+- **GIVEN** a channel awaiting resolution that a previous run failed on
+- **WHEN** resolution runs naming its id and asking for past failures to be retried
+- **THEN** exactly one request is made, for that channel
+
+#### Scenario: Queue-shaping options are refused with a named channel
+
+- **GIVEN** a request to resolve one named channel
+- **WHEN** the run is also given a request limit or a minimum source count
+- **THEN** the command exits with a non-zero status
+- **AND** no request is made to Telegram
 
 ### Requirement: Derivation Scope
 

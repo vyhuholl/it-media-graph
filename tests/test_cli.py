@@ -440,6 +440,161 @@ def test_resolve_refuses_a_negative_evidence_floor(
     assert result.exit_code != 0
 
 
+AWAITING = 2000000001  # discovered by forward, never resolved
+
+
+def seed_resolution_queue(url: str, *, attempts: int = 0) -> None:
+    """One channel awaiting resolution, and one already resolved.
+
+    Written directly: a channel gets into this queue by being forwarded
+    from, and collecting a forward to build the row would test the
+    collector.
+    """
+    import asyncio
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    async def build() -> None:
+        engine = create_async_engine(url)
+        try:
+            async with (
+                async_sessionmaker(engine)() as session,
+                session.begin(),
+            ):
+                await session.execute(
+                    text(
+                        "INSERT INTO channels "
+                        "(tg_id, username, title, discovered_via, status, "
+                        "resolved_at, resolve_attempts, resolve_last_error) "
+                        "VALUES "
+                        "(:queued, NULL, NULL, 'forward', 'candidate', "
+                        "NULL, :attempts, :error), "
+                        "(:done, 'fake_known', 'Known', 'manual', 'seed', "
+                        "now(), 0, NULL)"
+                    ),
+                    {
+                        "queued": AWAITING,
+                        "done": KNOWN,
+                        "attempts": attempts,
+                        "error": "no access hash" if attempts else None,
+                    },
+                )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(build())
+
+
+def refusing_telegram(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Replace `connected` with one that records and refuses to yield.
+
+    A refusal has to happen before the session lease is taken, so these
+    tests assert on what never ran rather than on what did.
+    """
+    entered: list[str] = []
+
+    @asynccontextmanager
+    async def connected(command: str) -> AsyncIterator[FakeTelegramClient]:
+        entered.append(command)
+        raise AssertionError("the session was claimed by a refused run")
+        yield  # pragma: no cover - unreachable, keeps this a generator
+
+    monkeypatch.setattr(tg_client, "connected", connected)
+    return entered
+
+
+def test_resolve_passes_the_named_channel_through(
+    monkeypatch: pytest.MonkeyPatch,
+    inventory: None,
+    database_url: str,
+    dialog_records: list[dict[str, Any]],
+) -> None:
+    """A TG_ID has to reach the pass, not stop at the parser."""
+    seed_resolution_queue(database_url)
+    seen: dict[str, Any] = {}
+
+    async def fake_resolve(client: Any, database: Any, **kwargs: Any) -> Any:
+        seen.update(kwargs)
+        from itgraph.tg.resolve import ResolveSummary
+
+        return ResolveSummary()
+
+    use_telegram(monkeypatch, collector_client(dialog_records, posts=1))
+    no_sleeping(monkeypatch)
+    monkeypatch.setattr("itgraph.tg.resolve.resolve_inventory", fake_resolve)
+
+    result = runner.invoke(app, ["resolve", str(AWAITING)])
+
+    assert result.exit_code == 0, result.output
+    assert seen["tg_id"] == AWAITING
+
+
+def test_resolve_refuses_a_limit_beside_a_named_channel(
+    monkeypatch: pytest.MonkeyPatch, inventory: None, database_url: str
+) -> None:
+    seed_resolution_queue(database_url)
+    entered = refusing_telegram(monkeypatch)
+
+    result = runner.invoke(app, ["resolve", str(AWAITING), "--limit", "5"])
+
+    assert result.exit_code != 0
+    assert entered == []
+
+
+def test_resolve_refuses_an_evidence_floor_beside_a_named_channel(
+    monkeypatch: pytest.MonkeyPatch, inventory: None, database_url: str
+) -> None:
+    seed_resolution_queue(database_url)
+    entered = refusing_telegram(monkeypatch)
+
+    result = runner.invoke(
+        app, ["resolve", str(AWAITING), "--min-sources", "2"]
+    )
+
+    assert result.exit_code != 0
+    assert entered == []
+
+
+def test_resolve_refuses_an_unknown_id_without_connecting(
+    monkeypatch: pytest.MonkeyPatch, inventory: None, database_url: str
+) -> None:
+    seed_resolution_queue(database_url)
+    entered = refusing_telegram(monkeypatch)
+
+    result = runner.invoke(app, ["resolve", "999999999"])
+
+    assert result.exit_code == 1
+    assert "no channel 999999999 in the inventory" in result.output
+    assert entered == []
+
+
+def test_resolve_refuses_an_already_resolved_channel(
+    monkeypatch: pytest.MonkeyPatch, inventory: None, database_url: str
+) -> None:
+    seed_resolution_queue(database_url)
+    entered = refusing_telegram(monkeypatch)
+
+    result = runner.invoke(app, ["resolve", str(KNOWN)])
+
+    assert result.exit_code == 1
+    assert "already resolved" in result.output
+    assert entered == []
+
+
+def test_resolve_refuses_a_past_failure_and_names_the_flag(
+    monkeypatch: pytest.MonkeyPatch, inventory: None, database_url: str
+) -> None:
+    seed_resolution_queue(database_url, attempts=1)
+    entered = refusing_telegram(monkeypatch)
+
+    result = runner.invoke(app, ["resolve", str(AWAITING)])
+
+    assert result.exit_code == 1
+    assert "--retry-failed" in result.output
+    assert entered == []
+
+
 # --- add ---------------------------------------------------------------
 
 

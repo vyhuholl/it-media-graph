@@ -7,7 +7,7 @@ test can state a scenario instead of arranging for time to pass.
 **The rule the whole module is built on: a sample is chosen from the
 post's current age, never from which sample was due last.** That single
 decision is what makes the loop survive a closed laptop. A queue that
-remembered what it owed would wake after eight hours with 565 channels
+remembered what it owed would wake after eight hours with 500+ channels
 overdue and grind through the backlog at full rate for hours — the exact
 traffic shape the pacing exists to avoid — and it would spend those
 requests on readings that are worthless anyway. A sample due at post-age

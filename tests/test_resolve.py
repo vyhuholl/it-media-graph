@@ -632,3 +632,105 @@ async def test_resolving_by_id_clears_the_pending_mention_it_answers(
     # Answered by the id queue, so the username queue has nothing to do.
     assert await pending_row(inventory, "forwarded") is None
     assert "forwarded" not in client.resolved
+
+
+# --- a run narrowed to one named channel -------------------------------
+
+
+OTHER_ID = 2000000003  # a second channel discovered by forward
+
+
+async def test_a_named_channel_is_the_whole_run(
+    inventory: Database, slept: list[float]
+) -> None:
+    """One id in, one request out — and the mention queue untouched."""
+    await add_forward_channel(inventory, FWD_ID)
+    await add_forward_channel(inventory, OTHER_ID)
+    await add_pending(inventory, "newcomer")
+    client = FakeTelegramClient(
+        entities_by_id={
+            FWD_ID: tl_channel(FWD_ID, username="forwarded", title="Fwd"),
+            OTHER_ID: tl_channel(OTHER_ID, username="other"),
+        },
+        entities={"newcomer": tl_channel(NEWCOMER, username="newcomer")},
+    )
+
+    summary = await resolve_inventory(client, inventory, delay=0, tg_id=FWD_ID)
+
+    assert client.resolved == [FWD_ID]
+    assert summary.resolved == 1
+    assert summary.discovered == 0
+    resolved = await channel(inventory, FWD_ID)
+    assert resolved is not None
+    assert resolved.username == "forwarded"
+    # The other queue entry and the whole mention queue are left as they
+    # were, for a later run to work in its own order.
+    other = await channel(inventory, OTHER_ID)
+    assert other is not None
+    assert other.resolved_at is None
+    assert await pending_row(inventory, "newcomer") is not None
+
+
+async def test_a_named_channel_that_is_a_person_is_recorded_as_such(
+    inventory: Database, slept: list[float]
+) -> None:
+    """Naming a channel changes which row is asked for, not what an
+    answer means."""
+    await add_forward_channel(inventory, FWD_ID)
+    client = FakeTelegramClient(entities_by_id={FWD_ID: tl_user(FWD_ID)})
+
+    summary = await resolve_inventory(client, inventory, delay=0, tg_id=FWD_ID)
+
+    assert summary.not_channels == 1
+    assert summary.resolved == 0
+    row = await channel(inventory, FWD_ID)
+    assert row is not None
+    assert row.resolved_at is None
+    assert row.username is None
+
+
+async def test_a_named_channel_that_failed_needs_retry_failed(
+    inventory: Database, slept: list[float]
+) -> None:
+    """The queue's rule, reached through the argument rather than around
+    it: naming a channel says which, not anyway."""
+    await add_forward_channel(inventory, FAIL_ID)
+    await resolve_inventory(FakeTelegramClient(), inventory, delay=0)
+
+    routine = FakeTelegramClient(
+        entities_by_id={FAIL_ID: tl_channel(FAIL_ID, username="late")}
+    )
+    routine_summary = await resolve_inventory(
+        routine, inventory, delay=0, tg_id=FAIL_ID
+    )
+    assert routine.resolved == []
+    assert routine_summary.resolved == 0
+
+    retry = FakeTelegramClient(
+        entities_by_id={FAIL_ID: tl_channel(FAIL_ID, username="late")}
+    )
+    retry_summary = await resolve_inventory(
+        retry, inventory, delay=0, tg_id=FAIL_ID, retry_failed=True
+    )
+    assert retry.resolved == [FAIL_ID]
+    assert retry_summary.resolved == 1
+
+
+async def test_a_named_run_does_not_read_the_mention_queue(
+    inventory: Database, slept: list[float], caplog: pytest.LogCaptureFixture
+) -> None:
+    """The sources warning is about a queue a named run is not working,
+    so it must not fire for one."""
+    await add_forward_channel(inventory, FWD_ID)
+    async with inventory.session() as session:
+        # A pending mention with no sources recorded: exactly what makes
+        # an unnamed run warn.
+        session.add(PendingMention(username="unsourced"))
+
+    client = FakeTelegramClient(
+        entities_by_id={FWD_ID: tl_channel(FWD_ID, username="forwarded")}
+    )
+    with caplog.at_level("WARNING"):
+        await resolve_inventory(client, inventory, delay=0, tg_id=FWD_ID)
+
+    assert "no mention sources recorded" not in caplog.text

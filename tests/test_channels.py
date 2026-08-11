@@ -6,14 +6,19 @@ from sqlalchemy.exc import IntegrityError
 
 from itgraph.db.channels import (
     AmbiguousUsernameError,
+    ChannelAlreadyResolvedError,
     ChannelNotFoundError,
+    ChannelResolveFailedBeforeError,
     DiscoveredChannel,
+    channel_to_resolve,
+    channels_awaiting_resolution,
     count_by_status,
     create_resolved_channel,
     existing_usernames,
     find_channel,
     list_channels,
     mark_channel,
+    record_channel_resolve_failure,
     upsert_channels,
 )
 from itgraph.db.models import (
@@ -403,3 +408,99 @@ async def test_a_refreshed_channel_keeps_its_provenance(
 
     assert channel.discovered_via is DiscoverySource.OWN_SUBSCRIPTIONS
     assert channel.status is ChannelStatus.REJECTED
+
+
+async def seed_awaiting_resolution(database: Database, count: int = 3) -> None:
+    """Channels discovered by forward: an id, no name, nothing resolved."""
+    async with database.session() as session:
+        await upsert_channels(
+            session,
+            [
+                DiscoveredChannel(
+                    tg_id=KNOWN + offset,
+                    username=None,
+                    title=None,
+                    is_chat=False,
+                )
+                for offset in range(count)
+            ],
+            discovered_via=DiscoverySource.FORWARD,
+        )
+
+
+async def test_the_queue_can_be_narrowed_to_one_channel(
+    database: Database,
+) -> None:
+    await seed_awaiting_resolution(database)
+
+    async with database.session() as session:
+        queue = await channels_awaiting_resolution(session, tg_id=KNOWN + 1)
+
+    assert [channel.tg_id for channel in queue] == [KNOWN + 1]
+
+
+async def test_narrowing_to_a_channel_outside_the_queue_returns_nothing(
+    database: Database,
+) -> None:
+    # Resolved, so out of the queue — and naming it does not put it back.
+    await seed_inventory(database)
+
+    async with database.session() as session:
+        assert await channels_awaiting_resolution(session, tg_id=KNOWN) == []
+
+
+async def test_a_named_channel_in_the_queue_is_returned(
+    database: Database,
+) -> None:
+    await seed_awaiting_resolution(database)
+
+    async with database.session() as session:
+        channel = await channel_to_resolve(session, KNOWN + 2)
+
+    assert channel.tg_id == KNOWN + 2
+
+
+async def test_naming_an_unknown_channel_says_so(database: Database) -> None:
+    await seed_awaiting_resolution(database)
+
+    async with database.session() as session:
+        with pytest.raises(ChannelNotFoundError):
+            await channel_to_resolve(session, UNKNOWN)
+
+
+async def test_naming_a_resolved_channel_says_so(database: Database) -> None:
+    await seed_inventory(database)
+
+    async with database.session() as session:
+        with pytest.raises(ChannelAlreadyResolvedError) as caught:
+            await channel_to_resolve(session, KNOWN)
+
+    assert "already resolved" in str(caught.value)
+
+
+async def test_naming_a_failed_channel_names_the_flag(
+    database: Database,
+) -> None:
+    await seed_awaiting_resolution(database)
+    async with database.session() as session:
+        await record_channel_resolve_failure(session, KNOWN, "no access hash")
+
+    async with database.session() as session:
+        with pytest.raises(ChannelResolveFailedBeforeError) as caught:
+            await channel_to_resolve(session, KNOWN)
+
+    assert "--retry-failed" in str(caught.value)
+    assert "no access hash" in str(caught.value)
+
+
+async def test_a_failed_channel_is_returned_when_retries_are_asked_for(
+    database: Database,
+) -> None:
+    await seed_awaiting_resolution(database)
+    async with database.session() as session:
+        await record_channel_resolve_failure(session, KNOWN, "no access hash")
+
+    async with database.session() as session:
+        channel = await channel_to_resolve(session, KNOWN, retry_failed=True)
+
+    assert channel.tg_id == KNOWN

@@ -37,12 +37,15 @@ from itgraph.db.models import (
 
 __all__ = [
     "AmbiguousUsernameError",
+    "ChannelAlreadyResolvedError",
     "ChannelLookupError",
     "ChannelNotFoundError",
+    "ChannelResolveFailedBeforeError",
     "ConfirmedGroup",
     "DiscoveredChannel",
     "FamilyCounts",
     "UpsertCounts",
+    "channel_to_resolve",
     "channels_awaiting_resolution",
     "confirm_affiliation",
     "count_by_status",
@@ -110,6 +113,38 @@ class ChannelNotFoundError(ChannelLookupError):
             "run `itgraph dump-dialogs` first"
         )
         self.ref = ref
+
+
+class ChannelAlreadyResolvedError(ChannelLookupError):
+    """A channel named for resolution already has an identity.
+
+    Only reachable by naming one channel: a whole run answers this by
+    leaving the row out of the queue, silently and correctly.
+    """
+
+    def __init__(self, channel: Channel) -> None:
+        super().__init__(
+            f"{_identity(channel)} is already resolved; "
+            "there is nothing to ask Telegram about"
+        )
+        self.tg_id = channel.tg_id
+
+
+class ChannelResolveFailedBeforeError(ChannelLookupError):
+    """A channel named for resolution failed in an earlier run.
+
+    Naming a channel says *which*, not *anyway* — the retry stays
+    something the operator asks for, so the message names the flag that
+    asks for it.
+    """
+
+    def __init__(self, channel: Channel) -> None:
+        super().__init__(
+            f"channel {channel.tg_id} failed to resolve before "
+            f"({channel.resolve_last_error}); "
+            "re-run with --retry-failed to try it again"
+        )
+        self.tg_id = channel.tg_id
 
 
 class AmbiguousUsernameError(ChannelLookupError):
@@ -564,6 +599,7 @@ async def channels_awaiting_resolution(
     *,
     retry_failed: bool = False,
     limit: int | None = None,
+    tg_id: int | None = None,
 ) -> Sequence[Channel]:
     """Channels that entered by reference and still lack an identity.
 
@@ -575,14 +611,56 @@ async def channels_awaiting_resolution(
 
     Ordered by id so a bounded run covers the same channels in the same
     order across sittings.
+
+    ``tg_id`` narrows the queue to one named channel — an extra clause on
+    this same predicate, deliberately not a lookup of its own. A named
+    channel is therefore subject to the queue's rules rather than
+    exempt from them: already resolved or failed-and-not-retried comes
+    back empty here, the same way it goes unvisited in a whole run.
     """
     statement = select(Channel).where(Channel.resolved_at.is_(None))
     if not retry_failed:
         statement = statement.where(Channel.resolve_attempts == 0)
+    if tg_id is not None:
+        statement = statement.where(Channel.tg_id == tg_id)
     statement = statement.order_by(Channel.tg_id)
     if limit is not None:
         statement = statement.limit(limit)
     return (await session.scalars(statement)).all()
+
+
+async def channel_to_resolve(
+    session: AsyncSession,
+    tg_id: int,
+    *,
+    retry_failed: bool = False,
+) -> Channel:
+    """The one channel a named run will resolve, or why it will not.
+
+    Membership is :func:`channels_awaiting_resolution`'s to decide, and
+    this asks it rather than re-stating its predicate. The lookup that
+    follows an empty result exists only to write the sentence: absent
+    from the inventory, resolved already, or failed before and not being
+    retried are one empty result and three different things for the
+    operator to do next.
+
+    Raises a :class:`ChannelLookupError` for each of the three, which the
+    CLI already turns into that sentence and exit 1.
+    """
+    queued = await channels_awaiting_resolution(
+        session, retry_failed=retry_failed, tg_id=tg_id
+    )
+    if queued:
+        return queued[0]
+
+    # Raises `ChannelNotFoundError` when the inventory holds no such row.
+    channel = await find_channel(session, tg_id)
+    if channel.resolved_at is not None:
+        raise ChannelAlreadyResolvedError(channel)
+    # What is left: in the queue's terms, a past failure not being
+    # retried. Under `retry_failed` there is no third case — the row
+    # would have come back above.
+    raise ChannelResolveFailedBeforeError(channel)
 
 
 async def record_channel_resolved(

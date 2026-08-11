@@ -110,6 +110,7 @@ async def resolve_inventory(
     delay: float | None = None,
     limit: int | None = None,
     min_sources: int | None = None,
+    tg_id: int | None = None,
 ) -> ResolveSummary:
     """Work both resolution queues, paced and one request at a time.
 
@@ -118,6 +119,15 @@ async def resolve_inventory(
     can spend a fixed number of requests and stop. Every request is paced
     the same way the collector's are, and passes through the collector's
     FloodWait handling.
+
+    ``tg_id`` narrows the run to one named channel: the by-id queue is
+    that one row, and the mention queue is not worked at all. Not worked
+    rather than bounded to nothing — a bounded pass would still query it
+    and could still warn about sources it has, over a queue this run is
+    not spending anything on. The named channel is subject to the same
+    queue rules as an unnamed run's, so one already resolved or failed
+    and not retried is no run at all; see ``channel_to_resolve`` for the
+    reading that says which.
 
     The username queue is worked most-mentioned first: it is the only part
     of this project that spends ``contacts.resolveUsername``, which is
@@ -139,8 +149,15 @@ async def resolve_inventory(
 
     async with database.session() as session:
         channels = await channels_awaiting_resolution(
-            session, retry_failed=retry_failed, limit=remaining
+            session, retry_failed=retry_failed, limit=remaining, tg_id=tg_id
         )
+        if tg_id is not None:
+            # A run of one still says what it is spending its request on,
+            # the way the mention queue logs the evidence it ordered by.
+            logger.info(
+                "narrowed to channel %d; the mention queue is not worked",
+                tg_id,
+            )
         try:
             for channel in channels:
                 if remaining is not None and remaining <= 0:
@@ -152,41 +169,48 @@ async def resolve_inventory(
                 if remaining is not None:
                     remaining -= 1
 
-            # Queried only now: `remaining` has to reflect what the first
-            # queue already spent, or `--limit` bounds each queue instead
-            # of the run.
-            pending = await pending_mentions_to_resolve(
-                session,
-                retry_failed=retry_failed,
-                limit=remaining,
-                min_sources=min_sources,
-            )
-            if pending and not await count_pending_mention_sources(session):
-                # No sources at all against a non-empty queue means
-                # derivation has not run since the table appeared — not
-                # that nothing mentions these. The two are identical in
-                # the ordering and opposite in meaning, so say which.
-                logger.warning(
-                    "no mention sources recorded: run `itgraph derive` to "
-                    "fill them, or this queue stays in arrival order"
+            # Not entered at all for a named run: the queue is neither
+            # worked nor read, so nothing is warned about and no request
+            # is spent on a username this run was not asked for.
+            if tg_id is None:
+                # Queried only now: `remaining` has to reflect what the
+                # first queue already spent, or `--limit` bounds each
+                # queue instead of the run.
+                pending = await pending_mentions_to_resolve(
+                    session,
+                    retry_failed=retry_failed,
+                    limit=remaining,
+                    min_sources=min_sources,
                 )
-            for mention in pending:
-                if remaining is not None and remaining <= 0:
-                    break
-                # The count is what decided the order, so a reader of the
-                # log can see the priority rather than infer it.
-                logger.info(
-                    "resolving @%s (mentioned by %d channel%s)",
-                    mention.username,
-                    mention.sources,
-                    "" if mention.sources == 1 else "s",
-                )
-                await pace(pause)
-                await _resolve_pending(
-                    client, session, mention.username, summary, recorder
-                )
-                if remaining is not None:
-                    remaining -= 1
+                if pending and not await count_pending_mention_sources(
+                    session
+                ):
+                    # No sources at all against a non-empty queue means
+                    # derivation has not run since the table appeared —
+                    # not that nothing mentions these. The two are
+                    # identical in the ordering and opposite in meaning,
+                    # so say which.
+                    logger.warning(
+                        "no mention sources recorded: run `itgraph derive` "
+                        "to fill them, or this queue stays in arrival order"
+                    )
+                for mention in pending:
+                    if remaining is not None and remaining <= 0:
+                        break
+                    # The count is what decided the order, so a reader of
+                    # the log can see the priority rather than infer it.
+                    logger.info(
+                        "resolving @%s (mentioned by %d channel%s)",
+                        mention.username,
+                        mention.sources,
+                        "" if mention.sources == 1 else "s",
+                    )
+                    await pace(pause)
+                    await _resolve_pending(
+                        client, session, mention.username, summary, recorder
+                    )
+                    if remaining is not None:
+                        remaining -= 1
         except FloodWaitTooLong as exc:
             logger.warning("%s", exc)
             await session.rollback()

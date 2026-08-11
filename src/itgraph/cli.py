@@ -951,6 +951,17 @@ def derive(
 
 @app.command()
 def resolve(
+    tg_id: Annotated[
+        int | None,
+        typer.Argument(
+            metavar="[TG_ID]",
+            help=(
+                "Resolve only this channel, by the id the inventory "
+                "stores — the one `itgraph list` prints, without a "
+                "`-100` prefix."
+            ),
+        ),
+    ] = None,
     retry_failed: Annotated[
         bool,
         typer.Option(
@@ -990,17 +1001,39 @@ def resolve(
     no batching — so `--min-sources 2` is how a day's budget goes to the
     references more than one channel thought worth making, rather than to
     whatever arrived first.
+
+    Given a TG_ID, the run is that one channel: one request, and the
+    username queue is not worked at all. The named channel still has to
+    be in the resolution queue — one already resolved, or one a previous
+    run failed on without `--retry-failed`, is refused before anything
+    connects to Telegram.
     """
+    from itgraph.db.channels import channel_to_resolve
     from itgraph.db.session import Database
     from itgraph.tg.client import connected
     from itgraph.tg.resolve import resolve_inventory
 
     if min_sources is not None and min_sources < 0:
         raise typer.BadParameter("--min-sources cannot be negative")
+    if tg_id is not None and limit is not None:
+        raise typer.BadParameter("--limit means nothing beside one TG_ID")
+    if tg_id is not None and min_sources is not None:
+        raise typer.BadParameter(
+            "--min-sources orders the username queue, which a run for one "
+            "TG_ID does not work"
+        )
 
     async def run() -> None:
         database = Database()
         try:
+            if tg_id is not None:
+                # Before `connected`, deliberately: the session is held
+                # under an exclusive lease, and a run that will refuse
+                # must not be the reason `itgraph watch` cannot start.
+                async with database.session() as session:
+                    await channel_to_resolve(
+                        session, tg_id, retry_failed=retry_failed
+                    )
             async with connected("resolve") as client:
                 summary = await resolve_inventory(
                     client,
@@ -1009,6 +1042,7 @@ def resolve(
                     delay=delay,
                     limit=limit,
                     min_sources=min_sources,
+                    tg_id=tg_id,
                 )
         finally:
             await database.dispose()
