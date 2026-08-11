@@ -21,12 +21,24 @@ about who reaches whom.
 Forwards only. A mention names a channel, never a post — ``dst_msg_id``
 is empty for it — so mentions cannot enter a post-level ranking at all.
 
-An album arrives as one message id per part, so a forwarded album fills
-several near-identical rows sharing a publication date, one per photo.
-They are left as they are: which of the parts carried the text is
-sometimes the interesting half, and collapsing them here would be a
-counting decision the raw layer cannot support — ``grouped_id`` on an
-edge belongs to the *referencing* message, not the referenced one.
+An album arrives as one message id per part, and a forwarded album puts
+an edge on each of them. The parts are merged back into the one post
+they are, the way ``anomalous_posts.py`` merges them: the row is the
+album's first part — the id a ``t.me`` link to an album wants — and
+carries the caption, which is the longest part's text and *not* reliably
+the first part's. Views and forwards are the largest over the parts,
+reactions and comments the largest of the single part Telegram attaches
+them to. ``families`` and ``sources`` count over the whole album: a
+channel that carried any part carried the album.
+
+The grouping is the referenced post's own ``grouped_id``, read from
+``raw_messages`` — and the asymmetry is worth stopping at, because
+``edges.grouped_id`` looks like the column to use and is not: it
+describes the *referencing* message, the repost, and says nothing about
+the album being carried. It also means the merge reaches only channels
+with collected history. An album published outside the collected core
+still fills one row per part, since nothing here knows the parts belong
+together.
 
 Unlike ``export_graph.py`` this sheet is **not** filtered to seeds, and
 it cannot be: a post is most interesting exactly when channels outside
@@ -79,19 +91,48 @@ SHEET = "posts"
 # the same threshold decided by whatever the sort did with the ties.
 MIN_FAMILIES = 2
 
+# Which message an album's parts collapse to: the first part, keyed on
+# `(channel_id, grouped_id)` and never on the group id alone, since the
+# id is only unique within a channel. Shared by both queries below —
+# the ranking has to group on the same post the sheet then reads.
+#
+# A message that is not part of an album has no row here at all, so
+# every use of it is a LEFT JOIN with the message's own id as fallback.
+ALBUMS = """
+    albums AS (
+        SELECT
+            r.channel_id,
+            r.msg_id,
+            MIN(r.msg_id) OVER (
+                PARTITION BY r.channel_id,
+                             (r.payload->>'grouped_id')::bigint
+            ) AS first_part
+        FROM raw_messages r
+        WHERE r.payload->>'_' = 'Message'
+          AND r.payload->>'grouped_id' IS NOT NULL
+    )
+"""
+
 # The ranking itself. `channel_families` gives the family of each
 # endpoint; a channel missing from the view is a family of one, hence the
 # COALESCE — the same expression `export_graph.py` and the scorecard use.
-TOP = """
-    WITH refs AS (
+#
+# The album join is on the *destination*, the post being reposted, and it
+# is what makes one album one row: reposts of every part fall together
+# into one group, so a family that carried any part is counted once.
+TOP = f"""
+    WITH {ALBUMS},
+    refs AS (
         SELECT
             e.dst_channel_id AS channel_id,
-            e.dst_msg_id AS msg_id,
+            COALESCE(a.first_part, e.dst_msg_id) AS msg_id,
             e.src_channel_id,
             e.dst_published_at,
             COALESCE(sf.family_key, e.src_channel_id) AS src_family,
             COALESCE(df.family_key, e.dst_channel_id) AS dst_family
         FROM edges e
+        LEFT JOIN albums a
+            ON a.channel_id = e.dst_channel_id AND a.msg_id = e.dst_msg_id
         LEFT JOIN channel_families sf ON sf.channel_id = e.src_channel_id
         LEFT JOIN channel_families df ON df.channel_id = e.dst_channel_id
         WHERE e.kind = 'forward' AND e.dst_msg_id IS NOT NULL
@@ -144,34 +185,58 @@ CHANNELS = """
 # why this is a LEFT-join-shaped lookup in Python rather than a join in
 # the query above.
 #
+# `parts` folds an album's messages onto the id the ranking grouped
+# them under, so the aggregates below run over the whole album and a
+# plain post is the one-row case of the same thing. Which aggregate each
+# column gets is the module docstring's list, and none of them is a sum:
+# every part reports the album's own counters, not a share of them.
+#
 # Reactions are the sum over the reaction types on a post. The
 # `jsonb_typeof` guard is not defensive noise — the payload stores an
 # absent field as JSON `null`, and `jsonb_array_elements` raises on a
 # scalar rather than returning nothing.
-POSTS = """
+POSTS = f"""
+    WITH {ALBUMS},
+    parts AS (
+        SELECT
+            r.channel_id,
+            COALESCE(a.first_part, r.msg_id) AS msg_id,
+            (r.payload->>'date')::timestamptz AS published,
+            (r.payload->>'views')::bigint AS views,
+            CASE
+                WHEN jsonb_typeof(r.payload->'reactions'->'results')
+                     = 'array'
+                THEN COALESCE((
+                    SELECT SUM((one->>'count')::bigint)
+                    FROM jsonb_array_elements(
+                        r.payload->'reactions'->'results'
+                    ) AS one
+                ), 0)
+                ELSE 0
+            END AS reactions,
+            (r.payload->'replies'->>'replies')::bigint AS comments,
+            (r.payload->>'forwards')::bigint AS forwards,
+            r.payload->>'message' AS text
+        FROM raw_messages r
+        LEFT JOIN albums a
+            ON a.channel_id = r.channel_id AND a.msg_id = r.msg_id
+        WHERE r.payload->>'_' = 'Message'
+    )
     SELECT
-        r.channel_id,
-        r.msg_id,
-        (r.payload->>'date')::timestamptz,
-        (r.payload->>'views')::bigint,
-        CASE
-            WHEN jsonb_typeof(r.payload->'reactions'->'results') = 'array'
-            THEN COALESCE((
-                SELECT SUM((one->>'count')::bigint)
-                FROM jsonb_array_elements(
-                    r.payload->'reactions'->'results'
-                ) AS one
-            ), 0)
-            ELSE 0
-        END,
-        (r.payload->'replies'->>'replies')::bigint,
-        (r.payload->>'forwards')::bigint,
-        r.payload->>'message'
-    FROM raw_messages r
+        p.channel_id,
+        p.msg_id,
+        MIN(p.published),
+        MAX(p.views),
+        MAX(p.reactions),
+        MAX(p.comments),
+        MAX(p.forwards),
+        (ARRAY_AGG(p.text ORDER BY length(p.text) DESC NULLS LAST))[1],
+        COUNT(*)
+    FROM parts p
     JOIN unnest(%(channels)s::bigint[], %(messages)s::bigint[])
          AS pair(channel_id, msg_id)
-      ON pair.channel_id = r.channel_id AND pair.msg_id = r.msg_id
-    WHERE r.payload->>'_' = 'Message'
+      ON pair.channel_id = p.channel_id AND pair.msg_id = p.msg_id
+    GROUP BY p.channel_id, p.msg_id
 """
 
 COLUMNS = [
@@ -185,6 +250,7 @@ COLUMNS = [
     "msg_id",
     "published",
     "link",
+    "parts",
     "views",
     "reactions",
     "comments",
@@ -220,6 +286,10 @@ NOTES = {
         "What the channel is, from the review. Filled in for seeds; "
         "blank elsewhere means unreviewed, not uncategorizable."
     ),
+    "msg_id": (
+        "The post, in Telegram's per-channel numbering. For an album, "
+        "the first part — which is what a link to the album wants."
+    ),
     "published": (
         "When the post was published, UTC — taken from the forward "
         "header, so it is known even for channels whose history was "
@@ -228,6 +298,14 @@ NOTES = {
     "link": (
         "Public t.me link. Blank when the channel has no username: no "
         "public link to the post exists then."
+    ),
+    "parts": (
+        "How many messages the post is. Above 1 it is an album, merged "
+        "into this one row: views and forwards are the largest over the "
+        "parts, reactions and comments come from the single part "
+        "Telegram attaches them to, and the text is the caption. Blank "
+        "for a channel with no collected history, where the parts "
+        "cannot be recognized and each still gets its own row."
     ),
     "views": SNAPSHOT_NOTE,
     "reactions": SNAPSHOT_NOTE,
@@ -244,8 +322,10 @@ NOTES = {
     ),
     "text": (
         "The post as collected, whitespace collapsed so the cell reads "
-        "on one line. Blank for a channel with no collected history, and "
-        "also for a post that is only a photo or a video."
+        "on one line. For an album, the caption — the longest of the "
+        "parts, which is not always the first one. Blank for a channel "
+        "with no collected history, and also for a post that is only a "
+        "photo or a video."
     ),
 }
 
@@ -266,6 +346,7 @@ FORMATS = {
     "sources": INT_FORMAT,
     "msg_id": "0",
     "published": "yyyy-mm-dd hh:mm",
+    "parts": "0",
     "views": INT_FORMAT,
     "reactions": INT_FORMAT,
     "comments": INT_FORMAT,
@@ -308,8 +389,8 @@ def main() -> None:
         title, username, status, kind = channels.get(
             channel_id, (None, None, None, None)
         )
-        date, views, reactions, comments, forwards, text = posts.get(
-            (channel_id, msg_id), (None, None, None, None, None, None)
+        date, views, reactions, comments, forwards, text, parts = posts.get(
+            (channel_id, msg_id), (None, None, None, None, None, None, None)
         )
 
         rows.append(
@@ -326,6 +407,7 @@ def main() -> None:
                 "link": (
                     f"https://t.me/{username}/{msg_id}" if username else None
                 ),
+                "parts": parts,
                 "views": views,
                 "reactions": reactions,
                 "comments": comments,
@@ -341,6 +423,12 @@ def main() -> None:
     print(f"{len(frame)} posts over {MIN_FAMILIES} families -> {OUT}")
     print(f"{intra_family} intra-family reposts dropped")
     print(f"{collected} of them have collected text")
+
+    # Albums, and what merging them saved: a post is one row here, so
+    # the difference is rows the sheet would otherwise have repeated.
+    sizes = frame["parts"].fillna(1)
+    albums = int((sizes > 1).sum())
+    print(f"{albums} albums merged, {int(sizes.sum()) - len(frame)} rows")
 
     # How the sheet is distributed over the family counts — read it
     # before moving the threshold, since one step down is a band, not a

@@ -94,10 +94,11 @@ itself. So parts are merged on `grouped_id`: views and forwards are the
 maximum over parts, reactions and comments the maximum (only one part
 carries them), the text is the longest part's — the caption — and the id
 is the first part's, which is what a t.me link to the album wants.
-``cited_posts.py`` deliberately does *not* do this, and the difference is
-real: there `grouped_id` belongs to the referencing message and says
-nothing about the album being referenced, while here the message is the
-one being measured.
+``cited_posts.py`` merges albums the same way and on the same grouping —
+the measured post's own `grouped_id`, out of `raw_messages`. Note that
+`edges.grouped_id` is a different column and never the one to group on:
+it belongs to the *referencing* message and says nothing about the album
+being referenced.
 
 **Reposts from an affiliated channel are dropped**, as intra-family
 edges are in ``export_graph.py``. A network run by one author reposts

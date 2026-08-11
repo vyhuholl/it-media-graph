@@ -42,10 +42,9 @@ logger = logging.getLogger(__name__)
 # worth stopping at. `edges.grouped_id` describes the *referencing*
 # message, the repost, and says nothing about the album being referenced.
 # The post being alerted about is the destination, so its grouping is
-# read from `raw_messages` joined on the destination key.
-# `notebooks/cited_posts.py` deliberately does not collapse albums for
-# exactly this reason, and confusing the two columns is the easiest
-# mistake available in this file.
+# read from `raw_messages` joined on the destination key — the same join
+# `notebooks/cited_posts.py` collapses its albums on. Confusing the two
+# columns is the easiest mistake available in this file.
 ALBUM = RawMessage.payload["grouped_id"].astext.cast(BigInteger)
 
 
