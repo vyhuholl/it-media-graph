@@ -13,6 +13,12 @@
 *.gephi
 *.xlsx
 
+# Reports generated per channel. Unlike the sheets above these are meant
+# to be handed to someone, which is exactly why they are ignored rather
+# than kept: what was sent out is a decision made once, and a copy in
+# git turns it into a file the next `git add -A` re-publishes.
+data/channel_report_*.md
+
 # Database dumps: the operator's own subscriptions and review decisions.
 # They live outside the repository by default; this is here for the day
 # someone points ITGRAPH_BACKUP_DIR at it.
