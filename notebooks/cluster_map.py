@@ -24,33 +24,47 @@ It is self-contained — no CDN, no web font, no tile server — so it can be
 opened from a file, mailed, or served from anywhere without the page
 phoning home or breaking.
 
-**Every cluster gets its own colour, and the honest caveat is that
-fourteen colours cannot all be told apart.** This is arithmetic rather
-than a tuning failure: a palette is checked on the worst pair in it, and
-the more hues share the wheel the closer the nearest two sit. Measured on
-the generated palette, all pairs, against the light surface — worst
-normal-vision ΔE 14.6 against a floor of 15, worst colour-blind ΔE 1.6
-against a target of 8. Dark is narrower still: its lightness band leaves
-less room to separate hues, and its worst normal-vision pair is 9.7.
+**Every cluster gets its own colour, however many there are.** The
+palette is generated per run from the cluster count rather than stored,
+because the count is not stable: the collector runs continuously, and
+over three days of ordinary use it went 14, then 13, then 15. Twice a
+stored list was one colour short, and both times the symptom was a
+cluster silently painted grey — indistinguishable from the grey that
+means "no cluster at all". Nothing here may be sized by hand.
 
-So a reader with full colour vision can separate almost every pair and
-will occasionally hesitate between two; a colour-blind reader will find
-several pairs identical. Neither is a reason to hide the distinction —
-the map has more crowds than any palette separates, and showing them is the point — but colour
-is *not* load-bearing here, and nothing in this page asks it to be.
-Identity is carried four other ways that do not run out: clusters are
-separated in space by the layout, named in the legend, named again on
-hover, and any one of them can be isolated by a click. The palette is
-what makes the picture readable at a glance; those four are what make it
-answerable.
+Two properties are guaranteed at any count, and they are the ones that
+would otherwise produce a *wrong* picture rather than a hard one. Every
+colour stays inside its mode's lightness band, and every colour stays
+above the chroma floor — checked from 12 clusters to 22. The second
+matters most: a generated colour that drifts under the floor reads grey,
+and grey already means "no cluster", so the palette would be asserting
+something false about a cluster that exists.
 
-Two choices follow from the measurement. The hues run over three
-lightness tiers rather than one, so a pair a colour-blind reader cannot
-separate by hue still differs in lightness. And the two lists are
-generated for their own surface instead of one being reused, because the
-dark band is L 0.48-0.67 and the light steps fall outside it at both
-ends — reusing them would have put a colour below the chroma floor,
-where it reads as grey.
+What is *not* guaranteed is that all of them are tellable apart, and
+that is arithmetic rather than a tuning failure: a palette is judged on
+the worst pair in it, and the more hues share the wheel the closer the
+nearest two sit. At the fifteen clusters current when this was written,
+all pairs — worst normal-vision ΔE 9.3 light and 5.1 dark against a
+floor of 15, worst colour-blind ΔE 0.9 and 0.7 against a target of 8.
+Every cluster added tightens it further.
+
+So a reader with full colour vision separates most pairs and will
+hesitate over the near ones; a colour-blind reader will find several
+pairs identical. Neither is a reason to hide the distinction — the map
+has that many crowds and showing them is the point — but colour is *not*
+load-bearing here, and nothing in this page asks it to be. Identity is
+carried four other ways that do not run out: clusters are separated in
+space by the layout, named in the legend, named again on hover, and any
+one of them can be isolated by a click. The palette makes the picture
+readable at a glance; those four make it answerable.
+
+Two choices follow. The hues run over several lightness tiers rather
+than one, so a pair a colour-blind reader cannot separate by hue still
+differs in lightness. And the two palettes are generated for their own
+surface instead of one being reused, because the dark band is L
+0.48-0.67 and the light tiers fall outside it at both ends — reusing
+them put a colour below the chroma floor, which is where this whole
+paragraph came from.
 
 The colour modes that *are* continuous — depth, dryness, stability — have
 no such cap and paint every node, which is why they are worth having as
@@ -90,60 +104,40 @@ START_TEMP = 2.0
 # What share of nodes at each end is allowed outside the framed square.
 LAYOUT_TRIM = 0.03
 
-# One colour per cluster, generated rather than picked: fourteen evenly
-# spaced OKLCH hues over three lightness tiers, so that hues a
-# colour-blind reader cannot separate still differ in lightness. The
-# parameters (L 0.48/0.64/0.78, C 0.17, 10° offset for light; two tiers
-# inside the narrower dark band) came out of a grid search scored on the
-# validator's worst-pair figures — see the module docstring for what they
-# are and what they are not.
+# The palette is *generated to fit the run*, not stored. There is no
+# constant here saying how many clusters get a colour, because every
+# version of that constant has been wrong within a week: the collector
+# runs continuously, the graph grows under the script, and the number of
+# clusters moved 14 -> 13 -> 15 over three days of ordinary use. A stored
+# list of hexes is a promise about a number nothing controls, and the
+# failure it produces is silent — the extra cluster comes out grey and
+# looks like a cluster the analysis declined to label.
 #
-# Light and dark are the same fourteen hues stepped for their own
-# surface, not one list reused: the dark band is L 0.48-0.67, and the
-# light steps sit outside it at both ends.
-PALETTE_LIGHT = (
-    "#a61f47",
-    "#df5e3b",
-    "#ff9a26",
-    "#865200",
-    "#8f9500",
-    "#7cd060",
-    "#007943",
-    "#00aaa3",
-    "#00d0fc",
-    "#0063b3",
-    "#5e84f2",
-    "#bca0ff",
-    "#843499",
-    "#d05ba5",
-)
-PALETTE_DARK = (
-    "#bc1f4f",
-    "#e45129",
-    "#b14100",
-    "#ba7d00",
-    "#6d7000",
-    "#42a213",
-    "#00874a",
-    "#00aaa3",
-    "#007ead",
-    "#0091f0",
-    "#395cd4",
-    "#906cef",
-    "#9538ad",
-    "#d34fa4",
-)
+# So `palette()` below takes the count it needs. The parameters are what
+# came out of a grid search scored on the validator's worst-pair figures;
+# the count is whatever Leiden found this morning.
+#
+# Light and dark are the same hues stepped for their own surface, never
+# one list reused: the dark band is L 0.48-0.67 and the light tiers fall
+# outside it at both ends. Reusing them put a colour under the chroma
+# floor, where it reads grey — the exact bug this comment is about,
+# arrived at from the other direction.
+LIGHT_TIERS = (0.48, 0.62, 0.75)
+LIGHT_CHROMA = 0.17
+LIGHT_BAND = (0.43, 0.77)
+DARK_TIERS = (0.52, 0.63)
+DARK_CHROMA = 0.19
+DARK_BAND = (0.48, 0.67)
+HUE_OFFSET = 10.0
 
-# Derived, never set by hand. It was a hand-set number once, and raising
-# it did nothing at all: the CSS defined four `--s` tokens, so slots past
-# the fourth resolved to an empty string and canvas silently kept the
-# previous fill. Deriving it from the list that generates those tokens is
-# what makes the two incapable of disagreeing.
-COLOURED_CLUSTERS = len(PALETTE_LIGHT)
+# Below this a colour reads as grey — and grey is this map's word for
+# "no cluster", so a generated colour that lands here would be saying
+# something false. Slightly above the validator's 0.1 floor, as margin.
+MIN_CHROMA = 0.11
 
-# How far around the hue wheel to step between consecutive clusters by
-# size. Must be coprime to the palette length — see `slot_order`.
-SLOT_STRIDE = 5
+# Kept this far inside the lightness band, so a fitted colour cannot land
+# exactly on the edge and fail the band check by a thousandth.
+BAND_MARGIN = 0.01
 
 TEMPLATE = """<!doctype html>
 <html lang="ru">
@@ -801,12 +795,10 @@ def payload(result: Clustering) -> dict[str, Any]:
     for label in result.cluster.values():
         sizes[label] = sizes.get(label, 0) + 1
     ranked = sorted(sizes, key=lambda label: -sizes[label])
-    slot = {
-        label: colour_slot
-        for label, colour_slot in zip(
-            ranked, slot_order(COLOURED_CLUSTERS), strict=False
-        )
-    }
+    # Every cluster gets a slot — the palette is generated to this count,
+    # so there is no "past the end" case and nothing falls through to
+    # grey. Grey means unlabelled, and only that.
+    slot = dict(zip(ranked, slot_order(len(ranked)), strict=True))
 
     weights = {
         vertex["channel"]: sum(
@@ -899,6 +891,175 @@ def payload(result: Clustering) -> dict[str, Any]:
     }
 
 
+def oklch_to_linear(
+    lightness: float, chroma: float, hue_degrees: float
+) -> tuple[float, float, float]:
+    """OKLCH to linear sRGB, unclamped so the caller can test for gamut."""
+    hue = math.radians(hue_degrees)
+    a = chroma * math.cos(hue)
+    b = chroma * math.sin(hue)
+
+    long_ = (lightness + 0.3963377774 * a + 0.2158037573 * b) ** 3
+    medium = (lightness - 0.1055613458 * a - 0.0638541728 * b) ** 3
+    short = (lightness - 0.0894841775 * a - 1.2914855480 * b) ** 3
+
+    return (
+        4.0767416621 * long_ - 3.3077115913 * medium + 0.2309699292 * short,
+        -1.2684380046 * long_ + 2.6097574011 * medium - 0.3413193965 * short,
+        -0.0041960863 * long_ - 0.7034186147 * medium + 1.7076147010 * short,
+    )
+
+
+def oklch_to_hex(lightness: float, chroma: float, hue_degrees: float) -> str:
+    """One OKLCH colour as sRGB hex, gamut-mapped rather than clipped.
+
+    The distinction is the whole function. sRGB cannot reach the same
+    chroma at every hue — a saturated cyan at a mid lightness is simply
+    outside it — and clamping the channels afterwards does not merely
+    reduce saturation, it moves the hue and lightness too, arbitrarily
+    and differently per colour. That is how a generated palette ends up
+    with one entry measuring *below* the chroma floor and reading grey on
+    the page, which is exactly the appearance that means "no cluster".
+
+    So chroma is bisected down to the most the gamut will hold at this
+    lightness and hue. The colour comes out less saturated than asked and
+    stays the colour that was asked for.
+
+    Written out rather than pulled from a colour library: it is thirty
+    lines of published matrix arithmetic, and this is the only place in
+    the project that needs it.
+    """
+    low, high = 0.0, chroma
+    if (
+        max(oklch_to_linear(lightness, chroma, hue_degrees)) > 1.0
+        or min(oklch_to_linear(lightness, chroma, hue_degrees)) < 0.0
+    ):
+        for _ in range(24):
+            middle = (low + high) / 2
+            channels = oklch_to_linear(lightness, middle, hue_degrees)
+            if max(channels) > 1.0 or min(channels) < 0.0:
+                high = middle
+            else:
+                low = middle
+        chroma = low
+
+    def encode(channel: float) -> int:
+        channel = max(0.0, min(1.0, channel))
+        companded = (
+            12.92 * channel
+            if channel <= 0.0031308
+            else 1.055 * channel ** (1 / 2.4) - 0.055
+        )
+        return round(companded * 255)
+
+    return "#{:02x}{:02x}{:02x}".format(
+        *(encode(c) for c in oklch_to_linear(lightness, chroma, hue_degrees))
+    )
+
+
+def max_chroma(lightness: float, hue_degrees: float) -> float:
+    """The most chroma sRGB holds at this lightness and hue."""
+    low, high = 0.0, 0.4
+    for _ in range(20):
+        middle = (low + high) / 2
+        channels = oklch_to_linear(lightness, middle, hue_degrees)
+        if max(channels) > 1.0 or min(channels) < 0.0:
+            high = middle
+        else:
+            low = middle
+    return low
+
+
+def fit_lightness(
+    preferred: float, hue_degrees: float, band: tuple[float, float]
+) -> float:
+    """The lightness to actually use for this hue, kept inside the band.
+
+    sRGB is not equally wide at every hue: teal and olive run out of
+    chroma at a mid lightness where red and blue still have plenty. Left
+    alone they come back under the chroma floor — grey, which on this map
+    is the colour that means *no cluster*, so the palette would be
+    reporting the one thing it must never report by accident.
+
+    A hue that cannot hold ``MIN_CHROMA`` at its tier is therefore moved
+    to the lightness within the band where it holds the most, and only
+    such a hue is moved. Everything else stays on its tier, which is what
+    the tiers are for.
+    """
+    if max_chroma(preferred, hue_degrees) >= MIN_CHROMA:
+        return preferred
+
+    # The *nearest* workable lightness, not the best one. Moving every
+    # starved hue to wherever the gamut is widest piles the neighbouring
+    # cyans onto one lightness — and they are neighbours in hue already,
+    # so that is the one place the tiers were still doing work. Walking
+    # outwards from the tier keeps as much of the original spacing as the
+    # gamut allows.
+    low = band[0] + BAND_MARGIN
+    high = band[1] - BAND_MARGIN
+    step = (high - low) / 60
+    for distance in range(61):
+        for candidate in (
+            preferred + distance * step,
+            preferred - distance * step,
+        ):
+            if low <= candidate <= high and (
+                max_chroma(candidate, hue_degrees) >= MIN_CHROMA
+            ):
+                return candidate
+
+    # No lightness in the band holds enough chroma at this hue. Take the
+    # widest point rather than the tier, so it is at least as far from
+    # grey as this hue can get.
+    return max(
+        (low + (high - low) * i / 60 for i in range(61)),
+        key=lambda lightness: max_chroma(lightness, hue_degrees),
+    )
+
+
+def palette(
+    count: int,
+    tiers: tuple[float, ...],
+    chroma: float,
+    band: tuple[float, float],
+) -> list[str]:
+    """``count`` hues spread evenly round the wheel, cycling the tiers.
+
+    The tiers are what keeps this honest as the count grows: hue spacing
+    shrinks with every extra cluster, and past a dozen or so some pairs
+    are indistinguishable by hue alone. Alternating lightness means such
+    a pair still differs in something.
+    """
+    colours = []
+    for index in range(count):
+        hue = HUE_OFFSET + 360.0 * index / max(count, 1)
+        colours.append(
+            oklch_to_hex(
+                fit_lightness(tiers[index % len(tiers)], hue, band),
+                chroma,
+                hue,
+            )
+        )
+    return colours
+
+
+def slot_stride(count: int) -> int:
+    """A step round the wheel that visits every slot exactly once.
+
+    Roughly a third of the way round, so that clusters adjacent in the
+    legend — which are adjacent in size, and usually adjacent on the map —
+    get hues far apart rather than neighbouring ones. Any stride coprime
+    to the count enumerates the whole palette; this picks the one nearest
+    a third that qualifies, so it works for whatever count turns up
+    instead of only for the count that happened to be current.
+    """
+    for delta in range(count):
+        for candidate in (count // 3 + delta, count // 3 - delta):
+            if candidate > 0 and math.gcd(candidate, count) == 1:
+                return candidate
+    return 1
+
+
 def slot_order(count: int) -> list[int]:
     """Palette slots in the order clusters should take them.
 
@@ -910,15 +1071,15 @@ def slot_order(count: int) -> list[int]:
     separates least: it put two oranges side by side at the top of the
     list.
 
-    Walking with a stride coprime to the length visits every slot exactly
+    Walking with a stride coprime to the count visits every slot exactly
     once while putting roughly a third of the wheel between consecutive
-    ranks. ``STRIDE`` is coprime to fourteen; if the palette is resized to
-    a multiple of it, the walk would repeat slots and skip others, so the
-    fallback is the plain order rather than a broken one.
+    ranks. The stride is computed from the count rather than fixed — see
+    `slot_stride` — because the count changes between runs.
     """
-    if count <= 1 or math.gcd(SLOT_STRIDE, count) != 1:
+    if count <= 1:
         return list(range(count))
-    return [(i * SLOT_STRIDE) % count for i in range(count)]
+    stride = slot_stride(count)
+    return [(i * stride) % count for i in range(count)]
 
 
 def series_tokens(palette: tuple[str, ...], indent: int) -> str:
@@ -939,9 +1100,20 @@ def main() -> None:
         result = build(conn)
 
     data = payload(result)
+    colours = len(data["clusters"])
     page = (
-        TEMPLATE.replace("__SERIES_LIGHT__", series_tokens(PALETTE_LIGHT, 4))
-        .replace("__SERIES_DARK__", series_tokens(PALETTE_DARK, 6))
+        TEMPLATE.replace(
+            "__SERIES_LIGHT__",
+            series_tokens(
+                palette(colours, LIGHT_TIERS, LIGHT_CHROMA, LIGHT_BAND), 4
+            ),
+        )
+        .replace(
+            "__SERIES_DARK__",
+            series_tokens(
+                palette(colours, DARK_TIERS, DARK_CHROMA, DARK_BAND), 6
+            ),
+        )
         .replace(
             "__DATA__",
             json.dumps(data, ensure_ascii=False, separators=(",", ":")),
