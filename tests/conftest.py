@@ -13,10 +13,22 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from dotenv import load_dotenv
 
 # itgraph.config validates on import, so the environment has to be complete
 # before anything from the package is imported. Values already present
-# (CI, a developer's shell) win — these are only fallbacks.
+# (a developer's shell) win — these are only fallbacks.
+#
+# `.env` is read first, and it has to be: the fallback below is the
+# compose file's *default* password, which is what a laptop running
+# `docker compose up` with no `.env` gets. A deployed host has a real
+# password, and a fallback set before pydantic-settings reads the file
+# takes priority over the file — so on that host every test failed to
+# connect while the working database sat there answering. Nothing here
+# weakens `test_database_url`: whatever URL arrives, the suffix rail
+# still redirects it at the `_test` sibling.
+load_dotenv(Path(__file__).parent.parent / ".env", override=False)
+
 os.environ.setdefault("TELEGRAM_API_ID", "0")
 os.environ.setdefault("TELEGRAM_API_HASH", "test-api-hash")
 os.environ.setdefault(

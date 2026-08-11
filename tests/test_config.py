@@ -19,6 +19,20 @@ VALID_ENV = {
 
 @pytest.fixture
 def env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
+    """Exactly ``VALID_ENV``, and provably nothing else.
+
+    Every other setting is cleared rather than left standing. ``build()``
+    passes ``_env_file=None`` so the file cannot leak in, but that says
+    nothing about the *environment*, and pydantic-settings reads it
+    either way — so a `BOT_DATABASE_URL` exported in a shell, or loaded
+    from `.env` by `conftest`, used to reach the tests that assert an
+    optional setting is unset and fail them. Derived from the model's own
+    fields, so a setting added later is cleared without anyone
+    remembering to add it here.
+    """
+    for name in Settings.model_fields:
+        if name.upper() not in VALID_ENV:
+            monkeypatch.delenv(name.upper(), raising=False)
     for key, value in VALID_ENV.items():
         monkeypatch.setenv(key, value)
     return monkeypatch

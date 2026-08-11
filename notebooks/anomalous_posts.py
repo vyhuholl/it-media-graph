@@ -120,7 +120,6 @@ operator's own inventory, so it stays in `data/`, out of git and out of
 anything published.
 """
 
-import os
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -128,13 +127,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import psycopg
-from dotenv import load_dotenv
+from _db import dsn
 from openpyxl.comments import Comment
 from openpyxl.utils import get_column_letter
 
-load_dotenv()
-
-DSN = os.environ("DATABASE_URL")
+DSN = dsn()
 OUT = Path(__file__).resolve().parent.parent / "data" / "anomalous_posts.xlsx"
 
 # How old a post must be *when it was read* to count as done growing.

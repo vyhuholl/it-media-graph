@@ -59,20 +59,17 @@ They are here as context for a post you are already reading, not as a
 column to sort the sheet by.
 """
 
-import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 import psycopg
-from dotenv import load_dotenv()
+from _db import dsn
 from openpyxl.comments import Comment
 from openpyxl.utils import get_column_letter
 
-load_dotenv()
-
-DSN = os.environ("DATABASE_URL")
+DSN = dsn()
 OUT = Path(__file__).resolve().parent.parent / "data" / "cited_posts.xlsx"
 SHEET = "posts"
 
