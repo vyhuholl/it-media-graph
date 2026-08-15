@@ -91,6 +91,22 @@ class Settings(BaseSettings):
     # escalates a rate limit into a ban.
     flood_sleep_threshold: int = 60
 
+    # How long one request may take before it is abandoned. Bounds the
+    # request alone — a FloodWait is waited out outside it, without
+    # limit, which is the distinction that keeps this from cancelling
+    # the one kind of waiting the project has decided to do.
+    #
+    # It exists because a request can also wait forever by accident.
+    # Telethon accepts a request while it is reconnecting, queues it,
+    # and — if the reconnect then fails for good — fails only the
+    # requests it had already sent. One still in the send queue is
+    # never failed and never sent, and awaiting it blocks the caller
+    # until the process is killed. That is not hypothetical: it stopped
+    # collection for 67 hours on 13 August 2026 while the loop sat in
+    # `await`, and no supervisor could see it because the process was
+    # alive.
+    request_timeout_seconds: float = Field(default=180.0, gt=0)
+
     # Above this the collector stops the run instead of sleeping it off.
     # Sits above `flood_sleep_threshold`, so a wait under a minute never
     # reaches the decision, and well below the day-long waits that read as
@@ -245,6 +261,19 @@ class Settings(BaseSettings):
     # lease. Losing it is fatal, so this is how long two collectors could
     # in principle overlap before one of them notices and stops.
     watch_lease_check_seconds: float = Field(default=300.0, gt=0)
+
+    # The gap between reconnect attempts after the client has given up
+    # on its connection. On top of the retries Telethon already makes
+    # inside a single `connect()`, so one attempt here is several on the
+    # wire.
+    watch_reconnect_delay_seconds: float = Field(default=30.0, gt=0)
+
+    # The longest the loop may go without concluding a single poll while
+    # channels are due, before it stops and lets a supervisor restart it.
+    # Deliberately a blunt instrument: it does not know why the loop is
+    # stuck, which is the only reason it would have caught the failure it
+    # was written for.
+    watch_stall_minutes: float = Field(default=30.0, gt=0)
 
     # --- alerting -----------------------------------------------------
     #
@@ -517,6 +546,31 @@ class Settings(BaseSettings):
                 f"proxy_host is set without {' and '.join(missing)}: a proxy "
                 "needs a type and a port before anything can connect through "
                 "it"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _request_timeout_clears_the_flood_sleep(self) -> Self:
+        """Refuse a deadline that would cancel a wait we chose to take.
+
+        Telethon sleeps a FloodWait shorter than `flood_sleep_threshold`
+        *inside* the request, so from the caller's side a rate-limited
+        request simply takes a minute. A deadline at or below the
+        threshold would abandon it — turning the project's stated policy
+        on rate limits ("both paths wait") into "we wait unless the wait
+        works", which is the behaviour that gets accounts banned.
+
+        Ordered rather than merely distinct, and stated here rather than
+        left as a comment on the default, because the two settings are
+        in different sections and nothing else would notice them being
+        moved into contradiction.
+        """
+        if self.request_timeout_seconds <= self.flood_sleep_threshold:
+            raise ValueError(
+                f"request_timeout_seconds ({self.request_timeout_seconds}) is "
+                f"not above flood_sleep_threshold ({self.flood_sleep_threshold}"
+                "): a rate limit slept off inside the request would hit the "
+                "deadline and be abandoned rather than waited out"
             )
         return self
 

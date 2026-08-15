@@ -12,6 +12,9 @@ collide with a real one.
 from pathlib import Path
 
 import pytest
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.pool import NullPool
 
 from itgraph.db.session_lease import (
     LeaseLostError,
@@ -183,3 +186,53 @@ async def test_a_dropped_connection_frees_the_lease(
         "backfill", url=database_url, session_path=session
     ):
         pass
+
+
+async def test_verifying_does_not_leave_a_transaction_open(
+    database_url: str, tmp_path: Path
+) -> None:
+    """`acquire` commits to avoid exactly this state; `verify` must too.
+
+    Without the commit, the five-minutely check re-opens a transaction
+    and never closes one, so the lease connection sits `idle in
+    transaction` for the life of the process — 2 days 19 hours, on the
+    collector this was found on. A server-side
+    `idle_in_transaction_session_timeout` kills a backend in that state,
+    and killing *this* backend is precisely how the lease is lost.
+
+    Read from a second connection, because a backend cannot observe its
+    own idleness: any query it runs to look would itself be the
+    transaction it is looking for.
+    """
+    async with session_lease(
+        "watch", url=database_url, session_path=tmp_path / "itgraph.session"
+    ) as lease:
+        await lease.verify()
+
+        assert await _lease_backend_state(database_url) == "idle"
+
+        # And the lease survived the commit: a session-level advisory
+        # lock outlives the transaction that took it, which is why
+        # `pg_advisory_xact_lock` is deliberately not what is used.
+        await lease.verify()
+
+
+async def _lease_backend_state(database_url: str) -> str | None:
+    """What Postgres says the lease's own backend is doing."""
+    engine = create_async_engine(database_url, poolclass=NullPool)
+    try:
+        async with engine.connect() as connection:
+            return await connection.scalar(
+                text(
+                    "SELECT state FROM pg_stat_activity "
+                    # `pg_stat_activity` is cluster-wide, and a real
+                    # collector may be running against the working
+                    # database on the same instance. Without this the
+                    # test reads *its* backend and reports on code that
+                    # is not the code under test.
+                    "WHERE datname = current_database() "
+                    "AND application_name LIKE 'itgraph watch%'"
+                )
+            )
+    finally:
+        await engine.dispose()

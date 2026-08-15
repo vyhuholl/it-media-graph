@@ -245,6 +245,18 @@ class SessionLease:
                 ),
                 {"classid": self._classid, "objid": self._objid},
             )
+            # For the same reason `acquire` commits: the lock survives a
+            # commit, and what is being avoided is leaving this
+            # connection *idle in transaction* — the state a server-side
+            # `idle_in_transaction_session_timeout` eventually kills, and
+            # killing this connection is precisely how the lease is lost.
+            # Without it a check meant to confirm the lease re-opens a
+            # transaction every few minutes and never closes one: the
+            # collector this was found on had held one open for 2 days
+            # 19 hours. Inside the `try`, because a commit that fails
+            # says the same thing about the connection as a read that
+            # does.
+            await self._connection.commit()
         except Exception as exc:
             raise LeaseLostError(
                 "lost the connection holding the Telegram session lease; "

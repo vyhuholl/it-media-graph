@@ -241,3 +241,27 @@ def test_credentials_without_a_host_are_refused(
     # the values needs removing — and never the password itself.
     assert "proxy_username" in str(caught.value)
     assert PROXY_PASSWORD not in str(caught.value)
+
+
+def test_a_deadline_under_the_flood_sleep_is_refused(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """The two settings are in different sections and must agree.
+
+    Telethon sleeps a wait shorter than `flood_sleep_threshold` inside
+    the request, so a deadline below it would abandon a rate-limit wait
+    the project has decided to take — turning "we always wait" into "we
+    wait unless the waiting works".
+    """
+    env.setenv("REQUEST_TIMEOUT_SECONDS", "30")
+    env.setenv("FLOOD_SLEEP_THRESHOLD", "60")
+    with pytest.raises(ValidationError, match="flood_sleep_threshold"):
+        build()
+
+
+def test_a_deadline_above_the_flood_sleep_is_accepted(
+    env: pytest.MonkeyPatch,
+) -> None:
+    env.setenv("REQUEST_TIMEOUT_SECONDS", "90")
+    env.setenv("FLOOD_SLEEP_THRESHOLD", "60")
+    assert build().request_timeout_seconds == 90

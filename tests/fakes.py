@@ -1,5 +1,6 @@
 """Stand-ins for Telethon objects. Nothing here touches a socket."""
 
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -410,6 +411,11 @@ class FakeTelegramClient:
         raises_for: dict[int, BaseException] | None = None,
         cached_peers: dict[int, Any] | None = None,
         flood_request: Any = None,
+        connected: bool = True,
+        connect_failures: int = 0,
+        hangs: bool = False,
+        hang_on_window: set[int] | None = None,
+        disconnect_after: int | None = None,
     ) -> None:
         # What a raised FloodWaitError names as its cause. `None` is the
         # shape a rate limit that named no request has; a test that cares
@@ -454,6 +460,41 @@ class FakeTelegramClient:
         self.requests: list[Any] = []
         self.windows: list[tuple[int, int, int]] = []
         self.downloads: list[Any] = []
+        # Connection state, modelled the way Telethon models it: a flag
+        # the client reports, not a probe of a socket. `connected=False`
+        # is a client whose reconnection attempts have been abandoned —
+        # the state the loop has to notice, because a request issued in
+        # it fails instantly rather than waiting.
+        self.connected = connected
+        self.connect_failures = connect_failures
+        # Every history request never answers, or only the ones at these
+        # window indices — the second is how a test says "it wedged once
+        # and then recovered" without depending on a clock.
+        self.hangs = hangs
+        self.hang_on_window = hang_on_window or set()
+        # Drop the connection *between* polls, after this many windows
+        # have been served. The real shape of a mid-batch loss: the poll
+        # that was in flight succeeded, and the next one has nothing to
+        # travel over.
+        self.disconnect_after = disconnect_after
+        self.connects = 0
+        self.disconnects = 0
+
+    def is_connected(self) -> bool:
+        """A flag read, like Telethon's. Never a network call."""
+        return self.connected
+
+    async def connect(self) -> None:
+        """Re-establish the connection, failing the first N attempts."""
+        self.connects += 1
+        if self.connect_failures > 0:
+            self.connect_failures -= 1
+            raise ConnectionError("connection to Telegram failed")
+        self.connected = True
+
+    async def disconnect(self) -> None:
+        self.disconnects += 1
+        self.connected = False
 
     async def download_media(self, *args: Any, **kwargs: Any) -> None:
         """Never called. Recorded so a test can prove it never was."""
@@ -470,6 +511,21 @@ class FakeTelegramClient:
         flood_seconds = self.flood_on_window.get(index)
 
         async def walk() -> AsyncIterator[FakeHistoryMessage]:
+            # What Telethon does with a request on a client that has
+            # stopped trying to connect: refuses it outright. Modelled
+            # because the loop's reason for checking `is_connected`
+            # first is that this failure is instant and would otherwise
+            # be recorded against every channel in the batch.
+            if not self.connected:
+                raise ConnectionError(
+                    "Cannot send requests while disconnected"
+                )
+            # A request that is accepted and then neither answers nor
+            # fails: the shape of the bug the deadline exists for — the
+            # request sat in Telethon's send queue, which nothing drains
+            # and nothing fails, while the caller awaited it for days.
+            if self.hangs or index in self.hang_on_window:
+                await asyncio.Event().wait()
             if flood_seconds is not None:
                 raise FloodWaitError(
                     request=self.flood_request, capture=flood_seconds
@@ -487,6 +543,11 @@ class FakeTelegramClient:
             older = [m for m in messages if offset_id == 0 or m.id < offset_id]
             for message in older[:limit]:
                 yield message
+            if (
+                self.disconnect_after is not None
+                and len(self.windows) >= self.disconnect_after
+            ):
+                self.connected = False
 
         return walk()
 

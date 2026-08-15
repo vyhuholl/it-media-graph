@@ -66,6 +66,7 @@ __all__ = [
     "ChannelRun",
     "FloodWaitTooLong",
     "PeerNotCached",
+    "RequestTimedOut",
     "RunSummary",
     "backfill_channel",
     "backfill_channels",
@@ -111,6 +112,30 @@ class FloodWaitTooLong(RuntimeError):
             f"{settings.flood_abort_threshold:.0f}s halt threshold; "
             f"stopping. Work may resume after "
             f"{self.resume_after:%Y-%m-%d %H:%M} UTC."
+        )
+
+
+class RequestTimedOut(TimeoutError):
+    """A request was issued and neither answered nor failed in time.
+
+    Its own class, rather than the bare ``TimeoutError`` the deadline
+    raises, because the loop has to be able to catch it *before* its
+    per-channel failure handler does. A request that passes its deadline
+    says nothing about the channel and everything about the connection:
+    the right response is to discard the connection, and a caller that
+    cannot name the exception cannot make that distinction.
+
+    Subclasses ``TimeoutError`` — and so, since 3.10, ``OSError`` — so a
+    call site that does *not* name it still treats it as the transient
+    failure it is. That is the safe default, and it is why the one-shot
+    passes need no new handling at all.
+    """
+
+    def __init__(self, seconds: float) -> None:
+        self.seconds = seconds
+        super().__init__(
+            f"no answer within {seconds:.0f}s; abandoning the request. "
+            "The connection is not usable and will be discarded."
         )
 
 
@@ -233,10 +258,28 @@ async def waiting_out_floods[T](
 
     Every wait is recorded before it is acted on, so the method that was
     limited survives the run that hit it. ``recorder`` never raises.
+
+    **Two kinds of waiting, and only one of them is bounded.** A rate
+    limit is waited out without limit, because that is the policy. A
+    request is waited on for ``request_timeout_seconds`` and then
+    abandoned, because a request that answers nothing is not a wait
+    anybody chose — see ``RequestTimedOut``. The deadline opens inside
+    the loop and closes before the ``except`` branch, so the flood sleep
+    is outside it and each attempt starts with a fresh one.
     """
     while True:
         try:
-            return await operation()
+            async with asyncio.timeout(
+                settings.request_timeout_seconds
+            ) as deadline:
+                return await operation()
+        except TimeoutError as exc:
+            # Only when *this* scope expired. A `TimeoutError` raised by
+            # the operation itself passes through as what it is, rather
+            # than being relabelled with a deadline it never reached.
+            if not deadline.expired():
+                raise
+            raise RequestTimedOut(settings.request_timeout_seconds) from exc
         except FloodWaitError as exc:
             seconds = getattr(exc, "seconds", 0)
             halting = seconds > settings.flood_abort_threshold

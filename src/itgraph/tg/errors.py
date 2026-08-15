@@ -18,8 +18,24 @@ only a networked path can raise or catch — ``FloodWaitTooLong``,
 construction, and moving them would buy nothing.
 """
 
-__all__ = ["NotAuthorizedError"]
+__all__ = ["NotAuthorizedError", "WatchStalled"]
 
 
 class NotAuthorizedError(RuntimeError):
     """The session holds no authorized user."""
+
+
+class WatchStalled(RuntimeError):
+    """The loop had work to do and did none of it for too long.
+
+    Raised so the process exits and a supervisor starts a fresh one.
+    That is the whole design: it does not know *why* the loop stopped
+    making progress, and deliberately does not try to — the failure it
+    was written for was a request that Telethon accepted, never sent and
+    never failed, which no specific check would have anticipated.
+
+    Distinct from every other way the loop stops. A rate limit postpones
+    the schedule and the loop keeps running; a lost lease is fatal
+    because something else may hold the session. This one means the loop
+    is still holding everything it should and using none of it.
+    """

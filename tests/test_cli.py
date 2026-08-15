@@ -18,6 +18,7 @@ from itgraph.db import session as db_session
 from itgraph.tg import auth as tg_auth
 from itgraph.tg import backfill as tg_backfill
 from itgraph.tg import client as tg_client
+from itgraph.tg.errors import WatchStalled
 
 runner = CliRunner()
 
@@ -1430,6 +1431,41 @@ def test_watch_refuses_while_the_session_is_held(
 
     assert result.exit_code == 1
     assert "in use by" in result.output
+
+
+def test_watch_reports_a_stall_and_exits_one(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    """A wedged loop must leave a sentence, not a traceback.
+
+    It exits non-zero so a supervisor restarts it, and the operator who
+    reads the journal afterwards should find out why in one line —
+    which is the difference between this and the two days of silence it
+    replaces.
+    """
+    from itgraph.tg import watch as watch_module
+
+    use_test_database(monkeypatch, database_url)
+
+    async def stalled(*args: Any, **kwargs: Any) -> Any:
+        raise WatchStalled("no poll has concluded in 30 minutes")
+
+    @asynccontextmanager
+    async def connected_with_lease(
+        command: str,
+    ) -> AsyncIterator[tuple[object, None]]:
+        yield object(), None
+
+    monkeypatch.setattr(watch_module, "watch", stalled)
+    monkeypatch.setattr(
+        tg_client, "connected_with_lease", connected_with_lease
+    )
+
+    result = runner.invoke(app, ["watch"])
+
+    assert result.exit_code == 1
+    assert "no poll has concluded" in result.output
+    assert "Traceback" not in result.output
 
 
 def test_backfill_refuses_while_the_loop_holds_the_session(

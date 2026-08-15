@@ -18,9 +18,9 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `tg/floods.py` | Which method a rate limit named, and writing it down without endangering the run |
 | `tg/full_channel.py` | One channel's extended information, and the linked chat it resolves |
 | `tg/metadata.py` | The metadata pass: which channels are due extended information, on its own quota budget |
-| `tg/backfill.py` | The history walk: pacing, resumption, FloodWait, failure classification. Spends no quota-bearing request |
+| `tg/backfill.py` | The history walk: pacing, resumption, FloodWait, failure classification. Spends no quota-bearing request. Also holds `waiting_out_floods`, the one seam every request in the project passes through — and so the one place a request deadline lives |
 | `tg/resolve.py` | The resolution pass: username and title for channels found by reference |
-| `tg/watch.py` | The poll loop: new posts and fresh counters from one request, forever. Spends no quota-bearing request, and absorbs a rate limit rather than exiting |
+| `tg/watch.py` | The poll loop: new posts and fresh counters from one request, forever. Spends no quota-bearing request; absorbs a rate limit and a lost connection rather than exiting, and exits only when it has stopped making progress at all |
 | `tg/` | MTProto collection: fetch and store raw payloads |
 | `derive/references.py` | Pure parsing of a payload — or of plain text — into the channels it references |
 | `derive/edges.py` | The derivation pass: raw messages → edges; touches no network |

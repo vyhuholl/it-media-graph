@@ -6,7 +6,7 @@ itself. A backfill spends a budget and stops; this spends a little and
 does not, so the numbers are chosen for a sustained rate below the walk's
 and the failure handling is chosen for a process that must not exit.
 
-Four rules shape it.
+Five rules shape it.
 
 **One request does both jobs.** ``messages.getHistory`` returns each
 message with its counters as of the response, so one window of a
@@ -28,6 +28,20 @@ tightest quota in the project every day until somebody noticed.
 unchanged, halt and all — and the halt is caught here and converted into
 a postponement of the whole schedule. One policy, two callers, rather
 than a second flood handler drifting away from the first.
+
+**Nothing here may wait forever, and a loop that waits forever stops.**
+The one failure this loop has actually had was neither an error nor a
+rate limit: Telegram closed the connection, Telethon accepted the next
+request while reconnecting, the reconnect failed for good, and the
+request was left in a queue that nothing drains. The `await` never
+returned, and for 67 hours the process was a healthy-looking PID
+collecting nothing. So every request carries a deadline; a deadline
+passed means the connection is discarded rather than reused; the loop
+confirms it is connected before each poll and reconnects when it is not;
+and if it concludes no poll at all while channels are due, it raises
+`WatchStalled` and exits for a supervisor to restart. The last of those
+is the only one that would have caught a bug nobody had thought of,
+which is why it is deliberately incurious about the cause.
 """
 
 import asyncio
@@ -68,15 +82,23 @@ from itgraph.schedule import (
 from itgraph.tg.backfill import (
     FloodWaitTooLong,
     PeerNotCached,
+    RequestTimedOut,
     cached_peer,
     classify,
     waiting_out_floods,
 )
+from itgraph.tg.errors import WatchStalled
 from itgraph.tg.floods import FloodRecorder
 from itgraph.tg.pacing import pace
 from itgraph.tg.payload import encode_payload
 
-__all__ = ["PollOutcome", "WatchStats", "poll_channel", "watch"]
+__all__ = [
+    "PollAttempt",
+    "PollOutcome",
+    "WatchStats",
+    "poll_channel",
+    "watch",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +120,23 @@ class PollOutcome:
 
 
 @dataclass(slots=True)
+class PollAttempt:
+    """What one channel's turn in the batch amounted to.
+
+    ``concluded`` is the loop's own health, not the channel's: it is
+    false only when the request passed its deadline, which is the one
+    outcome that taught the loop nothing at all. An error from Telegram
+    concluded — the channel answered, and what it said was no.
+
+    ``halt`` carries a rate limit too long to sleep off, which belongs to
+    the schedule rather than to this channel.
+    """
+
+    halt: FloodWaitTooLong | None = None
+    concluded: bool = True
+
+
+@dataclass(slots=True)
 class WatchStats:
     """What the loop has done since it started.
 
@@ -115,6 +154,8 @@ class WatchStats:
     snapshots: int = 0
     skipped: int = 0
     failed: int = 0
+    timed_out: int = 0
+    reconnects: int = 0
     postponed: int = 0
     cycles: int = 0
     skipped_channels: set[int] = field(default_factory=set)
@@ -128,6 +169,14 @@ class WatchStats:
             line += f"; {len(self.skipped_channels)} channel(s) have no cached peer"
         if self.failed:
             line += f"; {self.failed} failed"
+        # Counted apart from `failed` for the same reason `skipped` is:
+        # a request that never answered is a fact about the connection,
+        # and a loop reconnecting all day looks identical to a healthy
+        # one in every other number here.
+        if self.timed_out:
+            line += f"; {self.timed_out} timed out"
+        if self.reconnects:
+            line += f"; {self.reconnects} reconnect(s)"
         if self.postponed:
             line += f"; {self.postponed} rate-limit postponement(s)"
         return line
@@ -297,10 +346,90 @@ async def watch(
 
     ``max_cycles`` exists for the tests and for an operator who wants one
     pass; ``stop`` is what a signal handler sets.
+
+    Raises ``WatchStalled`` when it has work due and concludes no poll
+    for ``watch_stall_minutes`` — the one condition under which this
+    returns by failing rather than by being asked to stop.
+
+    The stall check runs as a task beside the cycles rather than inside
+    them, and that is the entire reason it is worth having. A check at
+    the top of each cycle can only fire if the loop is still reaching
+    the top of its cycles — which is precisely what the failure it was
+    written for did not do. It sat in one `await` for 67 hours. A guard
+    that shares its victim's liveness is not a guard.
+
+    Two tasks and ``asyncio.wait`` rather than a ``TaskGroup``, for one
+    reason: a group re-raises *everything* as an ``ExceptionGroup``,
+    including an exception from the body it is hosting. ``LeaseLostError``
+    would then reach ``cli.py`` wrapped, miss the tuple it catches, and
+    print a traceback in place of the sentence written for it — a
+    regression in the one path that already worked. Whichever task
+    finishes first is awaited here, so every failure arrives as itself.
     """
     stats = WatchStats()
+    progress = _Progress()
+    cycles = asyncio.create_task(
+        _cycles(
+            client,
+            database,
+            stats=stats,
+            progress=progress,
+            lease=lease,
+            stop=stop or asyncio.Event(),
+            max_cycles=max_cycles,
+        )
+    )
+    watchdog = asyncio.create_task(_refuse_to_stall(progress))
+
+    try:
+        done, _ = await asyncio.wait(
+            {cycles, watchdog}, return_when=asyncio.FIRST_COMPLETED
+        )
+        # The watchdog only ever finishes by raising, so if it is in
+        # `done` the loop is the one being given up on.
+        first, second = (
+            (watchdog, cycles) if watchdog in done else (cycles, watchdog)
+        )
+        await _abandon(second)
+        await first
+    finally:
+        # Reached when this coroutine is itself cancelled. Neither task
+        # outlives the call that made them.
+        await _abandon(cycles)
+        await _abandon(watchdog)
+    return stats
+
+
+async def _abandon(task: asyncio.Task[None]) -> None:
+    """Cancel a task and wait for it to notice. Never raises its failure.
+
+    A task that has already finished is only marked as read, so that a
+    failure asyncio would otherwise log as "never retrieved" stays quiet
+    — and, more importantly, so that cleanup in a ``finally`` cannot
+    replace the exception already on its way out with the same one, or
+    with the other task's.
+    """
+    if task.done():
+        with suppress(asyncio.CancelledError):
+            task.exception()
+        return
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+
+async def _cycles(
+    client: TelegramClient,
+    database: Database,
+    *,
+    stats: WatchStats,
+    progress: _Progress,
+    lease: SessionLease | None,
+    stop: asyncio.Event,
+    max_cycles: int | None,
+) -> None:
+    """The loop itself. See ``watch``, which owns the stall check."""
     recorder = FloodRecorder(database, CollectionCommand.WATCH)
-    stop = stop or asyncio.Event()
     last_lease_check = 0.0
 
     while not stop.is_set():
@@ -321,7 +450,16 @@ async def watch(
 
         if in_quiet_hours(now):
             logger.debug("quiet hours — not polling")
+            progress.made()
             await _sleep(stop, settings.watch_tick_seconds)
+            continue
+
+        # Before the queue is read, so an outage costs no database work
+        # and — more to the point — cannot reach a channel. A poll issued
+        # over a connection the client has given up on fails instantly,
+        # and 25 of them would push a whole batch out by the failure
+        # backoff for something that was never the channels' fault.
+        if not await _ensure_connected(client, stop, stats=stats):
             continue
 
         async with database.session() as session:
@@ -329,6 +467,7 @@ async def watch(
             lag = await queue_lag(session, now=now)
 
         if not batch:
+            progress.made()
             await _sleep(stop, settings.watch_tick_seconds)
             continue
 
@@ -348,23 +487,150 @@ async def watch(
         )
 
         for channel in batch:
-            if stop.is_set():
+            # The connection is re-checked per channel, not per batch. A
+            # batch is 25 channels and several minutes; a connection lost
+            # partway through it would otherwise cost every remaining
+            # channel a recorded failure and a backoff. It is a flag
+            # read, not a probe, so asking costs nothing.
+            if stop.is_set() or not client.is_connected():
                 break
-            halted = await _poll_one(
+            attempt = await _poll_one(
                 client, database, channel, stats=stats, recorder=recorder
             )
-            if halted is not None:
+            if attempt.concluded:
+                progress.made()
+            if attempt.halt is not None:
                 # Not this channel's fault and not a channel failure:
                 # the whole schedule slides past the wait and the loop
                 # carries on. A batch job would exit here; a loop that
                 # exited would stop being the product.
                 async with database.session() as session:
-                    await postpone_all(session, until=halted.resume_after)
+                    await postpone_all(
+                        session, until=attempt.halt.resume_after
+                    )
                 stats.postponed += 1
-                logger.warning("%s — postponing the schedule", halted)
+                progress.made()
+                logger.warning("%s — postponing the schedule", attempt.halt)
                 break
 
-    return stats
+
+class _Progress:
+    """When the loop last got somewhere, on a monotonic clock.
+
+    Monotonic because the question is how long *the loop* has been
+    silent; a wall clock stepped by ntp or by a resume from suspend
+    answers a different one, and answers it wrongly in both directions.
+    """
+
+    def __init__(self) -> None:
+        self.at = asyncio.get_running_loop().time()
+
+    def made(self) -> None:
+        self.at = asyncio.get_running_loop().time()
+
+    def silent_for(self) -> float:
+        return asyncio.get_running_loop().time() - self.at
+
+
+async def _refuse_to_stall(progress: _Progress) -> None:
+    """Stop the loop if it has had work to do and done none of it.
+
+    The catch-all, and the only guard here that does not know what it is
+    guarding against. Everything else in this module answers a failure
+    somebody anticipated; this one answers the next one — which is why
+    it runs as its own task and asks a clock rather than asking the loop.
+
+    Progress is a poll that *concluded* — stored, skipped, or failed
+    with an answer from Telegram. A request that passed its deadline is
+    deliberately not progress: it taught the loop nothing, and a loop
+    that times out on every request forever is exactly what a restart is
+    for. Nor is a successful reconnect, for the same reason —
+    reconnecting and then learning nothing is not working, however busy
+    it looks in the log.
+
+    States where there is legitimately nothing to conclude — quiet
+    hours, an empty queue, a postponed schedule — count as progress at
+    their own call sites. Without that this would fire on a loop that is
+    perfectly healthy and merely idle.
+
+    Sleeps exactly as long as it would take to stall, then asks again.
+    No polling interval to choose, and a loop that made progress in the
+    meantime simply resets what the next sleep is.
+    """
+    while True:
+        remaining = settings.watch_stall_minutes * 60 - progress.silent_for()
+        if remaining > 0:
+            await asyncio.sleep(remaining)
+            continue
+        raise WatchStalled(
+            f"no poll has concluded in "
+            f"{progress.silent_for() / 60:.0f} minutes: the loop is not "
+            "working, and it cannot say why. Stopping so it can be "
+            "restarted — under systemd that happens by itself."
+        )
+
+
+async def _ensure_connected(
+    client: TelegramClient, stop: asyncio.Event, *, stats: WatchStats
+) -> bool:
+    """Confirm the client is connected, reconnecting once if it is not.
+
+    ``is_connected`` is a flag rather than a probe: Telethon holds it
+    true for the whole of its own reconnection and clears it only once
+    the sender has given up entirely. That makes it exactly the question
+    worth asking here — not "is the socket up right now", which a poll
+    would discover anyway, but "has the client stopped trying", which it
+    would not.
+
+    One attempt per cycle, with a delay after a failure and no
+    escalating backoff: `_refuse_to_stall` is what ends an outage that
+    does not end on its own, and two mechanisms for giving up would
+    eventually disagree about which one applies.
+
+    Reconnecting is safe with the lease held. The lease is on the
+    session *file*, and a disconnect does not release it, touch the auth
+    key, or empty the entity cache: what comes back is the same client.
+    """
+    if client.is_connected():
+        return True
+
+    logger.warning("not connected to Telegram — reconnecting")
+    try:
+        async with asyncio.timeout(settings.request_timeout_seconds):
+            await client.connect()
+    except (OSError, RPCError) as exc:
+        # `ConnectionError` is an `OSError`, and so is the `TimeoutError`
+        # the deadline raises; neither needs an arm of its own.
+        logger.warning(
+            "reconnect failed (%s: %s) — retrying in %.0fs",
+            type(exc).__name__,
+            exc,
+            settings.watch_reconnect_delay_seconds,
+        )
+        await _sleep(stop, settings.watch_reconnect_delay_seconds)
+        return False
+
+    stats.reconnects += 1
+    logger.info("reconnected to Telegram")
+    return True
+
+
+async def _drop_connection(client: TelegramClient) -> None:
+    """Discard a connection that stopped answering.
+
+    Cleanup, so it swallows its own failures and takes a deadline of its
+    own: a socket wedged badly enough to strand a request is exactly the
+    one that could stall the teardown too, and a cleanup path that hangs
+    would reproduce the bug it is here to end.
+    """
+    try:
+        async with asyncio.timeout(settings.request_timeout_seconds):
+            await client.disconnect()
+    except Exception:
+        logger.warning(
+            "could not close the connection cleanly; continuing anyway",
+            exc_info=True,
+        )
 
 
 async def _poll_one(
@@ -374,12 +640,13 @@ async def _poll_one(
     *,
     stats: WatchStats,
     recorder: FloodRecorder,
-) -> FloodWaitTooLong | None:
-    """One channel, with every failure contained. Returns a halt, if any."""
+) -> PollAttempt:
+    """One channel, with every failure contained. Says what it concluded."""
     now = datetime.now(UTC)
     measure_rate = _rate_is_stale(channel, now)
     error: str | None = None
     found_nothing = True
+    concluded = True
 
     try:
         async with database.session() as session:
@@ -403,7 +670,19 @@ async def _poll_one(
         # Caught before the handler below can see it — it is deliberately
         # not an `RPCError` so that the per-channel handler cannot treat
         # a rate limit as this channel's fault.
-        return exc
+        return PollAttempt(halt=exc)
+    except RequestTimedOut as exc:
+        # Before the `OSError` arm, which it would otherwise land in as
+        # an ordinary transient failure — and then the *next* channel
+        # would be asked over the same connection, which has just proved
+        # it does not answer. Discarding it makes the connection check at
+        # the top of the batch loop false, and one reconnect fixes what
+        # would otherwise be a failure per channel.
+        logger.warning("@%s: %s", channel.username, exc)
+        error = f"{type(exc).__name__}: {exc}"[:500]
+        stats.timed_out += 1
+        concluded = False
+        await _drop_connection(client)
     except (RPCError, OSError, ValueError, TypeError) as exc:
         kind = classify(exc)
         logger.warning(
@@ -424,6 +703,14 @@ async def _poll_one(
                 outcome.snapshots,
             )
 
+    # A timed-out poll is rescheduled with its error recorded, like any
+    # other failed one, and that is a deliberate inaccuracy: the channel
+    # did nothing wrong. Leaving it unrecorded would leave it the oldest
+    # overdue channel and therefore first in the next batch — so a
+    # channel that timed out reliably would sit at the head of the queue
+    # forever and nothing behind it would ever be polled. One failure
+    # costs it one backoff step. In an outage at most one channel pays
+    # it, because the connection check stops the batch before the second.
     await _reschedule(
         database,
         channel,
@@ -432,7 +719,7 @@ async def _poll_one(
         error=error,
         measure_rate=measure_rate,
     )
-    return None
+    return PollAttempt(concluded=concluded)
 
 
 async def _sleep(stop: asyncio.Event, seconds: float) -> None:

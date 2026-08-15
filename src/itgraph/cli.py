@@ -54,7 +54,7 @@ def _run(body: Coroutine[Any, Any, None]) -> None:
     # wrapper, and `tg.client` imports Telethon, which announces itself
     # on import. A pass that goes nowhere near Telegram must not print a
     # line implying it did.
-    from itgraph.tg.errors import NotAuthorizedError
+    from itgraph.tg.errors import NotAuthorizedError, WatchStalled
 
     try:
         asyncio.run(body)
@@ -63,6 +63,7 @@ def _run(body: Coroutine[Any, Any, None]) -> None:
         NotAuthorizedError,
         SessionBusyError,
         LeaseLostError,
+        WatchStalled,
     ) as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(1) from exc
@@ -567,6 +568,13 @@ def watch(
     A reading missed while this was not running is skipped rather than
     taken late. A snapshot due at post-age 30 minutes and taken at eight
     hours is a different measurement, not a late one.
+
+    Rate limits and a lost connection are absorbed: the loop waits,
+    reconnects, and carries on. It exits non-zero for two reasons only —
+    it can no longer confirm it holds the session, or it has had
+    channels due and concluded no poll at all for long enough that
+    something is wrong that it cannot name. Both are worth a restart,
+    and under systemd they get one.
     """
     import signal
 

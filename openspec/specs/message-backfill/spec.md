@@ -70,7 +70,7 @@ The system SHALL record per-channel progress so an interrupted run resumes rathe
 
 ### Requirement: Rate Limit Compliance
 
-The system SHALL comply with Telegram's rate limits by waiting, MUST NOT attempt to circumvent them, and SHALL stop a run rather than sleep through a wait longer than it is willing to hold a connection open for.
+The system SHALL comply with Telegram's rate limits by waiting, MUST NOT attempt to circumvent them, and SHALL stop a run rather than sleep through a wait longer than it is willing to hold a connection open for. Every request the system makes SHALL be bounded by a deadline; a request that passes it SHALL be abandoned and reported as a failed request rather than waited on further. The deadline SHALL apply to the request alone and MUST NOT bound a rate-limit wait, and it MUST be configured above the longest wait the client sleeps off inside a request.
 
 #### Scenario: A short FloodWait is waited out
 
@@ -110,6 +110,27 @@ The system SHALL comply with Telegram's rate limits by waiting, MUST NOT attempt
 - **WHEN** history is fetched
 - **THEN** channels are processed one at a time
 - **AND** a configurable delay separates consecutive requests
+
+#### Scenario: A request that never answers is abandoned
+
+- **GIVEN** a request that has been issued and neither answers nor fails
+- **WHEN** the configured deadline passes
+- **THEN** the request is abandoned
+- **AND** the caller is told the request timed out, distinguishably from any other failure
+- **AND** the pass does not wait on it further
+
+#### Scenario: A rate-limit wait is not bounded by the request deadline
+
+- **GIVEN** a rate limit short enough to sleep off but longer than the request deadline
+- **WHEN** the collector waits it out
+- **THEN** the wait completes in full
+- **AND** the request is retried afterwards with a fresh deadline
+
+#### Scenario: A deadline below the sleep-off threshold is refused
+
+- **GIVEN** a request deadline configured no higher than the wait the client sleeps off inside a request
+- **WHEN** settings are loaded
+- **THEN** the configuration is rejected with a message naming both settings
 
 ### Requirement: Bounded Runs
 

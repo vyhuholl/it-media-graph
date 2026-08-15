@@ -5,6 +5,7 @@ that would take hours takes milliseconds. What is under test is the
 bookkeeping — which is where a collector loses history quietly.
 """
 
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
@@ -17,8 +18,9 @@ from fakes import (
     history,
 )
 from sqlalchemy import select, text
-from telethon.errors import ChannelPrivateError
+from telethon.errors import ChannelPrivateError, FloodWaitError
 
+from itgraph.config import settings
 from itgraph.db.channels import (
     DiscoveredChannel,
     link_discussion_chat,
@@ -40,7 +42,12 @@ from itgraph.db.models import (
 from itgraph.db.session import Database
 from itgraph.tg import backfill as backfill_module
 from itgraph.tg import pacing as pacing_module
-from itgraph.tg.backfill import backfill_channel, backfill_channels
+from itgraph.tg.backfill import (
+    RequestTimedOut,
+    backfill_channel,
+    backfill_channels,
+    waiting_out_floods,
+)
 from itgraph.tg.floods import FloodRecorder
 
 NOTES = FakeChannel(1000000001, "example_notes", "Example Notes")
@@ -78,8 +85,6 @@ def no_long_pauses(monkeypatch: pytest.MonkeyPatch) -> None:
     Tests that care about the band want the band; the long pause has its
     own test.
     """
-    from itgraph.config import settings
-
     monkeypatch.setattr(settings, "pacing_long_pause_chance", 0.0)
 
 
@@ -1169,3 +1174,130 @@ async def test_a_halted_run_resumes_from_its_cursor(
         997,
         996,
     ]
+
+
+# --- the request deadline ---------------------------------------------
+#
+# Every Telegram request in the project goes through
+# `waiting_out_floods`, so these are about every command, not only the
+# walk. They exist because a request can wait forever without failing:
+# Telethon accepts one while it is reconnecting, queues it, and — if
+# that reconnect then fails for good — fails only the requests it had
+# already put on the wire. One still in the send queue is never failed
+# and never sent. On 13 August 2026 that stopped collection for 67
+# hours inside a single `await`.
+
+
+async def test_a_request_that_never_answers_is_abandoned(
+    inventory: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The deadline is the whole fix: an await that cannot last forever."""
+    monkeypatch.setattr(settings, "request_timeout_seconds", 0.05)
+
+    async def never_answers() -> None:
+        await asyncio.Event().wait()
+
+    with pytest.raises(RequestTimedOut):
+        await waiting_out_floods(
+            never_answers,
+            FloodRecorder(inventory, CollectionCommand.BACKFILL),
+        )
+
+
+async def test_the_deadline_does_not_bound_a_flood_wait(
+    inventory: Database, slept: list[float], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The one property that must survive the deadline.
+
+    A rate limit is waited out without limit — that is the policy, and
+    it is the behaviour that keeps a limit from escalating into a ban.
+    So the wait happens outside the timeout scope, and a FloodWait far
+    longer than the deadline is still slept off in full and the request
+    retried afterwards.
+    """
+    monkeypatch.setattr(settings, "request_timeout_seconds", 0.05)
+    attempts = 0
+
+    async def flooded_once() -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise FloodWaitError(request=None, capture=600)
+        return "the answer"
+
+    got = await waiting_out_floods(
+        flooded_once, FloodRecorder(inventory, CollectionCommand.BACKFILL)
+    )
+
+    assert got == "the answer"
+    assert 600 in slept
+    assert attempts == 2
+
+
+async def test_each_attempt_gets_a_fresh_deadline(
+    inventory: Database, slept: list[float], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The scope opens inside the retry loop, not around it.
+
+    Around it, the time spent waiting out the first rate limit would
+    come off the second attempt's deadline — so a slept-off wait would
+    make the retry it exists to enable more likely to be abandoned.
+    """
+    monkeypatch.setattr(settings, "request_timeout_seconds", 0.2)
+    attempts = 0
+
+    async def slow_after_a_flood() -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise FloodWaitError(request=None, capture=600)
+        await asyncio.sleep(0.1)
+        return "the answer"
+
+    # The real sleep, so the second attempt genuinely spends time.
+    monkeypatch.setattr(backfill_module.asyncio, "sleep", asyncio.sleep)
+
+    assert (
+        await waiting_out_floods(
+            slow_after_a_flood,
+            FloodRecorder(inventory, CollectionCommand.BACKFILL),
+        )
+        == "the answer"
+    )
+
+
+async def test_a_request_that_answers_is_untouched(
+    inventory: Database,
+) -> None:
+    """The deadline is not in the way of the ordinary case."""
+    assert (
+        await waiting_out_floods(
+            _answers, FloodRecorder(inventory, CollectionCommand.BACKFILL)
+        )
+        == "the answer"
+    )
+
+
+async def test_the_operations_own_timeout_is_not_relabelled(
+    inventory: Database,
+) -> None:
+    """A `TimeoutError` from inside is reported as what it is.
+
+    Only this scope's own expiry becomes `RequestTimedOut`, which
+    carries a deadline in its message; anything else would be claiming
+    a deadline the request never reached.
+    """
+
+    async def times_out_on_its_own() -> None:
+        raise TimeoutError("something else timed out")
+
+    with pytest.raises(TimeoutError) as raised:
+        await waiting_out_floods(
+            times_out_on_its_own,
+            FloodRecorder(inventory, CollectionCommand.BACKFILL),
+        )
+    assert not isinstance(raised.value, RequestTimedOut)
+
+
+async def _answers() -> str:
+    return "the answer"

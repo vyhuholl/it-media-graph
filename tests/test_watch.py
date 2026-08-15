@@ -27,11 +27,19 @@ from itgraph.db.models import DiscoverySource
 from itgraph.db.poll import due_channels
 from itgraph.db.session import Database
 from itgraph.tg import watch as watch_module
+from itgraph.tg.errors import WatchStalled
 from itgraph.tg.watch import watch
 
 FIRST = 1000000001
 SECOND = 1000000002
 NOW = datetime(2026, 8, 3, 12, 0, tzinfo=UTC)
+
+# A stall window a test can outlive, and enough cycles to outlive it.
+# The stall tests are the one place where running *past* the window is
+# the whole point: a test that finished inside it would pass whether or
+# not the loop counts an idle cycle as progress.
+STALL_MINUTES = 0.01
+CYCLES_PAST_A_STALL = 100
 
 
 @pytest.fixture(autouse=True)
@@ -39,6 +47,9 @@ def no_pacing(monkeypatch: pytest.MonkeyPatch) -> None:
     """The loop's politeness is tested in `test_pacing.py`, not by waiting."""
     monkeypatch.setattr(settings, "watch_request_delay", 0.0)
     monkeypatch.setattr(settings, "watch_tick_seconds", 0.01)
+    # The wait after a failed reconnect, for the same reason: a test
+    # about what the loop does next should not sit out the real delay.
+    monkeypatch.setattr(settings, "watch_reconnect_delay_seconds", 0.01)
     # Quiet hours off, so a test's outcome does not depend on the hour it
     # happens to run at.
     monkeypatch.setattr(settings, "watch_quiet_from_hour", 0)
@@ -589,3 +600,278 @@ async def test_a_flood_error_outside_the_window_is_a_failure(
     stats = await watch(client, database, max_cycles=1)
 
     assert stats.failed + stats.polled == 1
+
+
+# --- a lost connection -------------------------------------------------
+#
+# The failure these are written from: Telegram closed the connection,
+# Telethon accepted the loop's next request while reconnecting, the
+# reconnect failed for good, and the request was left in a queue nothing
+# drains. The `await` never returned. For 67 hours the process was a
+# live PID holding a lease and collecting nothing, and `Restart=always`
+# could not help because nothing had exited.
+
+
+async def test_a_disconnected_client_is_not_polled_over(
+    database: Database,
+) -> None:
+    """The check is before the queue is read, so no channel is reached.
+
+    A request on a client that has given up fails instantly. Twenty-five
+    of them is a whole batch marked failed, each pushed out by the
+    failure backoff, for an outage that was nothing to do with any of
+    those channels.
+    """
+    await seed(database, FIRST, SECOND)
+    client = client_for(
+        {FIRST: [fresh(10, 5, views=1)], SECOND: [fresh(20, 5, views=1)]},
+        connected=False,
+        connect_failures=5,
+    )
+
+    stats = await watch(client, database, max_cycles=2)
+
+    assert client.windows == []
+    assert stats.failed == 0
+    async with database.session() as session:
+        failures = await session.scalar(
+            text(
+                "SELECT coalesce(max(consecutive_failures), 0) FROM poll_state"
+            )
+        )
+    assert failures == 0
+
+
+async def test_the_loop_reconnects_and_then_polls(
+    database: Database,
+) -> None:
+    await seed(database, FIRST)
+    client = client_for({FIRST: [fresh(10, 5, views=1)]}, connected=False)
+
+    stats = await watch(client, database, max_cycles=2)
+
+    assert client.connects == 1
+    assert stats.reconnects == 1
+    assert stats.polled == 1
+    assert await snapshots(database) == [(FIRST, 10, 1, None, None, None)]
+
+
+async def test_a_reconnect_that_fails_is_retried_next_cycle(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No escalating backoff: the stall check is what ends an outage."""
+    monkeypatch.setattr(settings, "watch_reconnect_delay_seconds", 0.01)
+    await seed(database, FIRST)
+    client = client_for(
+        {FIRST: [fresh(10, 5, views=1)]}, connected=False, connect_failures=2
+    )
+
+    stats = await watch(client, database, max_cycles=4)
+
+    assert client.connects == 3
+    assert stats.reconnects == 1
+    assert stats.polled == 1
+
+
+async def test_a_connection_lost_mid_batch_stops_the_batch(
+    database: Database,
+) -> None:
+    """Per channel, not per cycle — that is the whole point of the check.
+
+    Checked once per batch, the 24 channels behind the one that lost the
+    connection would each be asked, each fail instantly, and each be
+    pushed out by the failure backoff.
+    """
+    await seed(database, FIRST, SECOND)
+    client = client_for(
+        {FIRST: [fresh(10, 5, views=1)], SECOND: [fresh(20, 5, views=1)]},
+        disconnect_after=1,
+    )
+
+    stats = await watch(client, database, max_cycles=1)
+
+    assert len(client.windows) == 1
+    assert stats.failed == 0
+    assert stats.polled == 1
+
+
+async def test_a_request_that_never_answers_does_not_hang_the_loop(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bug, in one test: the loop finishes rather than waiting forever."""
+    monkeypatch.setattr(settings, "request_timeout_seconds", 0.05)
+    await seed(database, FIRST)
+    client = client_for({FIRST: [fresh(10, 5, views=1)]}, hangs=True)
+
+    stats = await watch(client, database, max_cycles=1)
+
+    assert stats.timed_out == 1
+    assert stats.polled == 0
+
+
+async def test_a_timed_out_request_discards_the_connection(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reusing it would ask the next channel over a connection that just
+    proved it does not answer — a deadline each, all the way down the
+    batch, with the connection check never firing because the client
+    still calls itself connected."""
+    monkeypatch.setattr(settings, "request_timeout_seconds", 0.05)
+    await seed(database, FIRST, SECOND)
+    client = client_for(
+        {FIRST: [fresh(10, 5, views=1)], SECOND: [fresh(20, 5, views=1)]},
+        hangs=True,
+    )
+
+    stats = await watch(client, database, max_cycles=1)
+
+    assert client.disconnects == 1
+    assert client.is_connected() is False
+    # The batch stopped at the first one rather than spending a deadline
+    # on the second.
+    assert stats.timed_out == 1
+
+
+async def test_the_loop_recovers_after_a_timeout(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deadline is survivable: the next cycle reconnects and polls.
+
+    The channel that timed out is not the one re-polled — it was
+    rescheduled with its failure recorded, deliberately, so that a
+    channel which times out reliably cannot sit at the head of the queue
+    forever. What recovers is the loop.
+    """
+    monkeypatch.setattr(settings, "request_timeout_seconds", 0.05)
+    await seed(database, FIRST, SECOND)
+    # Only the first request wedges, so the recovery is a fact about the
+    # loop rather than a race against a timer.
+    client = client_for(
+        {FIRST: [fresh(10, 5, views=1)], SECOND: [fresh(20, 5, views=7)]},
+        hang_on_window={0},
+    )
+
+    stats = await watch(client, database, max_cycles=3)
+
+    assert stats.timed_out == 1
+    assert stats.polled == 1
+    assert client.connects == 1
+    assert await snapshots(database) == [(SECOND, 20, 7, None, None, None)]
+
+
+# --- the stall check ---------------------------------------------------
+
+
+async def test_a_loop_wedged_inside_one_await_stops(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The incident itself, and the reason the check is a separate task.
+
+    The loop is not slow here; it is *blocked*, inside a single await,
+    with no cycle to run a check in — which is what 13 August looked
+    like from inside the process. The deadline covers the one await we
+    know can do this. This covers the next one, wherever it turns out to
+    be: the guard is on a clock of its own, so it does not need the loop
+    to be alive in order to notice that it isn't.
+    """
+    monkeypatch.setattr(settings, "watch_stall_minutes", STALL_MINUTES)
+
+    async def never_returns(*args: Any, **kwargs: Any) -> Any:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(watch_module, "poll_channel", never_returns)
+    await seed(database, FIRST)
+    client = client_for({FIRST: [fresh(10, 5, views=1)]})
+
+    with pytest.raises(WatchStalled):
+        await watch(client, database, max_cycles=1)
+
+
+async def test_an_idle_loop_is_not_stalled(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing due is not the same as nothing working.
+
+    Run for longer than the stall window on purpose: a test that
+    finished inside it would pass whether or not an idle cycle counts as
+    progress, which is the only thing under test.
+    """
+    monkeypatch.setattr(settings, "watch_stall_minutes", STALL_MINUTES)
+    client = client_for({})
+
+    stats = await watch(client, database, max_cycles=CYCLES_PAST_A_STALL)
+
+    assert stats.cycles == CYCLES_PAST_A_STALL
+
+
+async def test_quiet_hours_are_not_a_stall(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "watch_stall_minutes", STALL_MINUTES)
+    monkeypatch.setattr(watch_module, "in_quiet_hours", lambda _: True)
+    await seed(database, FIRST)
+    client = client_for({FIRST: [fresh(10, 5, views=1)]})
+
+    stats = await watch(client, database, max_cycles=CYCLES_PAST_A_STALL)
+
+    assert client.windows == []
+    assert stats.cycles == CYCLES_PAST_A_STALL
+
+
+async def test_a_postponed_schedule_is_not_a_stall(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rate limit stops the work, deliberately. It must not stop the loop."""
+    monkeypatch.setattr(settings, "watch_stall_minutes", STALL_MINUTES)
+    await seed(database, FIRST)
+    client = client_for(
+        {FIRST: [fresh(10, 5, views=1)]},
+        flood_on_window={0: int(settings.flood_abort_threshold) + 60},
+    )
+
+    stats = await watch(client, database, max_cycles=CYCLES_PAST_A_STALL)
+
+    assert stats.postponed == 1
+
+
+async def test_a_working_loop_is_not_stalled(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A poll that concluded is progress, whatever it concluded.
+
+    Including a failure: the channel answered, and what it said was no.
+    """
+    monkeypatch.setattr(settings, "watch_stall_minutes", STALL_MINUTES)
+    await seed(database, FIRST)
+    client = client_for(
+        {FIRST: [fresh(10, 5, views=1)]},
+        raises_for={FIRST: ChannelPrivateError(request=None)},
+    )
+
+    stats = await watch(client, database, max_cycles=CYCLES_PAST_A_STALL)
+
+    assert stats.failed >= 1
+
+
+async def test_a_lost_lease_still_arrives_as_itself(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The failure the stall check must not have reshaped on its way out.
+
+    Running the loop beside a watchdog is what makes an unanticipated
+    wedge survivable, and it is also how a perfectly good error path
+    gets broken: under a `TaskGroup` this arrives as an `ExceptionGroup`,
+    misses the tuple `cli.py` catches, and prints a traceback where a
+    sentence used to be.
+    """
+    from itgraph.db.session_lease import LeaseLostError
+
+    class LostLease:
+        async def verify(self) -> None:
+            raise LeaseLostError("the session lease is no longer held")
+
+    await seed(database, FIRST)
+    client = client_for({FIRST: [fresh(10, 5, views=1)]})
+
+    with pytest.raises(LeaseLostError):
+        await watch(client, database, lease=LostLease(), max_cycles=1)  # type: ignore[arg-type]
