@@ -10,7 +10,12 @@ from sqlalchemy.engine import Connection, make_url
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from itgraph.config import settings
-from itgraph.db.backup import BackupError, full_kind, run_backup
+from itgraph.db.backup import (
+    BackupError,
+    full_kind,
+    is_empty_database,
+    run_backup,
+)
 from itgraph.db.guard import (
     SKIP_BACKUP,
     DestructiveMigrationError,
@@ -137,9 +142,23 @@ def backup_before_upgrade(url: str) -> None:
     A migration is exactly when structural damage happens, and it is rare
     and deliberate enough to be worth the wait. Fails closed: if the dump
     cannot be taken, the migration does not run either.
+
+    Except on a database that has no tables yet. That is the first
+    ``alembic upgrade`` of a new installation, and it has nothing to lose
+    — while pg_dump of it produces an archive the backup layer rejects as
+    empty, so demanding a dump there means a fresh install cannot bring
+    up its schema at all. The exception is exactly this case and no
+    wider: one table is enough to make the backup mandatory again.
     """
     if os.environ.get(SKIP_BACKUP) == "1":
         log.warning("%s=1 — migrating without a backup", SKIP_BACKUP)
+        return
+
+    if is_empty_database():
+        log.info(
+            "%s has no tables yet — nothing to back up",
+            make_url(url).database,
+        )
         return
 
     log.info("backing up %s before migrating", make_url(url).database)

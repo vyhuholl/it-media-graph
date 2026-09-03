@@ -12,7 +12,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from sqlalchemy.engine import make_url
 
+from itgraph.config import settings
 from itgraph.db import backup as backup_module
 from itgraph.db.backup import (
     STAMP_FORMAT,
@@ -22,6 +24,7 @@ from itgraph.db.backup import (
     full_kind,
     inventory_kind,
     is_due,
+    is_empty_database,
     latest_link,
     prune,
     run_backup,
@@ -214,6 +217,30 @@ def test_an_unreadable_archive_is_not_a_backup(
         take_backup(inventory_kind(), tmp_path, now=NOW)
 
 
+def test_an_empty_archive_is_not_a_backup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A dump of a database that should have tables and does not.
+
+    Restorable and worthless: the archive reads back fine and contains
+    nothing. `is_empty_database` is what separates this from a database
+    that legitimately has nothing in it yet.
+    """
+
+    def run(command: list[str], **kwargs: Any) -> Any:
+        if "pg_restore" in command:
+            return subprocess.CompletedProcess(
+                command, 0, "; Archive created at 2026-07-22\n", ""
+            )
+        kwargs["stdout"].write(b"PGDMP-pretend")
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr(backup_module.subprocess, "run", run)
+
+    with pytest.raises(BackupError, match="empty table of contents"):
+        take_backup(full_kind(), tmp_path, now=NOW)
+
+
 def test_nothing_is_pruned_when_the_dump_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -365,3 +392,63 @@ def test_an_unwritable_pointer_does_not_lose_the_backup(
 
     assert second.path.exists()
     assert not latest_link(tmp_path / "weekly", full_kind()).exists()
+
+
+# --- a database with nothing in it yet --------------------------------
+
+
+def counting(answer: str, code: int = 0) -> Any:
+    """A psql that answers the table count with ``answer``."""
+
+    def run(command: list[str], **kwargs: Any) -> Any:
+        assert "psql" in command
+        return subprocess.CompletedProcess(command, code, answer, "")
+
+    return run
+
+
+def test_a_database_without_tables_is_recognised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(backup_module.subprocess, "run", counting("0\n"))
+
+    assert is_empty_database()
+
+
+def test_one_table_is_enough_to_need_a_backup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(backup_module.subprocess, "run", counting("1\n"))
+
+    assert not is_empty_database()
+
+
+def test_an_unanswerable_question_does_not_skip_the_backup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Container down, database missing, psql absent — all the same.
+
+    Answering "empty" here would skip the dump on a guess, which is how
+    the one backup that mattered goes missing. Answering "not empty"
+    sends the caller to pg_dump, which fails with the real reason.
+    """
+    monkeypatch.setattr(backup_module.subprocess, "run", counting("", code=2))
+
+    assert not is_empty_database()
+
+
+def test_the_count_asks_the_database_the_url_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same database pg_dump would have dumped, not a default."""
+    seen: list[list[str]] = []
+
+    def run(command: list[str], **kwargs: Any) -> Any:
+        seen.append(command)
+        return subprocess.CompletedProcess(command, 0, "0\n", "")
+
+    monkeypatch.setattr(backup_module.subprocess, "run", run)
+    is_empty_database()
+
+    name = make_url(str(settings.database_url)).database
+    assert seen[0][seen[0].index("--dbname") + 1] == name

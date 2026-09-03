@@ -38,6 +38,7 @@ __all__ = [
     "BackupKind",
     "due_kinds",
     "is_due",
+    "is_empty_database",
     "latest_link",
     "prune",
     "run_backup",
@@ -187,6 +188,66 @@ def _pg_dump_command(kind: BackupKind) -> list[str]:
     for table in kind.tables or ():
         args += ["--table", table]
     return _exec_in_postgres(*args)
+
+
+# Tables only: an empty database still carries the catalog, and toast
+# tables (relkind 't') belong to tables that are already counted.
+TABLE_COUNT_QUERY = (
+    "SELECT count(*) FROM pg_class c "
+    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+    "WHERE c.relkind IN ('r', 'p') "
+    "AND n.nspname NOT IN ('pg_catalog', 'information_schema')"
+)
+
+
+def _psql_command(sql: str) -> list[str]:
+    url = make_url(str(settings.database_url))
+    return _exec_in_postgres(
+        "psql",
+        "--username",
+        url.username or "postgres",
+        "--dbname",
+        url.database or "postgres",
+        "--no-psqlrc",
+        "--tuples-only",
+        "--no-align",
+        "--command",
+        sql,
+    )
+
+
+def is_empty_database() -> bool:
+    """Whether the database holds no tables at all.
+
+    A database created a minute ago has nothing a dump could protect, and
+    pg_dump of one writes an archive with an empty table of contents —
+    which ``take_backup`` refuses, correctly: for a database that is
+    supposed to have tables, an empty archive means something went badly
+    wrong. So the two have to be told apart before the dump is taken, and
+    this is the question that tells them apart. It is asked only where a
+    backup precedes something else; a backup asked for on its own still
+    fails loudly on an empty database, because there the emptiness is the
+    news.
+
+    A question that cannot be answered — the container is not running,
+    the database does not exist, psql is missing — answers ``False``. The
+    dump then runs and fails with the real reason, which is the better
+    error; skipping a backup on a guess is how the one that mattered goes
+    missing.
+    """
+    result = subprocess.run(
+        _psql_command(TABLE_COUNT_QUERY),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        logger.debug(
+            "could not count tables: %s", result.stderr.strip() or "no output"
+        )
+        return False
+    return result.stdout.strip() == "0"
 
 
 def _verify(path: Path) -> int:
