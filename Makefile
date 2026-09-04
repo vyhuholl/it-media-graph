@@ -10,8 +10,16 @@ lint:
 typecheck:
 	$(RUN_CMD) mypy src/
 
+# The suite waits on Postgres round-trips far more than it computes, so
+# workers pay for themselves: 322 s serially, 49 s at eight. Eight and
+# not `auto`, which is one per core — past eight they queue on the one
+# Postgres container instead of getting faster (12 -> 57 s, 16 -> 71 s).
+# `make test WORKERS=0` runs in one process, which is how a failure is
+# read: xdist interleaves the output of eight.
+WORKERS ?= 8
+
 test:
-	$(RUN_CMD) pytest -q --cov=src
+	$(RUN_CMD) pytest -q -n $(WORKERS) --cov=src
 
 # -c: the config lives in deploy/ but this runs from the repo root, and
 # ansible-lint only looks in the cwd — without it the file is linted as
