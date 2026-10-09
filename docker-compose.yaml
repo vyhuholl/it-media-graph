@@ -40,3 +40,17 @@ services:
 
 volumes:
   pgdata:
+
+# A fixed subnet, outside 172.16.0.0/12. Left to itself Docker hands out
+# 172.18.0.0/16 here, and that is also where VPN clients put their TUN:
+# v2rayN's sing-box takes 172.18.0.1/30 and adds a policy rule sending
+# 172.18.0.0/30 into the tunnel ahead of the main table. The container's
+# 172.18.0.2 falls inside it, so the loopback port forwards into the VPN,
+# and every client dies on its very first packet with "unexpected
+# connection_lost()" while the healthcheck — run inside the container —
+# stays green. 10.64.0.0/10 is avoided too: that is Mullvad's.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 10.213.47.0/24
