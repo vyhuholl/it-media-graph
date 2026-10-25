@@ -13,10 +13,10 @@
 #   * stop the collector still running on the operator's machine. That
 #     stays a human decision, taken after the verification below passes.
 #
-# Usage:
-#   ansible-playbook -i inventory.ini playbook.yml --ask-vault-pass
-#   ansible-playbook -i inventory.ini playbook.yml --tags services
-#   ansible-playbook -i inventory.ini playbook.yml --tags verify
+# Usage, from the repository root (ansible.cfg lives there):
+#   ansible-playbook deploy/playbook.yml
+#   ansible-playbook deploy/playbook.yml --tags services
+#   ansible-playbook deploy/playbook.yml --tags verify
 
 - name: Deploy itgraph collection
   hosts: collector
@@ -40,10 +40,10 @@
           - bot_db_password is defined
         fail_msg: >-
           Set itgraph_session_src and itgraph_dump_src in
-          group_vars/all/main.yml, and the secrets in
-          group_vars/all/secrets.vault.yml — note the `all/` directory,
-          a file named group_vars/secrets.vault.yml is read as variables
-          for a group called `secrets.vault` and silently ignored.
+          deploy/group_vars/all/main.yml, and the secrets in
+          deploy/group_vars/all/secrets.vault.yml — note the `all/`
+          directory, a file named group_vars/secrets.vault.yml is read as
+          variables for a group called `secrets.vault` and silently ignored.
           Nothing here can be invented for you.
         quiet: true
       tags: [always]

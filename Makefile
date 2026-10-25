@@ -25,8 +25,14 @@ test:
 # ansible-lint only looks in the cwd — without it the file is linted as
 # input instead of read as config, and `profile: production` is not
 # enforced at all.
+#
+# ANSIBLE_VAULT_PASSWORD_FILE: ansible.cfg points at deploy/.vault_pass,
+# and syntax-check refuses to start while that file is missing — a
+# fresh clone could not lint. The linter never decrypts anything (the
+# vault is excluded in .ansible-lint), so it gets a throwaway password
+# rather than the real one.
 ansible-lint:
-	$(RUN_CMD) ansible-lint -c deploy/.ansible-lint
+	ANSIBLE_VAULT_PASSWORD_FILE=deploy/.ansible-lint-vault-pass $(RUN_CMD) ansible-lint -c deploy/.ansible-lint
 
 validate: lint typecheck test ansible-lint
 

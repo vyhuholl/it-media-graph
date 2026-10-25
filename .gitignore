@@ -25,9 +25,8 @@ data/channel_report_*.md
 *.dump
 itgraph-backups/
 
-# Ansible secrets
+# Ansible inventory: the host's address
 inventory.ini
-secrets.vault.yml
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -249,8 +248,9 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Ansible: the vault password and any un-encrypted variables. The
-# encrypted vault file is ignored too — see the "Ansible secrets" block
-# near the top — so nothing about the proxy endpoint or the bot token
-# leaves this machine, and none of it rests on the cipher holding.
-deploy/.vault-pass
+# encrypted secrets.vault.yml is committed, and the repository is
+# public, so this password is the only thing keeping the bot token and
+# the proxy endpoint private. A pre-commit hook refuses it even when
+# force-added.
+deploy/.vault_pass
 deploy/group_vars/all/secrets.yml

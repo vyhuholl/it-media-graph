@@ -46,6 +46,7 @@ uv run itgraph --help    # CLI entrypoint (typer)
 - `.env`, `*.session`, `*.session-journal` — a session file is full account access
 - the Telegram **bot token**. Unlike the api hash it plausibly ends up on a machine you do not own, which is why the bot also gets its own database role: the role is what bounds the damage when the token leaks, and a token in a migration or a fixture defeats both
 - the **proxy password** (`PROXY_PASSWORD`), on the same footing as the api hash. It buys someone else a shared exit billed to the operator, and — worse — an address the collector's traffic is known to come from
+- the **vault password** (`deploy/.vault_pass`), or `deploy/group_vars/all/secrets.vault.yml` in plaintext. The vault is committed encrypted, and the repository is public: the password is all that stands between anyone and the bot token, the api hash and the proxy endpoint, and rotating it does not re-protect the ciphertext already in history. Pre-commit refuses both, so a hook failure there is never fixed by skipping the hook
 - any dump of the user's own subscriptions or real collected channel data
 - commenter user IDs or any other personal data; store hashed, keep out of git
 

@@ -4,16 +4,19 @@ Ansible-плейбук, поднимающий сбор на чистой Ubuntu
 `watch`, бот и четыре таймера — `derive && alerts`, `score`, ежедневный
 `baselines` и копии.
 
-```bash
-ansible-galaxy install -r requirements.yml
-cp inventory.ini.example inventory.ini            # вписать адрес и пользователя
-cp group_vars/all/secrets.vault.yml.example group_vars/all/secrets.vault.yml
-$EDITOR group_vars/all/secrets.vault.yml
-ansible-vault encrypt group_vars/all/secrets.vault.yml
-$EDITOR group_vars/all/main.yml                   # репозиторий, пути к сессии и дампу
+Все команды — из корня репозитория: `ansible.cfg` лежит там, и Ansible
+читает его только из текущего каталога.
 
-ansible-playbook playbook.yml --ask-vault-pass
+```bash
+ansible-galaxy install -r deploy/requirements.yml
+cp deploy/inventory.ini.example deploy/inventory.ini            # вписать адрес и пользователя
+pbpaste > deploy/.vault_pass && chmod 600 deploy/.vault_pass    # пароль vault из менеджера паролей
+$EDITOR deploy/group_vars/all/main.yml                          # репозиторий, пути к сессии и дампу
+
+ansible-playbook deploy/playbook.yml
 ```
+
+Секреты приезжают с клоном зашифрованными — см. «Секреты» ниже.
 
 Перед первым запуском снимите свежий дамп на рабочей машине — `watch` всё
 ещё пишет, и вчерашний уже отстал. Снимайте **после** остановки `watch`:
@@ -64,7 +67,7 @@ make backup-full
 ## Если разворачиваете на ноутбук
 
 ```yaml
-# group_vars/all/main.yml
+# deploy/group_vars/all/main.yml
 host_is_laptop: true
 ```
 
@@ -124,19 +127,51 @@ gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'no
 
 ## Секреты
 
-`group_vars/all/secrets.vault.yml` шифруется ansible-vault и **в репозиторий
-не попадает** — он в `.gitignore` вместе с `inventory.ini`. Так ничего не
-зависит от того, устоит ли шифр, и случайный `git add .` ничего не
-раскрывает.
+`deploy/group_vars/all/secrets.vault.yml` зашифрован ansible-vault и
+**коммитится**: свежий клон приезжает с секретами, нужен только пароль.
+Пароль лежит в `deploy/.vault_pass` (в `.gitignore`), `ansible.cfg` читает
+его сам, поэтому `--ask-vault-pass` не нужен. Копия пароля — в менеджере
+паролей; после клона:
 
-Обратная сторона: секреты **не резервируются репозиторием**. Свежий клон
-приезжает без них, а потеря этой машины — потеря их всех. Держите копию
-там же, где храните api hash.
+```bash
+pbpaste > deploy/.vault_pass && chmod 600 deploy/.vault_pass
+```
+
+Права `0600` — не формальность: исполняемый файл пароля Ansible не читает,
+а **запускает** как скрипт.
+
+**Репозиторий публичный, поэтому всё держится на пароле.** Шифротекст может
+скачать кто угодно и подбирать пароль офлайн сколько угодно, а ключ
+выводится всего десятью тысячами раундов PBKDF2. Пароль — только случайный
+из генератора, от 20 символов; запоминаемый не годится. И смена пароля не
+защищает старые коммиты: шифротекст каждой прежней версии остаётся в
+истории. Если пароль утёк, менять нужно **сами секреты** — токен бота,
+пароль прокси, пароли БД, — а не только пароль vault.
+
+Правка — `ansible-vault edit deploy/group_vars/all/secrets.vault.yml`,
+пароль подставится сам. Pre-commit не пропустит файл vault без заголовка
+`$ANSIBLE_VAULT` и не пропустит `.vault_pass` даже через `git add -f`.
+
+**Смена пароля — только с `--new-vault-id @prompt`:**
+
+```bash
+ansible-vault rekey --new-vault-id @prompt deploy/group_vars/all/secrets.vault.yml
+pbpaste > deploy/.vault_pass        # новый, из менеджера паролей
+```
+
+Без флага `rekey` берёт старый пароль из `.vault_pass`, нового не
+спрашивает, перешифровывает **тем же** паролем и пишет «Rekey successful».
+
+`make ansible-lint` настоящий пароль не получает: ему подсовывается
+заведомо фальшивый `deploy/.ansible-lint-vault-pass`, потому что без
+какого-нибудь файла пароля Ansible не запускает даже `syntax-check`, а
+расшифровывать линтеру нечего.
+
+В `.gitignore` остаются:
 
 ```
-inventory.ini
-secrets.vault.yml
-deploy/.vault-pass
+deploy/inventory.ini
+deploy/.vault_pass
 deploy/group_vars/all/secrets.yml
 ```
 
@@ -166,10 +201,10 @@ Ansible считает переменными группы `secrets.vault`. Та
 ## Отдельные части
 
 ```bash
-ansible-playbook playbook.yml --tags services   # только unit-файлы и перезапуск
-ansible-playbook playbook.yml --tags config     # только .env
-ansible-playbook playbook.yml --tags laptop     # только запрет засыпания
-ansible-playbook playbook.yml --tags verify     # только проверки
+ansible-playbook deploy/playbook.yml --tags services   # только unit-файлы и перезапуск
+ansible-playbook deploy/playbook.yml --tags config     # только .env
+ansible-playbook deploy/playbook.yml --tags laptop     # только запрет засыпания
+ansible-playbook deploy/playbook.yml --tags verify     # только проверки
 ```
 
 ## Что остаётся руками

@@ -14,6 +14,23 @@ repos:
 
   - repo: local
     hooks:
+      # The vault is committed encrypted, so a plaintext one is a leak
+      # that history keeps — and gitleaks passes the api hash and the
+      # proxy host in it.
+      - id: vault-encrypted
+        name: vault files are encrypted
+        entry: scripts/assert-vault-encrypted.sh
+        language: script
+        files: ^deploy/group_vars/.*vault\.yml$
+
+      # The password is what the public ciphertext rests on. It is
+      # git-ignored, and this catches the `git add -f`.
+      - id: no-vault-password
+        name: vault password is never committed
+        entry: never commit the vault password
+        language: fail
+        files: (^|/)\.vault_pass$
+
       - id: lint
         name: ruff
         entry: make lint
