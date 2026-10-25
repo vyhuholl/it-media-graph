@@ -1,0 +1,5 @@
+# GitHub Pages serves this folder as the project site: the pages the
+# YouTube API compliance audit points at. The roadmap lives here too, but
+# is a document of the repository, not a page of the site.
+exclude:
+  - PLAN.md

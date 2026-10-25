@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>itgraph Privacy Policy</title>
+  <meta name="description" content="What itgraph reads from YouTube and Telegram, what it keeps, for how long, and who sees it.">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <div class="page">
+    <header class="site">
+      <a class="name" href="./">itgraph</a>
+      <nav>
+        <a href="privacy.html">Privacy Policy</a>
+        <a href="terms.html">Terms of Use</a>
+        <a href="https://github.com/vyhuholl/it-media-graph">Source code</a>
+      </nav>
+    </header>
+
+    <main>
+      <h1>Privacy Policy</h1>
+      <p class="updated">Last updated: 25 October 2026</p>
+
+      <p>itgraph is a private analytics tool developed and operated by an individual developer (GitHub: <a href="https://github.com/vyhuholl">vyhuholl</a>). This policy explains what itgraph reads, what it keeps, for how long, and who sees it.</p>
+
+      <h2>itgraph uses YouTube API Services</h2>
+      <p>itgraph uses the YouTube API Services, specifically the YouTube Data API v3. Data obtained through them is also subject to the Google Privacy Policy: <a href="http://www.google.com/policies/privacy">http://www.google.com/policies/privacy</a>.</p>
+
+      <h2>What itgraph reads from YouTube</h2>
+      <p>Only public data, read with an API key. itgraph never signs in to anyone's YouTube or Google account, does not use OAuth, and has no access to private data. It reads:</p>
+      <ul>
+        <li><strong>About channels</strong> in its inventory: the channel ID, title, handle, description, declared country and language, public subscriber, video and view counts, and the ID of the channel's uploads playlist.</li>
+        <li><strong>About videos</strong> uploaded by those channels: the video ID, title, description, publication time, duration, live-broadcast details, and the public view, like and comment counts.</li>
+      </ul>
+      <p>itgraph does not read comments, and it reads no data about viewers, subscribers or commenters.</p>
+
+      <h2>How long it is kept</h2>
+      <ul>
+        <li><strong>Data read from YouTube</strong> (titles, handles, descriptions, counts) is kept in a separate set of tables. It is fetched again at most every 25 days, deleted if it has not been fetched again within 30 days, and deleted as soon as YouTube stops returning the channel or video. It is never included in backups.</li>
+        <li><strong>Statistics</strong> (view, like and comment counts, including readings taken at different ages of a video) are kept for at most 30 days. If YouTube accepts itgraph's analytics use case under its <a href="https://developers.google.com/youtube/terms/derived-metrics-policy">Additional policies on derived metrics and data storage</a>, statistics and the scores itgraph derives from them may be kept for up to 36 months. Titles, descriptions and other data stay under the 30-day rule in any case. This page will say so if that happens.</li>
+        <li><strong>itgraph's own records</strong> are kept for as long as the channel is in the inventory: the channel ID, and the reviewer's labels for it (kind of channel, language, in or out of scope, and a short note).</li>
+        <li><strong>A request journal</strong> records when each request to the YouTube Data API was made, which method, how many quota units it cost and whether it succeeded. It contains no data returned by YouTube.</li>
+        <li><strong>Review files.</strong> To label channels, the developer exports a file with channel titles and handles to their own computer. Such a file is deleted once its labels are applied, and itgraph refuses to apply one older than 30 days.</li>
+        <li><strong>Logs</strong> name channels by ID only.</li>
+      </ul>
+
+      <h2>How it is used and shared</h2>
+      <ul>
+        <li>The data is used to decide which channels are in scope and to recognise videos that are doing unusually well compared with the same channel's other videos at the same age.</li>
+        <li>Scores calculated by itgraph are labelled as calculated by itgraph and are always shown alongside the counts YouTube reports. They are never presented as YouTube metrics.</li>
+        <li>Alerts are delivered through the Telegram Bot API to a private Telegram chat whose members are invited by the developer. An alert contains the video title, a link to the video on YouTube, the counts YouTube reports, and itgraph's score. Telegram processes these messages under its own <a href="https://telegram.org/privacy">privacy policy</a>.</li>
+        <li>The database runs on a private computer reachable only by the developer. Nothing is sold, used for advertising, or shared with anyone else.</li>
+      </ul>
+
+      <h2>Members of the alert chat</h2>
+      <p>itgraph collects no information about the people in its chat. The bot answers only in the one chat it is configured for. When someone marks an alert as useful or not, itgraph records the verdict and the time, not who gave it.</p>
+
+      <h2>Visitors of this website</h2>
+      <p>This website is a set of static pages hosted on GitHub Pages. It sets no cookies and runs no analytics. GitHub may log visits under the <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement">GitHub General Privacy Statement</a>.</p>
+
+      <h2>Telegram</h2>
+      <p>itgraph also follows public Telegram channels. That part uses no YouTube data: it stores public posts of those channels and their public view, reaction and forward counts, and no data about their readers.</p>
+
+      <h2>Authorized Data</h2>
+      <p>itgraph does not use Authorized Data: it never asks anyone to grant it access to their account. If it ever did, that access could be revoked at any time through the Google security settings page at <a href="https://security.google.com/settings/security/permissions">https://security.google.com/settings/security/permissions</a>, in addition to asking the developer to delete the data.</p>
+
+      <h2>Contact</h2>
+      <p>Questions, complaints and requests about this policy or about data itgraph holds on a channel: open an issue at <a href="https://github.com/vyhuholl/it-media-graph/issues">github.com/vyhuholl/it-media-graph/issues</a>.</p>
+
+      <h2>Changes</h2>
+      <p>When this policy changes, the date at the top changes with it.</p>
+    </main>
+
+    <footer class="site">
+      <a class="badge" href="https://www.youtube.com/">
+        <picture>
+          <source srcset="assets/developed-with-youtube-sentence-case-light.png" media="(prefers-color-scheme: dark)">
+          <img src="assets/developed-with-youtube-sentence-case-dark.png" alt="Developed with YouTube" width="168" height="60">
+        </picture>
+      </a>
+      <span>itgraph is not affiliated with, sponsored or endorsed by YouTube or Google.<br>
+        <a href="privacy.html">Privacy Policy</a> · <a href="terms.html">Terms of Use</a></span>
+    </footer>
+  </div>
+</body>
+</html>
