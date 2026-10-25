@@ -103,6 +103,50 @@ async def test_the_reserve_is_out_of_reach(database: Database) -> None:
         await _book(database, 1)
 
 
+async def _book_watch(database: Database, units: int = 1) -> Booking:
+    return await book(
+        database,
+        command=YtCommand.WATCH,
+        method="videos.list",
+        units=units,
+        now=NOW,
+    )
+
+
+async def test_the_poll_loop_spends_its_own_share(database: Database) -> None:
+    booking = await _book_watch(database, 2)
+
+    assert booking.pool is YtQuotaPool.WATCH
+    async with database.session() as session:
+        general = await session.get(
+            YtQuotaDay, (date(2026, 10, 26), YtQuotaPool.GENERAL)
+        )
+    assert general is None
+
+
+async def test_the_poll_loop_cannot_reach_the_general_pool(
+    database: Database,
+) -> None:
+    await _book_watch(database, 3)
+
+    with pytest.raises(PoolSpentError, match="watch"):
+        await _book_watch(database, 1)
+
+    # General still has all seven, and stays the general pool's.
+    await _book(database, 7)
+
+
+async def test_the_general_pool_cannot_reach_the_poll_loops(
+    database: Database,
+) -> None:
+    await _book(database, 7)
+
+    with pytest.raises(PoolSpentError, match="general"):
+        await _book(database, 1)
+
+    await _book_watch(database, 3)
+
+
 async def test_the_refusal_says_when_spending_resumes(
     database: Database,
 ) -> None:
@@ -211,8 +255,13 @@ async def test_the_report(database: Database) -> None:
 
     assert report.day == date(2026, 10, 26)
     assert report.reset == datetime(2026, 10, 27, 7, 0, tzinfo=UTC)
-    [pool] = report.pools
-    assert (pool.pool, pool.spent, pool.cap) == (YtQuotaPool.GENERAL, 4, 7)
+    general, watch = report.pools
+    assert (general.pool, general.spent, general.cap) == (
+        YtQuotaPool.GENERAL,
+        4,
+        7,
+    )
+    assert (watch.pool, watch.spent, watch.cap) == (YtQuotaPool.WATCH, 0, 3)
     assert report.exhausted is None
     add, refresh = report.methods
     assert (add.command, add.requests, add.units, add.unknown) == (
@@ -228,5 +277,5 @@ async def test_an_empty_day_reports_zero(database: Database) -> None:
     async with database.session() as session:
         report = await quota_report(session, now=NOW)
 
-    assert [(use.spent, use.cap) for use in report.pools] == [(0, 7)]
+    assert [(use.spent, use.cap) for use in report.pools] == [(0, 7), (0, 3)]
     assert report.methods == []

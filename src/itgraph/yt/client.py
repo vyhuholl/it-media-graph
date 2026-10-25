@@ -12,7 +12,7 @@ httpx logs at INFO, so into journald on the host, on every request.
 What an answer means:
 
 - 200 is the body.
-- 404 is "no such channel", returned as ``None``.
+- 404 is "no such channel, playlist or video", returned as ``None``.
 - 403 ``quotaExceeded`` ends the quota day for every command: recorded,
   never retried.
 - 5xx and 429 are retried, each attempt booked again.
@@ -55,7 +55,11 @@ KEY_HEADER = "x-goog-api-key"
 # Units per call, from the API reference. A method missing here cannot
 # be called at all, which is the point: a request whose price nobody
 # looked up is a request the ledger cannot book honestly.
-COSTS: Mapping[str, int] = {"channels.list": 1}
+COSTS: Mapping[str, int] = {
+    "channels.list": 1,
+    "playlistItems.list": 1,
+    "videos.list": 1,
+}
 
 # Attempts at one request, and the wait before each attempt after the
 # first. Three, because a 5xx from Google is nearly always one bad

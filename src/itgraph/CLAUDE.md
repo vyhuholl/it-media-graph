@@ -13,7 +13,8 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `yt_entries.py` | The same door for YouTube: pasted handles, links and ids → the three lookups `channels.list` can make; `/c/`, vanity and video links refused together, before anything is spent |
 | `schedule.py` | When a post is read again and a channel looked at; pure arithmetic. A missed sample is skipped, never replayed |
 | `yt_policy.py` | What the YouTube Developer Policies fix, as constants: the 30-day retention. Not settings — they are not ours to raise |
-| `yt_quota.py` | The YouTube quota day (Pacific date, 23 or 25 hours twice a year), its reset, and the general pool's cap; pure arithmetic |
+| `yt_quota.py` | The YouTube quota day (Pacific date, 23 or 25 hours twice a year), its start and reset, and the general pool's cap; pure arithmetic |
+| `yt_schedule.py` | When a YouTube video is read again and a channel listed: age from a broadcast's actual start, upcoming broadcasts checked not read, the pool spread across the quota day, listing backoff; pure. Shares `schedule`'s rule, not its numbers |
 | `tg/client.py` | Telethon client lifecycle; the only place a `TelegramClient` is built |
 | `tg/dialogs.py` | The account's own subscriptions → inventory rows |
 | `tg/manual.py` | Channels named by hand → inventory rows; resolves, never joins |
@@ -28,13 +29,17 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `tg/` | MTProto collection: fetch and store raw payloads |
 | `yt/errors.py` | YouTube failures a caller names without importing the HTTP client |
 | `yt/client.py` | The only `httpx.AsyncClient`. Key in a header, never a URL; every request booked in the ledger before it is sent; what each answer means |
-| `yt/channels.py` | `channels.list` by ids (fifty a call; a 404 batch asked again id by id), by handle, by legacy name; the parts requested |
+| `yt/channels.py` | `channels.list` by ids (fifty a call; a 404 batch asked again id by id), by handle, by legacy name; the parts and `fields` requested — exactly the privacy policy's list |
+| `yt/uploads.py` | `playlistItems.list`: a channel's newest fifty uploads, ids and dates only; a playlist not found or not accessible is that channel's failure |
+| `yt/videos.py` | `videos.list` by ids, fifty a call whatever the channels; a 404 batch asked again id by id; the parts and `fields` the privacy policy lists |
 | `yt/add.py` | The import pass: entries → ids → records, unreviewed. What the inventory already answers costs nothing; every call committed before the next, so the same input resumes |
 | `yt/refresh.py` | The refresh pass: every payload due, fifty a call, whatever the status; gone and back; progress committed per call. Logs ids only |
-| `yt/` | YouTube Data API collection: fetch channel resources and store them |
+| `yt/watch.py` | One pass of the YouTube poll loop, under its lock: every seed asked for, uploads listed when the video count moved or the daily check is due, due videos read fifty a request; a moved count is a debt until its videos are stored; a spent pool ends a pass quietly. Logs ids only |
+| `yt/` | YouTube Data API collection: fetch channels, uploads and videos, and store them |
 | `derive/references.py` | Pure parsing of a payload — or of plain text — into the channels it references |
 | `derive/edges.py` | The derivation pass: raw messages → edges; touches no network |
 | `derive/metrics.py` | Pure reading of a payload into the four counters; absent is never zero |
+| `derive/yt_videos.py` | Pure reading of a YouTube video payload: the facts the schedule runs on, and the three counters a reading records; absent is never zero, and no format is inferred |
 | `derive/` | Deriving graph data from the raw layer |
 | `affiliation/signals.py` | The five signals that suggest two channels share an author; pure functions over mappings. Holds a second, deliberately looser handle pattern — it may not be pointed at `derive/references.py`, and the docstring says why |
 | `affiliation/detect.py` | Merging the signals into one ranked candidate list; the parameters and their validation |
@@ -66,7 +71,9 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `db/poll.py` | The poll queue: which channel is due, and when it is due again. Timing only |
 | `db/floods.py` | The record of rate limits: one row per wait, and the two questions asked of it |
 | `db/yt_channels.py` | The YouTube inventory: records (the operator's, never deleted) and payloads (YouTube's, 30 days at most); creation, expiry, gone and back, what is due for refresh, review, listing |
-| `db/yt_quota.py` | The YouTube quota ledger: booking before sending, in a transaction that commits first; the journal; exhaustion; the day's report. Units are never returned |
+| `db/yt_videos.py` | The poll loop's videos: payloads with their schedule, readings appended beside them, what is due, forgetting a video whole, expiry — 30 days, or 36 months for readings once acceptance is recorded in `yt_policy` |
+| `db/yt_watch.py` | The poll loop's own records: listings owed, made and failed, one row per pass, and the lock — an advisory `bigint` key that never meets Telegram's session lease |
+| `db/yt_quota.py` | The YouTube quota ledger: booking before sending, in a transaction that commits first; the pool a command spends from, by table — the poll loop its reserve, everything else the general pool, no borrowing; the journal; exhaustion; the day's report. Units are never returned |
 | `db/backfill.py` | Which channels to walk, how far each got, and why one stopped |
 | `db/backup.py` | Dumps, the schedule that picks which, and the pruning |
 | `db/session_lease.py` | The exclusive claim on the session file, as a Postgres advisory lock |

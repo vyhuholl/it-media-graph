@@ -67,6 +67,26 @@ def test_a_post_past_the_horizon_is_finished() -> None:
     assert next_sample_at(PUBLISHED, at(days=9)) is None
 
 
+def test_a_caller_may_bring_its_own_offsets_and_horizon() -> None:
+    """What YouTube shares: the rule, with numbers of its own."""
+    days = (timedelta(days=1), timedelta(days=7), timedelta(days=28))
+    month = timedelta(days=29)
+
+    assert next_sample_at(
+        PUBLISHED, at(hours=50), offsets=days, horizon=month
+    ) == at(days=7)
+    assert (
+        next_sample_at(PUBLISHED, at(days=28), offsets=days, horizon=month)
+        is None
+    )
+    # The caller's horizon, not Telegram's 49 hours, ends the schedule.
+    two_days = timedelta(days=2)
+    assert (
+        next_sample_at(PUBLISHED, at(days=2), offsets=days, horizon=two_days)
+        is None
+    )
+
+
 def test_missed_samples_are_skipped_not_replayed() -> None:
     """The decision the whole module exists to state.
 

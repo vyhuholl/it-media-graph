@@ -13,6 +13,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Computed,
     Date,
     DateTime,
     Enum,
@@ -69,16 +70,22 @@ __all__ = [
     "RejectReason",
     "YtChannel",
     "YtChannelKind",
+    "YtChannelPoll",
     "YtCommand",
+    "YtDiscoveryPath",
     "YtDiscoverySource",
     "YtLang",
+    "YtPassOutcome",
     "YtQuotaDay",
     "YtQuotaExhausted",
     "YtQuotaPool",
     "YtRawChannel",
+    "YtRawVideo",
+    "YtRawVideoStat",
     "YtRejectReason",
     "YtRequest",
     "YtRequestOutcome",
+    "YtWatchPass",
 ]
 
 # Explicit constraint names, so autogenerate emits stable identifiers
@@ -445,12 +452,14 @@ class YtLang(enum.StrEnum):
 class YtQuotaPool(enum.StrEnum):
     """Which share of the daily quota a request is booked against.
 
-    ``GENERAL`` is every command but the poll loop. The loop's own pool
-    arrives with the loop; its reserve is already held out of
-    ``GENERAL`` by settings, so nothing written before it can spend it.
+    ``GENERAL`` is every command but the poll loop; ``WATCH`` is the poll
+    loop's alone, the reserve the general cap leaves out. Which one a
+    request books against follows from its command, never from a
+    caller's choice — see ``db/yt_quota.py``.
     """
 
     GENERAL = "general"
+    WATCH = "watch"
 
 
 class YtCommand(enum.StrEnum):
@@ -463,6 +472,35 @@ class YtCommand(enum.StrEnum):
 
     ADD = "add"
     REFRESH = "refresh"
+    WATCH = "watch"
+
+
+class YtDiscoveryPath(enum.StrEnum):
+    """How the poll loop found a video.
+
+    The loop's own telemetry, not YouTube's: which path is doing the
+    work. ``COUNT`` is a channel's video count having moved, ``CHECK``
+    the daily listing made whatever the count said, ``FIRST`` a
+    channel's first listing. Videos the check finds that the count did
+    not reveal are what the count misses.
+    """
+
+    FIRST = "first"
+    COUNT = "count"
+    CHECK = "check"
+
+
+class YtPassOutcome(enum.StrEnum):
+    """How one pass of the YouTube poll loop ended.
+
+    A pass refused because another was running records nothing: it did
+    nothing to record.
+    """
+
+    COMPLETE = "complete"
+    POOL_SPENT = "pool_spent"
+    EXHAUSTED = "exhausted"
+    FAILED = "failed"
 
 
 class YtRequestOutcome(enum.StrEnum):
@@ -1763,6 +1801,175 @@ class YtRawChannel(Base):
 
     def __repr__(self) -> str:
         return f"YtRawChannel(channel_id={self.channel_id!r})"
+
+
+class YtChannelPoll(Base):
+    """Where the poll loop stands with one channel's uploads.
+
+    Ours, and holds nothing YouTube said: times, a flag and a failure
+    count. The channel's video count, which decides whether its uploads
+    are listed, stays in ``YtRawChannel.payload`` — a copy here would be
+    a statistic outside the one place statistics may live.
+
+    ``list_owed`` is what makes a moved count survive a pass that stops
+    halfway. It is set in the transaction that replaces the payload and
+    cleared only once the videos the listing revealed are stored, so a
+    pass dying in between lists the channel again rather than finding
+    the new count already "seen".
+    """
+
+    __tablename__ = "yt_channel_polls"
+
+    channel_id: Mapped[str] = mapped_column(
+        ForeignKey("yt_channels.channel_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    # The last listing that succeeded, for any reason. NULL is a channel
+    # never listed: its next listing is its first.
+    listed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    list_owed: Mapped[bool] = mapped_column(server_default=false())
+    # The last listing tried, successful or not; with the failure count
+    # it is what a failing channel's backoff counts from.
+    attempted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer, server_default=text("0")
+    )
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+    def __repr__(self) -> str:
+        return f"YtChannelPoll(channel_id={self.channel_id!r})"
+
+
+class YtRawVideo(Base):
+    """The latest video resource YouTube returned, with the loop's schedule.
+
+    API data, so it lives under the 30-day rule: replaced by every
+    reading, expired 30 days after its last fetch, deleted the moment
+    YouTube stops returning the video. Everything the loop works out
+    from it — when the video is due, when and how it was found — is kept
+    in the same row and goes with it, so nothing derived from what
+    YouTube said can outlive what YouTube said.
+
+    ``channel_id`` is generated from the payload by Postgres rather than
+    written beside it, so the two cannot disagree; a video reassigned to
+    another channel moves with its next fetch. No foreign key: the new
+    channel need not be in the inventory.
+    """
+
+    __tablename__ = "yt_raw_videos"
+    __table_args__ = (
+        # The shape video ids have, not one the reference documents.
+        CheckConstraint("video_id ~ '^[0-9A-Za-z_-]{11}$'", name="id_shape"),
+        Index("ix_yt_raw_videos_fetched_at", "fetched_at"),
+        Index("ix_yt_raw_videos_channel_id", "channel_id"),
+        # Finished videos stay until they expire and are never due; the
+        # index holds only those still being read.
+        Index(
+            "ix_yt_raw_videos_due_at",
+            "due_at",
+            postgresql_where=text("due_at IS NOT NULL"),
+        ),
+    )
+
+    video_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    channel_id: Mapped[str | None] = mapped_column(
+        Text,
+        Computed("payload #>> '{snippet,channelId}'", persisted=True),
+    )
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    discovered_via: Mapped[YtDiscoveryPath] = mapped_column(
+        _pg_enum(YtDiscoveryPath, "yt_discovery_path")
+    )
+    # When the video is next read or, while its broadcast has not
+    # started, next asked about. NULL: finished — past the horizon, given
+    # up, or moved to a channel nobody watches.
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    def __repr__(self) -> str:
+        return f"YtRawVideo(video_id={self.video_id!r})"
+
+
+class YtRawVideoStat(Base):
+    """One reading of one video's counters, at one moment.
+
+    Append-only, never updated: the YouTube counterpart of
+    ``MessageMetric``. Statistics read with the key may be kept 30 days
+    (III.E.4.b), and each reading expires on its own clock — longer only
+    once the derived-metrics use case is accepted and the date is
+    recorded in ``yt_policy``. Counters only: the title is the video's,
+    and lives in its payload.
+
+    ``bigint``, because view counts pass 2³¹. NULL is absent — a counter
+    YouTube did not report — and never zero.
+    """
+
+    __tablename__ = "yt_raw_video_stats"
+    __table_args__ = (
+        Index("ix_yt_raw_video_stats_observed_at", "observed_at"),
+    )
+
+    # A reading of a video that is gone, or whose data expired, is a
+    # statistic of nothing: it goes with the video.
+    video_id: Mapped[str] = mapped_column(
+        ForeignKey("yt_raw_videos.video_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True
+    )
+    views: Mapped[int | None] = mapped_column(BigInteger)
+    likes: Mapped[int | None] = mapped_column(BigInteger)
+    comments: Mapped[int | None] = mapped_column(BigInteger)
+
+    def __repr__(self) -> str:
+        return (
+            f"YtRawVideoStat(video_id={self.video_id!r}, "
+            f"observed_at={self.observed_at})"
+        )
+
+
+class YtWatchPass(Base):
+    """What one pass of the YouTube poll loop did, and what it could not.
+
+    A pass is a oneshot under a timer, so there is no running process to
+    ask what it last did; this is where `yt watch-status` reads it from.
+    Counts of the loop's own work and its error, no API data.
+    """
+
+    __tablename__ = "yt_watch_passes"
+    __table_args__ = (Index("ix_yt_watch_passes_started_at", "started_at"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    outcome: Mapped[YtPassOutcome] = mapped_column(
+        _pg_enum(YtPassOutcome, "yt_pass_outcome")
+    )
+    channels: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    listed: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    list_failures: Mapped[int] = mapped_column(
+        Integer, server_default=text("0")
+    )
+    new_videos: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    readings: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    removed: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    deferred_checks: Mapped[int] = mapped_column(
+        Integer, server_default=text("0")
+    )
+    deferred_readings: Mapped[int] = mapped_column(
+        Integer, server_default=text("0")
+    )
+    error: Mapped[str | None] = mapped_column(Text)
+
+    def __repr__(self) -> str:
+        return (
+            f"YtWatchPass(started_at={self.started_at}, "
+            f"outcome={self.outcome.value!r})"
+        )
 
 
 class YtQuotaDay(Base):

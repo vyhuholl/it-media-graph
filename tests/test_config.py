@@ -330,6 +330,39 @@ def test_caps_leaving_the_general_pool_nothing_are_refused(
     assert YOUTUBE_KEY not in str(caught.value)
 
 
+def test_the_youtube_schedule_defaults_load(env: pytest.MonkeyPatch) -> None:
+    """Seventeen readings from an hour to four weeks, inside 29 days."""
+    settings = build()
+    offsets = settings.youtube_watch_sample_offsets
+    assert (offsets[0], offsets[-1], len(offsets)) == (60, 28 * 24 * 60, 17)
+    assert settings.youtube_watch_horizon_days == 29
+
+
+def test_a_youtube_horizon_at_the_last_reading_is_refused(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """The same unreachable reading Telegram's validator refuses."""
+    env.setenv("YOUTUBE_WATCH_HORIZON_DAYS", "28")
+
+    with pytest.raises(ValidationError) as caught:
+        build()
+
+    assert "youtube_watch_sample_offsets" in str(caught.value)
+    assert "youtube_watch_horizon_days" in str(caught.value)
+
+
+def test_unsorted_youtube_offsets_are_refused(env: pytest.MonkeyPatch) -> None:
+    env.setenv("YOUTUBE_WATCH_SAMPLE_OFFSETS", "[120,60]")
+    with pytest.raises(ValidationError, match="ascending"):
+        build()
+
+
+def test_an_empty_youtube_schedule_is_refused(env: pytest.MonkeyPatch) -> None:
+    env.setenv("YOUTUBE_WATCH_SAMPLE_OFFSETS", "[]")
+    with pytest.raises(ValidationError, match="empty"):
+        build()
+
+
 def test_the_default_caps_leave_six_thousand(env: pytest.MonkeyPatch) -> None:
     """10,000 less a 10% margin less the poll loop's 3,000."""
     from itgraph.yt_quota import general_cap

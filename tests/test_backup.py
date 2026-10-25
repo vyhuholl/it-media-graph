@@ -171,6 +171,32 @@ def test_no_dump_carries_youtube_api_data(
     assert dump_command[flag + 1] == "yt_raw_*"
 
 
+def test_the_pattern_reaches_every_table_of_youtube_api_data() -> None:
+    """Videos and readings are left out of dumps by name, and only they.
+
+    `pg_dump` matches `--exclude-table-data` the way a shell glob does, so
+    a new table of API data is covered only if it is named for it — and
+    one of the loop's own tables must not be, or a restore would lose
+    where the loop stood.
+    """
+    from fnmatch import fnmatchcase
+
+    from itgraph.db.backup import EXCLUDED_DATA
+    from itgraph.db.models import Base
+
+    def excluded(table: str) -> bool:
+        return any(fnmatchcase(table, pattern) for pattern in EXCLUDED_DATA)
+
+    youtube = {
+        table for table in Base.metadata.tables if table.startswith("yt_")
+    }
+    api_data = {"yt_raw_channels", "yt_raw_videos", "yt_raw_video_stats"}
+    assert api_data <= youtube
+    assert {table for table in youtube if excluded(table)} == api_data
+    assert not excluded("yt_channel_polls")
+    assert not excluded("yt_watch_passes")
+
+
 def test_a_dump_is_read_back_before_it_counts(
     tmp_path: Path, fake_run: list[list[str]]
 ) -> None:

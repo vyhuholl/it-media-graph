@@ -802,6 +802,8 @@
         - itgraph-backup.timer
         - itgraph-yt-refresh.service
         - itgraph-yt-refresh.timer
+        - itgraph-yt-watch.service
+        - itgraph-yt-watch.timer
       register: unit_files
       notify: Reload systemd
       tags: [services]
@@ -888,16 +890,20 @@
         - itgraph-backup.timer
       tags: [services]
 
-    # Only where there is a key to refresh with. Without one the refresh
-    # would fail every day, and a unit that always fails is one nobody
+    # Only where there is a key to refresh and poll with. Without one both
+    # would fail every time, and a unit that always fails is one nobody
     # reads the failures of. Disabled again if the key is taken away, so
-    # the timer always says whether YouTube data is being kept current.
-    - name: YouTube refresh timer
+    # the timers always say whether YouTube data is being kept current
+    # and new videos read.
+    - name: YouTube timers
       become: true
       ansible.builtin.systemd_service:
-        name: itgraph-yt-refresh.timer
+        name: "{{ item }}"
         enabled: "{{ youtube_api_key | default('') | length > 0 }}"
         state: "{{ 'started' if youtube_api_key | default('') | length > 0 else 'stopped' }}"
+      loop:
+        - itgraph-yt-refresh.timer
+        - itgraph-yt-watch.timer
       tags: [services]
 
     # -------------------------------------------------------------- verify

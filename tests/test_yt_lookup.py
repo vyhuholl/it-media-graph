@@ -14,7 +14,7 @@ from ytfakes import (
 
 from itgraph.db.models import YtCommand
 from itgraph.db.session import Database
-from itgraph.yt.channels import PARTS, by_handle, by_ids, by_username
+from itgraph.yt.channels import FIELDS, PARTS, by_handle, by_ids, by_username
 from itgraph.yt.client import YouTube, youtube
 
 
@@ -46,6 +46,7 @@ async def test_a_hundred_ids_make_two_requests(database: Database) -> None:
     # It defaults to five; whether it caps an id lookup is undocumented.
     assert first["maxResults"] == "50"
     assert first["part"] == PARTS
+    assert first["fields"] == FIELDS
 
 
 async def test_an_id_youtube_does_not_return_is_absent(
@@ -122,3 +123,29 @@ async def test_a_legacy_name(database: Database) -> None:
     assert found is not None and found["id"] == channel_id(1)
     assert missing is None
     assert fake.params()[0]["forUsername"] == "OldName"
+
+
+async def test_every_lookup_asks_for_the_declared_fields_only(
+    database: Database,
+) -> None:
+    """The privacy policy lists what is read; `fields` is what holds the
+    request to that list inside the parts."""
+    fake = FakeYouTube(
+        channel_resource(1, handle="fakeone"),
+        channel_resource(2),
+        legacy={"OldName": channel_id(2)},
+        batch_404=True,
+    )
+
+    async with client(database, fake) as yt:
+        await by_ids(yt, [channel_id(1), channel_id(3)])
+        await by_handle(yt, "fakeone")
+        await by_username(yt, "OldName")
+
+    # The 404 batch, its two retries, the handle and the legacy name.
+    assert len(fake.requests) == 5
+    for params in fake.params():
+        assert params["part"] == "snippet,contentDetails,statistics"
+        assert params["fields"] == FIELDS
+    assert "brandingSettings" not in FIELDS
+    assert "thumbnails" not in FIELDS

@@ -1637,34 +1637,43 @@ def floods(
 # --- YouTube ------------------------------------------------------------
 #
 # A sub-app of its own, so `itgraph --help` keeps listing Telegram's
-# commands and `itgraph yt --help` lists YouTube's. Only `add` and
-# `refresh` make requests; everything else reads the database alone.
+# commands and `itgraph yt --help` lists YouTube's. Only `add`, `refresh`
+# and `watch` make requests; everything else reads the database alone.
 
 yt_app = typer.Typer(
     no_args_is_help=True,
-    help="Inventory and review of YouTube channels.",
+    help="Inventory and review of YouTube channels, and the poll loop.",
 )
 app.add_typer(yt_app, name="yt")
 
 
 async def _expire_youtube_data() -> None:
-    """Delete every YouTube payload past its 30 days.
+    """Delete every piece of YouTube data past its time.
 
-    Needs no key and no network: a payload past its 30 days is a
-    violation whether or not anything was going to read it.
+    Channel and video payloads at 30 days, readings at 30 days — or
+    longer, from the acceptance date, once one is recorded. Needs no key
+    and no network: data past its time is a violation whether or not
+    anything was going to read it.
     """
     from itgraph.db.session import Database
     from itgraph.db.yt_channels import purge_expired
+    from itgraph.db.yt_videos import purge_expired_videos
 
     database = Database()
     try:
         async with database.session() as session:
-            removed = await purge_expired(session)
+            channels = await purge_expired(session)
+            videos, readings = await purge_expired_videos(session)
     finally:
         await database.dispose()
-    if removed:
-        logging.getLogger(__name__).info(
-            "removed %d YouTube payloads older than 30 days", removed
+    log = logging.getLogger(__name__)
+    if channels:
+        log.info("removed %d YouTube channel payloads past 30 days", channels)
+    if videos or readings:
+        log.info(
+            "removed %d YouTube videos and %d readings past their time",
+            videos,
+            readings,
         )
 
 
@@ -1769,7 +1778,9 @@ def yt_refresh() -> None:
     than the refresh age (25 days by default) is asked for again, fifty
     channels a unit, whatever the channel's status. A channel YouTube no
     longer returns loses its data and is marked gone; its record and
-    review stay. Runs daily from a timer on the host.
+    review stay. Once the derived-metrics use case is accepted, finished
+    videos whose readings outlive 30 days are fetched again too. Runs
+    daily from a timer on the host.
     """
     from itgraph.db.models import YtCommand
     from itgraph.db.session import Database
@@ -1794,6 +1805,117 @@ def yt_refresh() -> None:
         if summary.stopped is not None:
             typer.secho(str(summary.stopped), fg=typer.colors.RED, err=True)
             raise typer.Exit(1)
+
+    _run_yt(run())
+
+
+@yt_app.command("watch")
+def yt_watch() -> None:
+    """One pass of the YouTube poll loop: new uploads, then due readings.
+
+    Asks for every seed channel, fifty a unit; lists a channel's uploads
+    when its video count has moved, and once a day regardless; reads every
+    video whose moment has come, fifty a unit. Runs every fifteen minutes
+    from a timer on the host.
+
+    A spent pool, a day YouTube declared over, or another pass already
+    running end it with status 0 and a sentence: those are expected, and
+    the next pass carries on. Anything else is a failure.
+    """
+    from itgraph.db.models import YtPassOutcome
+    from itgraph.db.session import Database
+    from itgraph.db.yt_watch import WatchBusyError
+    from itgraph.yt.watch import run_pass
+
+    async def run() -> None:
+        database = Database()
+        try:
+            record = await run_pass(database)
+        except WatchBusyError as exc:
+            typer.echo(str(exc))
+            return
+        finally:
+            await database.dispose()
+
+        typer.echo(record.line())
+        if record.outcome is YtPassOutcome.FAILED:
+            typer.secho(record.error or "-", fg=typer.colors.RED, err=True)
+            raise typer.Exit(1)
+        if record.error:
+            typer.echo(record.error)
+
+    _run_yt(run())
+
+
+@yt_app.command("watch-status")
+def yt_watch_status() -> None:
+    """What the YouTube poll loop is tracking, and what its last pass did.
+
+    Makes no request and takes no lock, so it answers while a pass runs.
+    The week's discoveries by path are how often the video count misses
+    an upload: what the daily check finds is what the count did not.
+    """
+    from itgraph.db.models import YtDiscoveryPath, YtQuotaPool
+    from itgraph.db.session import Database
+    from itgraph.db.yt_quota import pool_cap, pool_spent
+    from itgraph.db.yt_videos import (
+        count_due,
+        count_tracked,
+        discoveries_since,
+        oldest_due,
+    )
+    from itgraph.db.yt_watch import failing_channels, last_pass
+    from itgraph.yt_schedule import pace_allows
+
+    async def run() -> None:
+        now = datetime.now(UTC)
+        database = Database()
+        try:
+            spent = await pool_spent(database, YtQuotaPool.WATCH, now=now)
+            async with database.session() as session:
+                tracked = await count_tracked(session)
+                due = await count_due(session, now=now)
+                oldest = await oldest_due(session, now=now)
+                found = await discoveries_since(
+                    session, since=now - timedelta(days=7)
+                )
+                failing = await failing_channels(session)
+                latest = await last_pass(session)
+        finally:
+            await database.dispose()
+
+        cap = pool_cap(YtQuotaPool.WATCH)
+        typer.echo(f"{tracked} video(s) tracked, {due} due now")
+        if oldest is not None:
+            typer.echo(f"oldest overdue by {now - oldest}")
+        pace = "on pace" if pace_allows(spent, cap, now) else "ahead of pace"
+        typer.echo(f"watch pool: {spent} of {cap} units today, {pace}")
+        typer.echo(
+            "found in 7 days: "
+            f"{found[YtDiscoveryPath.COUNT]} by the video count, "
+            f"{found[YtDiscoveryPath.CHECK]} by the daily check, "
+            f"{found[YtDiscoveryPath.FIRST]} by first listings"
+        )
+        if failing:
+            typer.echo(f"{failing} channel(s) whose last listing failed")
+        if latest is None:
+            typer.echo("no pass has run yet")
+            return
+        typer.echo(
+            f"last pass {latest.started_at:%Y-%m-%d %H:%M} UTC, "
+            f"{latest.outcome.value}: listed {latest.listed}, "
+            f"new {latest.new_videos}, readings {latest.readings}, "
+            f"removed {latest.removed}"
+        )
+        if latest.deferred_checks or latest.deferred_readings:
+            typer.echo(
+                f"  deferred {latest.deferred_checks} checks and "
+                f"{latest.deferred_readings} readings"
+            )
+        if latest.list_failures:
+            typer.echo(f"  {latest.list_failures} listing(s) failed")
+        if latest.error:
+            typer.echo(f"  {latest.error}")
 
     _run_yt(run())
 

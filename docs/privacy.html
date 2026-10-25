@@ -20,7 +20,7 @@
 
     <main>
       <h1>Privacy Policy</h1>
-      <p class="updated">Last updated: 25 October 2026</p>
+      <p class="updated">Last updated: 26 October 2026</p>
 
       <p>itgraph is a private analytics tool developed and operated by an individual developer (GitHub: <a href="https://github.com/vyhuholl">vyhuholl</a>). This policy explains what itgraph reads, what it keeps, for how long, and who sees it.</p>
 
@@ -30,19 +30,19 @@
       <h2>What itgraph reads from YouTube</h2>
       <p>Only public data, read with an API key. itgraph never signs in to anyone's YouTube or Google account, does not use OAuth, and has no access to private data. It reads:</p>
       <ul>
-        <li><strong>About channels</strong> in its inventory: the channel ID, title, handle, description, declared country and language, public subscriber, video and view counts, and the ID of the channel's uploads playlist.</li>
-        <li><strong>About videos</strong> uploaded by those channels: the video ID, title, description, publication time, duration, live-broadcast details, and the public view, like and comment counts.</li>
+        <li><strong>About channels</strong> in its inventory: the channel ID, title, handle, description, declared country and language, public subscriber, video and view counts, whether the subscriber count is shown, and the ID of the channel's uploads playlist.</li>
+        <li><strong>About videos</strong> uploaded by those channels: the video ID and the ID of the channel it belongs to, title, description, publication time, duration, live-broadcast state and its scheduled and actual start and end times, and the public view, like and comment counts.</li>
       </ul>
       <p>itgraph does not read comments, and it reads no data about viewers, subscribers or commenters.</p>
 
       <h2>How long it is kept</h2>
       <ul>
-        <li><strong>Data read from YouTube</strong> (titles, handles, descriptions, counts) is kept in a separate set of tables. It is fetched again at most every 25 days, deleted if it has not been fetched again within 30 days, and deleted as soon as YouTube stops returning the channel or video. It is never included in backups.</li>
+        <li><strong>Data read from YouTube</strong> (titles, handles, descriptions, counts) is kept in a separate set of tables. Channel data is fetched again before it is 25 days old. Anything not fetched again within 30 days is deleted, and so is anything YouTube stops returning. It is never included in backups.</li>
         <li><strong>Statistics</strong> (view, like and comment counts, including readings taken at different ages of a video) are kept for at most 30 days. If YouTube accepts itgraph's analytics use case under its <a href="https://developers.google.com/youtube/terms/derived-metrics-policy">Additional policies on derived metrics and data storage</a>, statistics and the scores itgraph derives from them may be kept for up to 36 months. Titles, descriptions and other data stay under the 30-day rule in any case. This page will say so if that happens.</li>
         <li><strong>itgraph's own records</strong> are kept for as long as the channel is in the inventory: the channel ID, and the reviewer's labels for it (kind of channel, language, in or out of scope, and a short note).</li>
         <li><strong>A request journal</strong> records when each request to the YouTube Data API was made, which method, how many quota units it cost and whether it succeeded. It contains no data returned by YouTube.</li>
         <li><strong>Review files.</strong> To label channels, the developer exports a file with channel titles and handles to their own computer. Such a file is deleted once its labels are applied, and itgraph refuses to apply one older than 30 days.</li>
-        <li><strong>Logs</strong> name channels by ID only.</li>
+        <li><strong>Logs</strong> name channels and videos by ID only.</li>
       </ul>
 
       <h2>How it is used and shared</h2>

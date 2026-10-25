@@ -13,6 +13,7 @@ from typing import Any
 from itgraph.yt.client import YouTube
 
 __all__ = [
+    "FIELDS",
     "IDS_PER_CALL",
     "PARTS",
     "Resource",
@@ -25,13 +26,21 @@ Resource = dict[str, Any]
 
 METHOD = "channels.list"
 
-# What review needs and what the next changes need — the uploads
-# playlist lives in `contentDetails` — and no more. The price is per call,
-# not per part, so "greedy when collecting" would take everything; the
-# policies allow storing "limited amounts" of this data (III.E.4.d), and
-# `localizations` is the part nothing here would read.
-PARTS = (
-    "snippet,contentDetails,statistics,brandingSettings,status,topicDetails"
+# What review shows, what the poll loop needs — the video count that
+# triggers a listing, the uploads playlist it lists — and nothing else.
+# The price is per call, not per part, so "greedy when collecting" would
+# take everything; the policies allow "limited amounts" (III.E.4.d), and
+# the privacy policy lists what is read. `fields` holds the request to
+# that list inside the parts: a part alone would also bring thumbnails
+# and localizations, and the branding, status and topic parts this used
+# to ask for brought keywords, banners and flags nothing read and the
+# page never mentioned. A field added here is a line added there.
+PARTS = "snippet,contentDetails,statistics"
+FIELDS = (
+    "items(id,"
+    "snippet(title,description,customUrl,country,defaultLanguage),"
+    "contentDetails/relatedPlaylists/uploads,"
+    "statistics(viewCount,subscriberCount,hiddenSubscriberCount,videoCount))"
 )
 
 # The most `id` takes in one call. `maxResults` is set to the same: it
@@ -63,6 +72,7 @@ async def by_ids(youtube: YouTube, ids: Sequence[str]) -> dict[str, Resource]:
             METHOD,
             {
                 "part": PARTS,
+                "fields": FIELDS,
                 "id": ",".join(batch),
                 "maxResults": str(IDS_PER_CALL),
             },
@@ -70,7 +80,9 @@ async def by_ids(youtube: YouTube, ids: Sequence[str]) -> dict[str, Resource]:
         if body is None and len(batch) > 1:
             for one in batch:
                 found |= _resources(
-                    await youtube.get(METHOD, {"part": PARTS, "id": one})
+                    await youtube.get(
+                        METHOD, {"part": PARTS, "fields": FIELDS, "id": one}
+                    )
                 )
             continue
         found |= _resources(body)
@@ -80,12 +92,14 @@ async def by_ids(youtube: YouTube, ids: Sequence[str]) -> dict[str, Resource]:
 async def by_handle(youtube: YouTube, handle: str) -> Resource | None:
     """The channel holding this handle, or ``None``."""
     body = await youtube.get(
-        METHOD, {"part": PARTS, "forHandle": f"@{handle}"}
+        METHOD, {"part": PARTS, "fields": FIELDS, "forHandle": f"@{handle}"}
     )
     return next(iter(_resources(body).values()), None)
 
 
 async def by_username(youtube: YouTube, name: str) -> Resource | None:
     """The channel behind a legacy ``/user/`` name, or ``None``."""
-    body = await youtube.get(METHOD, {"part": PARTS, "forUsername": name})
+    body = await youtube.get(
+        METHOD, {"part": PARTS, "fields": FIELDS, "forUsername": name}
+    )
     return next(iter(_resources(body).values()), None)

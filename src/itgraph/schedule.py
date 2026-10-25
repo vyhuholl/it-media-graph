@@ -52,11 +52,17 @@ def horizon() -> timedelta:
     return timedelta(hours=settings.watch_horizon_hours)
 
 
+# What `next_sample_at` falls back to. A second name because its
+# parameter is called `horizon` too, and shadows the function inside it.
+_telegram_horizon = horizon
+
+
 def next_sample_at(
     published_at: datetime,
     now: datetime,
     *,
     offsets: Sequence[timedelta] | None = None,
+    horizon: timedelta | None = None,
 ) -> datetime | None:
     """When this post should next be read, or ``None`` if it is finished.
 
@@ -68,10 +74,15 @@ def next_sample_at(
     ``None`` once the post is past the last offset or past the horizon:
     it has stopped moving, and reading it again would cost a request to
     learn a number that no longer changes.
+
+    The offsets and the horizon default to Telegram's. YouTube passes its
+    own, which is the one part of this module the two platforms share —
+    the rule, not the numbers.
     """
     schedule = tuple(offsets) if offsets is not None else sample_offsets()
+    limit = horizon if horizon is not None else _telegram_horizon()
     age = now - published_at
-    if age >= horizon():
+    if age >= limit:
         return None
     for offset in schedule:
         if offset > age:

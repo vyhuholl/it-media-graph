@@ -1,0 +1,22 @@
+# {{ ansible_managed }}
+[Unit]
+Description=itgraph: one pass of the YouTube poll loop
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User={{ ansible_user }}
+WorkingDirectory={{ repo_dir }}
+# New uploads of the seed channels, then every video whose reading is
+# due. A spent quota pool, a day YouTube declared over, or a pass
+# already running exit 0: expected, and the next firing carries on.
+# Anything else exits non-zero with everything before it committed.
+ExecStart={{ uv }} run itgraph yt watch
+# A oneshot has no start timeout by default, and the timer never starts
+# a unit that is still active — so a hung pass would silently block
+# every later one. A pass takes seconds; the first one, listing every
+# seed, a few minutes. Killed, it loses at most the request in flight,
+# and its lock goes with its connection.
+TimeoutStartSec=10min

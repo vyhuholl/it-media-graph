@@ -12,7 +12,7 @@ request that timed out may or may not have been counted, so the ledger
 counts it. Overcounting costs headroom; undercounting costs the day.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 
@@ -33,6 +33,7 @@ from itgraph.db.session import Database
 from itgraph.yt_quota import general_cap, next_reset, quota_day
 
 __all__ = [
+    "POOL_OF",
     "Booking",
     "MethodUse",
     "PoolSpentError",
@@ -44,6 +45,7 @@ __all__ = [
     "check_not_exhausted",
     "describe_reset",
     "pool_cap",
+    "pool_spent",
     "quota_report",
     "record_exhaustion",
     "record_outcome",
@@ -93,11 +95,22 @@ class QuotaExhaustedError(QuotaError):
         self.reset = reset
 
 
+# Which pool each command spends from. A table rather than a parameter a
+# caller passes, so no call site can book the poll loop's work against
+# the general pool, or anything else against the loop's reserve. Neither
+# borrows from the other: the caps are settings, and borrowing would turn
+# a misjudged setting into an invisible one.
+POOL_OF: Mapping[YtCommand, YtQuotaPool] = {
+    YtCommand.ADD: YtQuotaPool.GENERAL,
+    YtCommand.REFRESH: YtQuotaPool.GENERAL,
+    YtCommand.WATCH: YtQuotaPool.WATCH,
+}
+
+
 def pool_cap(pool: YtQuotaPool) -> int:
     """What a pool may book in one quota day.
 
-    One pool today. The poll loop's arrives with it, taking exactly the
-    reserve the general cap already leaves out.
+    The poll loop's is exactly the reserve the general cap leaves out.
     """
     match pool:
         case YtQuotaPool.GENERAL:
@@ -106,6 +119,22 @@ def pool_cap(pool: YtQuotaPool) -> int:
                 settings.youtube_quota_margin,
                 settings.youtube_watch_reserve,
             )
+        case YtQuotaPool.WATCH:
+            return settings.youtube_watch_reserve
+
+
+async def pool_spent(
+    database: Database, pool: YtQuotaPool, *, now: datetime | None = None
+) -> int:
+    """What a pool has booked so far in the current quota day."""
+    moment = now or datetime.now(UTC)
+    async with database.session() as session:
+        spent = await session.scalar(
+            select(YtQuotaDay.spent).where(
+                YtQuotaDay.day == quota_day(moment), YtQuotaDay.pool == pool
+            )
+        )
+    return spent or 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,17 +168,18 @@ async def book(
     command: YtCommand,
     method: str,
     units: int,
-    pool: YtQuotaPool = YtQuotaPool.GENERAL,
     now: datetime | None = None,
 ) -> Booking:
     """Book a request's units, or refuse it. Commits before returning.
 
-    Raises ``QuotaExhaustedError`` on a day YouTube declared over, and
+    The pool is the command's, from ``POOL_OF``. Raises
+    ``QuotaExhaustedError`` on a day YouTube declared over, and
     ``PoolSpentError`` when the units would carry the pool past its cap.
     Either way nothing is written and the request must not be sent.
     """
     moment = now or datetime.now(UTC)
     day = quota_day(moment)
+    pool = POOL_OF[command]
     cap = pool_cap(pool)
     async with database.session() as session:
         if await session.get(YtQuotaExhausted, day) is not None:

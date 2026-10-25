@@ -9,7 +9,13 @@ A spent quota is not here. It is the ledger's to decide, and lives with
 it in ``db/yt_quota.py``.
 """
 
-__all__ = ["ApiError", "MissingKeyError", "RequestLimitReached", "YtError"]
+__all__ = [
+    "ApiError",
+    "ListingFailed",
+    "MissingKeyError",
+    "RequestLimitReached",
+    "YtError",
+]
 
 
 class YtError(RuntimeError):
@@ -60,3 +66,16 @@ class ApiError(YtError):
         )
         self.status = status
         self.reason = reason
+
+
+class ListingFailed(YtError):
+    """One channel's uploads could not be listed.
+
+    The channel's failure, not the pass's: a playlist answered not found
+    or not accessible says something about that channel and nothing
+    about the next one, so the poll loop records it and goes on.
+    """
+
+    def __init__(self, playlist_id: str, said: str) -> None:
+        super().__init__(f"could not list {playlist_id}: {said}")
+        self.said = said

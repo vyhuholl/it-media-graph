@@ -567,11 +567,10 @@ class Settings(BaseSettings):
     # a timeout Google never counted, a retry it did. A tenth keeps the
     # disagreement on our side of the line.
     youtube_quota_margin: float = Field(default=0.10, ge=0.0, lt=1.0)
-    # The poll loop's share, which no other command may spend. Reserved
-    # before the loop exists so that nothing written in the meantime
-    # learns to rely on spending it. PLAN.md estimates polling at about
-    # 2,000 a day; the headroom over that is a guess until the loop is
-    # measured.
+    # The poll loop's share, which no other command may spend, and the
+    # only one the loop may. Estimated at 1,830–2,500 units a day for
+    # 500 channels, of which discovery is most; the headroom over that
+    # is a guess until two weeks of `yt quota` measure it.
     youtube_watch_reserve: int = Field(default=3_000, ge=0)
     # How old a channel's payload may grow before the refresh asks for it
     # again. Strictly under the policy's 30 days — the difference is what
@@ -580,6 +579,54 @@ class Settings(BaseSettings):
     # One request. The API answers in well under a second; this bounds
     # only the request that never answers.
     youtube_request_timeout_seconds: float = Field(default=30.0, gt=0)
+
+    # --- the YouTube poll loop -----------------------------------------
+    #
+    # Telegram's rule with YouTube's numbers. A video is read at these
+    # ages, in minutes after its publication or its broadcast's start —
+    # dense in the first day, when a channel's subscribers are told, and
+    # thin after, because a YouTube view count keeps moving for weeks
+    # where a Telegram post's settles in hours. A reading missed is
+    # dropped, never taken late; see `itgraph.schedule`.
+    youtube_watch_sample_offsets: tuple[float, ...] = (
+        60,
+        120,
+        240,
+        480,
+        720,
+        1080,
+        1440,
+        2160,
+        2880,
+        4320,
+        5760,
+        7200,
+        10080,
+        14400,
+        20160,
+        30240,
+        40320,
+    )
+    # Past this age a video is not read again. Strictly past the last
+    # offset, or that reading could never be taken. Not a retention
+    # limit — a reading at day 28 may legally be kept to day 58 — but a
+    # usefulness one: under the base policies a video's whole trajectory
+    # exists only until its earliest reading turns 30 days old.
+    youtube_watch_horizon_days: float = Field(default=29.0, gt=0)
+    # How often every watched channel's uploads are listed whatever its
+    # video count says. The count is a cheap trigger, not the truth; this
+    # is what bounds a video it missed to a day.
+    youtube_watch_check_hours: float = Field(default=24.0, gt=0)
+    # When spending runs ahead of the day's pace, the daily check and the
+    # readings of videos older than this wait — the work whose lateness
+    # costs least.
+    youtube_watch_defer_older_than_days: float = Field(default=7.0, gt=0)
+    # How far ahead of an even spread across the quota day the loop may
+    # run before it starts deferring, as a share of its pool.
+    youtube_watch_pace_margin: float = Field(default=0.10, ge=0.0, le=1.0)
+    # How long after its scheduled start a broadcast that never started
+    # is still checked.
+    youtube_watch_upcoming_give_up_days: float = Field(default=7.0, gt=0)
 
     backup_dir: Path = DEFAULT_BACKUP_DIR
 
@@ -858,6 +905,37 @@ class Settings(BaseSettings):
                 f"{limit}: YouTube API data may be kept at most {limit} "
                 "days, so every payload would expire before it was "
                 "refreshed"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _youtube_schedule_is_reachable(self) -> Self:
+        """Refuse a reading schedule with a reading that cannot happen.
+
+        Telegram's three checks, for the same reasons: an empty schedule
+        stores videos and never reads them, an unsorted one skips
+        readings silently, and a horizon at or before the last offset
+        makes that reading unreachable — a video old enough for it is
+        already too old to be read.
+        """
+        offsets = self.youtube_watch_sample_offsets
+        if not offsets:
+            raise ValueError(
+                "youtube_watch_sample_offsets is empty: a video would be "
+                "tracked and then never read"
+            )
+        if list(offsets) != sorted(offsets):
+            raise ValueError(
+                "youtube_watch_sample_offsets must be in ascending order; "
+                "the schedule takes the first offset past a video's age and "
+                "an unsorted list would skip readings silently"
+            )
+        if offsets[-1] >= self.youtube_watch_horizon_days * 24 * 60:
+            raise ValueError(
+                f"the last youtube_watch_sample_offsets entry ({offsets[-1]} "
+                "min) is not inside youtube_watch_horizon_days "
+                f"({self.youtube_watch_horizon_days} d): a video old enough "
+                "for that reading would already be past the horizon"
             )
         return self
 

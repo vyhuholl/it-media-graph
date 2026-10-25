@@ -15,7 +15,7 @@ import httpx
 import pytest
 from sqlalchemy import func, select
 from typer.testing import CliRunner
-from ytfakes import channel_id, channel_resource
+from ytfakes import channel_id, channel_resource, video_id, video_resource
 
 from itgraph.cli import app
 from itgraph.config import settings
@@ -190,6 +190,86 @@ def test_every_yt_command_expires_old_payloads_first(
     assert asyncio.run(_payload_count(database_url)) == 0
 
 
+async def _videos_with_readings(database_url: str) -> None:
+    """Video 1 last fetched 31 days ago; video 2 fresh, with readings
+    taken 32 and 31 days ago."""
+    from itgraph.db.models import YtDiscoveryPath
+    from itgraph.db.yt_videos import VideoWrite, store_videos
+    from itgraph.derive.yt_videos import Counters
+
+    now = datetime.now(UTC)
+
+    def write(number: int) -> VideoWrite:
+        return VideoWrite(
+            video_id=video_id(number),
+            payload=video_resource(number, published=now - timedelta(days=33)),
+            due_at=None,
+            reading=Counters(views=1),
+            discovered_via=YtDiscoveryPath.FIRST,
+        )
+
+    database = Database(database_url)
+    try:
+        async with database.session() as session:
+            for number, days in ((1, 31), (2, 32), (2, 31), (2, 0)):
+                await store_videos(
+                    session,
+                    [write(number)],
+                    observed_at=now - timedelta(days=days),
+                )
+    finally:
+        await database.dispose()
+
+
+async def _video_counts(database_url: str) -> tuple[int, int]:
+    from itgraph.db.models import YtRawVideo, YtRawVideoStat
+
+    database = Database(database_url)
+    try:
+        async with database.session() as session:
+            videos = await session.scalar(
+                select(func.count()).select_from(YtRawVideo)
+            )
+            readings = await session.scalar(
+                select(func.count()).select_from(YtRawVideoStat)
+            )
+    finally:
+        await database.dispose()
+    return int(videos or 0), int(readings or 0)
+
+
+def test_every_yt_command_expires_old_videos_and_readings_first(
+    monkeypatch: pytest.MonkeyPatch, database_url: str, offline: None
+) -> None:
+    monkeypatch.setattr(settings, "youtube_api_key", None)
+    asyncio.run(_videos_with_readings(database_url))
+    use_test_database(monkeypatch, database_url)
+
+    result = runner.invoke(app, ["yt", "quota"])
+
+    assert result.exit_code == 0, result.output
+    # Video 1 gone with its reading; video 2 keeps only today's.
+    assert asyncio.run(_video_counts(database_url)) == (1, 1)
+
+
+def test_after_acceptance_readings_from_its_date_survive_expiry(
+    monkeypatch: pytest.MonkeyPatch, database_url: str, offline: None
+) -> None:
+    from itgraph import yt_policy
+
+    accepted = (datetime.now(UTC) - timedelta(days=31, hours=12)).date()
+    monkeypatch.setattr(yt_policy, "DERIVED_METRICS_ACCEPTED_ON", accepted)
+    asyncio.run(_videos_with_readings(database_url))
+    use_test_database(monkeypatch, database_url)
+
+    result = runner.invoke(app, ["yt", "quota"])
+
+    assert result.exit_code == 0, result.output
+    # The 31-day reading was taken on the acceptance date and stays; the
+    # 32-day one predates it and goes. Video 1's payload still expires.
+    assert asyncio.run(_video_counts(database_url)) == (1, 2)
+
+
 @pytest.mark.parametrize(
     "command",
     [
@@ -200,6 +280,8 @@ def test_every_yt_command_expires_old_payloads_first(
         "review-apply",
         "mark",
         "channels",
+        "watch",
+        "watch-status",
     ],
 )
 def test_help_needs_no_database(

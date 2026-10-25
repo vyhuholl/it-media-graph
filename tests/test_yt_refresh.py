@@ -17,6 +17,8 @@ from ytfakes import (
     error_body,
     no_sleep,
     use_key,
+    video_id,
+    video_resource,
 )
 
 from itgraph.cli import app
@@ -294,3 +296,80 @@ def test_the_command_refuses_to_start_on_an_exhausted_day(
     assert result.exit_code == 1
     assert "quotaExceeded" in result.stderr
     assert fake.requests == []
+
+
+# --- videos, once the derived-metrics use case is accepted ------------------
+
+
+async def _finished_video(
+    database: Database, number: int, *, fetched_at: datetime
+) -> None:
+    """A video past the horizon, last fetched (and read) at ``fetched_at``."""
+    from itgraph.db.models import YtDiscoveryPath
+    from itgraph.db.yt_videos import VideoWrite, store_videos
+    from itgraph.derive.yt_videos import Counters
+
+    async with database.session() as session:
+        await store_videos(
+            session,
+            [
+                VideoWrite(
+                    video_id=video_id(number),
+                    payload=video_resource(
+                        number, published=fetched_at - timedelta(days=28)
+                    ),
+                    due_at=None,
+                    reading=Counters(views=10),
+                    discovered_via=YtDiscoveryPath.FIRST,
+                )
+            ],
+            observed_at=fetched_at,
+        )
+
+
+async def test_a_mature_video_stays_attached_to_its_readings(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from itgraph import yt_policy
+    from itgraph.db.models import YtRawVideo, YtRawVideoStat
+
+    monkeypatch.setattr(
+        yt_policy,
+        "DERIVED_METRICS_ACCEPTED_ON",
+        (datetime.now(UTC) - timedelta(days=60)).date(),
+    )
+    await _finished_video(database, 1, fetched_at=STALE)
+    await _finished_video(database, 2, fetched_at=STALE)
+    fake = FakeYouTube(
+        videos=[video_resource(1, published=STALE - timedelta(days=28))]
+    )
+
+    async with client(database, fake) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert (summary.videos_due, summary.videos_refreshed) == (2, 1)
+    assert summary.videos_removed == 1
+    assert len(fake.calls("videos")) == 1
+    async with database.session() as session:
+        kept = await session.get(YtRawVideo, video_id(1))
+        gone = await session.get(YtRawVideo, video_id(2))
+        readings = await session.scalars(select(YtRawVideoStat.video_id))
+    assert kept is not None and kept.fetched_at > STALE
+    assert kept.due_at is None
+    assert gone is None
+    assert list(readings) == [video_id(1)]
+    assert "videos due 2, refreshed 1, removed 1" in summary.line()
+
+
+async def test_nothing_to_refresh_before_acceptance(
+    database: Database,
+) -> None:
+    await _finished_video(database, 1, fetched_at=STALE)
+    fake = FakeYouTube()
+
+    async with client(database, fake) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert summary.videos_due == 0
+    assert fake.calls("videos") == []
+    assert "videos" not in summary.line()

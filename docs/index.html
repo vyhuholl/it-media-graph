@@ -23,7 +23,7 @@
       <p class="lead">A private analytics tool that follows a hand-reviewed set of IT channels and flags the videos and posts their audiences are responding to unusually strongly right now.</p>
 
       <div class="panel">
-        <p><strong>Status, October 2026.</strong> itgraph has been running for public Telegram channels since summer 2026. The YouTube part is being built on the same approach: the channel inventory is in use; tracking video statistics and YouTube alerts are in development.</p>
+        <p><strong>Status, October 2026.</strong> itgraph has been running for public Telegram channels since summer 2026. The YouTube part is being built on the same approach: the channel inventory and the tracking of video statistics are in use; YouTube alerts are in development.</p>
       </div>
 
       <h2>What it does with YouTube</h2>
@@ -37,7 +37,7 @@
       <h2>How it uses the YouTube API Services</h2>
       <ul>
         <li>The YouTube Data API v3, authenticated with an API key. Public data only: itgraph never signs in to a YouTube or Google account, does not use OAuth, and does not access anyone's private data.</li>
-        <li>Methods: <code>channels.list</code> for the inventory; <code>playlistItems.list</code> and <code>videos.list</code> for new uploads and their statistics; <code>search.list</code> and <code>channelSections.list</code> for finding channels to review.</li>
+        <li>Methods: <code>channels.list</code> for the inventory and to notice new uploads; <code>playlistItems.list</code> and <code>videos.list</code> for new uploads and their statistics; <code>search.list</code> and <code>channelSections.list</code> for finding channels to review.</li>
         <li>Data read from YouTube is refreshed or deleted within 30 days and is never included in backups. What itgraph keeps beyond that are its own records: channel IDs and the reviewer's labels. The <a href="privacy.html">Privacy Policy</a> has the details.</li>
       </ul>
 

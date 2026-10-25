@@ -12,7 +12,13 @@ neither needs a special case.
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-__all__ = ["QUOTA_ZONE", "general_cap", "next_reset", "quota_day"]
+__all__ = [
+    "QUOTA_ZONE",
+    "day_start",
+    "general_cap",
+    "next_reset",
+    "quota_day",
+]
 
 QUOTA_ZONE = ZoneInfo("America/Los_Angeles")
 
@@ -20,6 +26,17 @@ QUOTA_ZONE = ZoneInfo("America/Los_Angeles")
 def quota_day(moment: datetime) -> date:
     """The Pacific date that spending at ``moment`` counts towards."""
     return moment.astimezone(QUOTA_ZONE).date()
+
+
+def day_start(moment: datetime) -> datetime:
+    """When the quota day containing ``moment`` began, in UTC.
+
+    The other end of ``next_reset``: together they give the day's real
+    length, 23 or 25 hours twice a year, which is what spreading a pool
+    across the day has to divide by.
+    """
+    midnight = datetime.combine(quota_day(moment), time(), tzinfo=QUOTA_ZONE)
+    return midnight.astimezone(UTC)
 
 
 def next_reset(moment: datetime) -> datetime:
