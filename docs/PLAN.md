@@ -204,8 +204,68 @@ Delivery shipped a week before the scoring that fills it, and deliberately: the 
 
 Comments sit after the alert bot rather than before it. They are the heaviest phase, the first to carry personal data at scale, and the questions they answer are partly covered by external analytics in the meantime — whereas post-level virality reuses history already collected and produces a working product on its own.
 
-Platform order after that: **YouTube → Threads → Instagram**, not the reverse. YouTube has a proper official API. Instagram and Threads are close to shut for third-party analysis — either grey scrapers that break constantly, or nothing. Assume Instagram may simply not be feasible at reasonable effort.
+Platform order after that: **YouTube → Threads → Instagram**, not the reverse. YouTube has a proper official API. Instagram and Threads are close to shut for third-party analysis — either grey scrapers that break constantly, or nothing. Assume Instagram may simply not be feasible at reasonable effort. X sits outside this order for a different reason: it is priced rather than closed (see "X, and why it waits" below).
+
+## YouTube
+
+The task as received on 2026-10-25: do for English-language IT YouTube and X what this project did for Russian-language IT Telegram — an inventory of 500+ channels or accounts each, and alerts on what is being watched, liked or discussed unusually heavily right now, delivered to a Telegram chat separate from the Telegram one. The small Russian-language IT YouTube and X come along as a by-product. YouTube goes first; X waits, for reasons of money rather than engineering. Spending is meant to be as close to zero as possible, and that one constraint decided the order.
+
+The seed set is assembled by hand, about a hundred channels from outside suggestions, because the operator's own subscriptions — the source of the Telegram seed — contain no English-language IT YouTube. A hand-assembled list from a language model carries renamed, dead and invented handles, so every entry is resolved through the API before it is stored, and what does not resolve is refused before anything else is spent.
+
+### Policy before engineering — the decision that has to come first
+
+The YouTube API Services Developer Policies collide with three things this plan treats as settled, and the collision is a decision for the operator and the manager, **not covered by the requirements**. It precedes the first change, because even the inventory stores channel titles.
+
+- **Nothing read with an API key may be kept longer than 30 days without being refreshed (III.E.4.d).** Titles, descriptions and channel names are "Non-Authorized Data": readable without the channel owner's credentials, and storable only temporarily — after 30 calendar days they are deleted or re-fetched. A raw layer where the first fetch wins forever is exactly what this forbids. Refreshing is cheap: a year of uploads for 500 channels is on the order of 75 thousand videos, 1.5 thousand units per 30-day cycle at 50 videos a unit. So it is a schedule rather than a blocker — but a YouTube raw layer is refreshed in place, a video deleted upstream is deleted here, and the root `CLAUDE.md` invariant "the raw layer is immutable" needs a YouTube-specific statement.
+- **Statistics read without authorization may not be stored beyond 30 days (III.E.4.b).** Replacing a mature video's count with its current one is a refresh and allowed; keeping the *history* of counts is not. Under the base rules the snapshot layer is a rolling 30-day window.
+- **No derived metrics, no aggregation across owners (III.E.4.h, III.E.2).** A z-score against a channel's expected value is a derived metric; a growth curve shared across channels aggregates data of different content owners. Under the base rules the scorer itself is the violation, whatever its retention.
+
+The way out is the *Additional policies on derived metrics and data storage*, added on 2026-05-04 and in force since 2026-06-01. They apply to audited developers with an analytics use case who applied through the standard quota extension request form. Custom scores, rankings and leaderboards ("Top YouTuber by View Growth" is the policy's own example) become permitted, and statistics and derived metrics may be kept for up to 36 months. Titles, descriptions and comment text stay under the 30-day rule regardless. What is not known: the review criteria, how long it takes, and whether an internal tool — a team chat with no public interface — is accepted at all. The policy draws no line between internal and public use.
+
+The options, then: apply, and run under the base rules until accepted (30-day snapshot window, refreshed raw layer, scoring held back); or proceed without applying and accept the risk the policy names — quota reduction or termination of API access for the project. Splitting the work across several API projects to escape either is out: one API client gets exactly one project (III.D.1.c), the same principle as never switching Telegram accounts to escape a limit.
+
+### What carries over, and what does not
+
+**Collection is the Data API v3 with an API key, and nothing in the Telegram account-safety section applies.** No user account, no session file, no lease against one, no shared-exit requirement. The laptop's always-on VPN covers reachability. The API key is a secret on the same footing as the api hash.
+
+**The budget is quota, not rate.** 10,000 units a day per project. `channels.list`, `playlistItems.list` and `videos.list` cost one unit per page of up to 50; `search.list` costs 100 and is separately capped at 100 calls a day. Quota resets at midnight Pacific time, so `quotaExceeded` means stop until the reset — waiting and retrying is the one response that cannot work, the same shape as Telegram's per-day quotas. Every networked command spends from one ledger, and the poll loop has a share the others cannot eat. Estimated, not yet measured: a year of history for 500 channels is about 3 thousand units, once; polling about a thousand live videos every 15 minutes is about 2 thousand a day; the 30-day refresh is about 1.5 thousand a cycle. That leaves headroom everywhere except search, which is the scarce resource and belongs to discovery alone.
+
+**Separate tables, not a platform column.** `tg_id bigint` is a primary or foreign key in about a dozen tables, `alerts` among them (it references `raw_messages`), and YouTube ids are strings — `UC…` for a channel, eleven characters for a video. Generalizing means migrating the working database under a live bot to gain nothing. What is shared is code, and only the pure part: `scoring/`, `schedule.py`, the bot's claim–send–mark loop. YouTube tables carry a `yt_` prefix; collection lives in `src/itgraph/yt/`, as Telegram's does in `tg/`.
+
+**The graph is thin, and the product is the alert.** YouTube has no repost. What references remain: `@handles` and channel links in descriptions, and links to another channel's video — a post-level edge, the nearest thing to a forward. Featured channels come through `channelSections` (whether the API still returns them is unverified). There is no counterpart to `channels.getChannelRecommendations`. So the snowball will be slower than Telegram's and reaching 500 will take more review by hand, and "who talks to whom" will be answered thinly. "What travels" is answered at full strength.
+
+**Three signals, not four.** Views, likes and comments; there is no forward. Each gets its own curve, as on Telegram, and the curves are measured, not borrowed: YouTube views accrue over days rather than the eight hours a Telegram post takes, so the polling horizon is longer than 48 hours by an amount to be measured. Shorts are a separate population — since 2025-03-31 their `viewCount` counts every play and replay with no minimum watch time — and the API has no flag that says a video is a Short, only heuristics. Streams and premieres have their own notion of when a video started.
+
+**The channel's own reference takes months, not weeks.** At one to three uploads a week, twenty of a channel's own videos at the same age take months of watching to collect. Hence the order below: the poll loop goes second, before the history walk, because it is the only part whose value accrues in wall-clock time, and the decomposition fallback carries scoring for longer than it did on Telegram.
+
+### Alerts
+
+The same bot, a separate chat per platform. YouTube gets its own queue table — the existing `alerts` table references Telegram's `raw_messages`, and an alert about a post nothing collected should stay unrepresentable — and its own chat id beside `alert_chat_id`. Where alerts about Russian-language YouTube go — the YouTube chat, a chat of their own, or nowhere — is open.
+
+### Order of changes
+
+| # | Change | What it delivers |
+|---|---|---|
+| 1 | `add-youtube-inventory` | API client, quota ledger, `yt_channels`, import and review of the seed list |
+| 2 | `add-youtube-snapshots` | The poll loop: new uploads and fresh counters, the snapshot layer, its systemd unit |
+| 3 | `add-youtube-backfill` | A year of uploads per channel; the mature baseline the fallback needs |
+| 4 | `add-youtube-mention-graph` | Description references → edges and pending mentions; no network |
+| 5 | `add-youtube-discovery` | Resolving pending mentions, featured channels, search; the loop to 500+ |
+| 6 | `route-alerts-by-platform` | The YouTube alert queue, a chat per platform, rendering, the bot role's grants |
+| 7 | `add-youtube-virality-scoring` | Curves, spreads and threshold measured on YouTube data; `scoring/` made platform-blind |
+
+The critical path is 1 → 2 → weeks of snapshots → 7; changes 3–5 fill that wait, and 6 fits anywhere before 7. Calibration follows scoring as its own change, as `calibrate-virality-scoring` did. Comments (`commentThreads`) stay out, for the same reasons as on Telegram: the heaviest phase and the first to carry personal data.
+
+### X, and why it waits
+
+X has the graph YouTube lacks — retweets, quotes, mentions and replies are a direct counterpart of forwards — and no free way to read it.
+
+- **The official API** is pay-per-use: $0.005 per post read, a post read twice inside one UTC day charged once, capped at 3 million post reads a month. Estimated for 500 accounts at about two posts a day each, replies excluded: about $1.8 thousand for a year of history, and $300–500 a month to poll.
+- **Resellers** quote about $0.15 per thousand tweets, which is cheap and grey: they resell scraping, and the prices come from reviews rather than their own pages.
+- **The free route** is an account-pool scraper (twscrape, Twikit). Against X's terms, the accounts get banned, it reportedly breaks every few weeks — and a pool of accounts *is* the switching of accounts to escape a limit that this project rules out on Telegram. Rejected.
+
+So X waits for a budget decision, or for a different reading of "Twitter". A good part of English-language tech moved to Bluesky, whose API is free, needs no authentication for reading, and has reposts and quotes. Whether the task means X specifically is a question for the manager.
 
 ## Legal note, briefly
 
-Commenter IDs and handles are personal data (152-FZ, and GDPR for any non-Russian scope). Store hashes, do not publish aggregates about individuals, stay at the channel level. Also, scraping is against Telegram's ToS — the account ban risk is the operator's own.
+Commenter IDs and handles are personal data (152-FZ, and GDPR for any non-Russian scope). Store hashes, do not publish aggregates about individuals, stay at the channel level. Also, scraping is against Telegram's ToS — the account ban risk is the operator's own. YouTube binds harder than that: its API Services Developer Policies are terms of access, not a ban risk, and they constrain storage and derived metrics directly (see "Policy before engineering").
