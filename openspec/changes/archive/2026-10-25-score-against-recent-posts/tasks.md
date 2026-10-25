@@ -39,8 +39,8 @@
 ## 6. Deploy
 
 - [x] 6.1 `deploy/group_vars/all/main.yml`: `baselines_schedule` daily at 04:30, and the default in `deploy/templates/itgraph-baselines.timer.j2` to match, so the two cannot disagree; `make ansible-lint`
-- [ ] 6.2 Upgrade the working database (the upgrade takes the dump), `itgraph baselines` once, read the summary
-- [ ] 6.3 The playbook applies the timer, rather than an edit by hand on the machine
+- [x] 6.2 Upgrade the working database (the upgrade takes the dump), `itgraph baselines` once, read the summary
+- [x] 6.3 The playbook applies the timer, rather than an edit by hand on the machine
 
 ## 7. Documentation and close-out
 
