@@ -10,8 +10,10 @@ names what the live pass named, and that nothing collected is touched.
 import json
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import text
 
+from itgraph.config import Settings, settings
 from itgraph.db.baselines import (
     count_in_scope,
     start_run,
@@ -35,6 +37,27 @@ CURVE = Curve(
     samples=dict.fromkeys(("15m", "48m", "105m", "420m"), 500),
 )
 EXPECTED_AT_2H = 1000.0 * 0.44 * 0.50
+
+# How many times its expectation a test's spike reaches: z = ln 6 / 0.38
+# = 4.7, past the shipped threshold with room to spare. A test about
+# folding or replay is not a test about where the threshold sits, and
+# a spike pitched just above it breaks the day the threshold moves.
+SPIKE = 6
+
+
+@pytest.fixture(autouse=True)
+def shipped_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The threshold the code ships with, not the one the host runs.
+
+    `conftest.py` loads `.env` for the database URL, and the operator's
+    `ALERT_SPIKE_Z` comes in with it — so without this, moving the
+    threshold on the host decides which of these tests pass.
+    """
+    monkeypatch.setattr(
+        settings,
+        "alert_spike_z",
+        Settings.model_fields["alert_spike_z"].default,
+    )
 
 
 async def seed_post(
@@ -180,7 +203,7 @@ async def alerts(database: Database) -> list[tuple[str, int, int, float]]:
 async def test_an_unusual_post_raises_an_alert(database: Database) -> None:
     await seed_post(database)
     await seed_baselines(database)
-    await snapshot(database, views=int(EXPECTED_AT_2H * 4))
+    await snapshot(database, views=int(EXPECTED_AT_2H * SPIKE))
 
     summary = await run_scoring(database, now=NOW)
 
@@ -248,7 +271,7 @@ async def seed_series(database: Database, *, posts: int = 3) -> None:
             database,
             msg_id=POST + index,
             published_ago=ago,
-            views=int(EXPECTED_AT_2H * 4),
+            views=int(EXPECTED_AT_2H * SPIKE),
         )
     await seed_baselines(database)
 
@@ -276,7 +299,7 @@ async def test_one_post_unusual_on_two_metrics_raises_one_alert(
     await seed_baselines(database, forwards_median=50.0)
     await snapshot(
         database,
-        views=int(EXPECTED_AT_2H * 4),
+        views=int(EXPECTED_AT_2H * SPIKE),
         forwards=int(50.0 * 0.44 * 0.50 * 20),
     )
 
@@ -292,7 +315,7 @@ async def test_a_re_run_raises_nothing(database: Database) -> None:
     """Safe on a short schedule: the constraint, not a flag."""
     await seed_post(database)
     await seed_baselines(database)
-    await snapshot(database, views=int(EXPECTED_AT_2H * 4))
+    await snapshot(database, views=int(EXPECTED_AT_2H * SPIKE))
 
     first = await run_scoring(database, now=NOW)
     second = await run_scoring(database, now=NOW)
@@ -311,7 +334,9 @@ async def test_a_later_spike_on_another_metric_is_a_separate_alert(
     await seed_post(database)
     await seed_baselines(database, forwards_median=50.0)
     await snapshot(
-        database, age=timedelta(hours=1), views=int(1000 * 0.44 * 0.33 * 4)
+        database,
+        age=timedelta(hours=1),
+        views=int(1000 * 0.44 * 0.33 * SPIKE),
     )
     await run_scoring(database, now=NOW)
 
@@ -359,7 +384,7 @@ async def test_an_album_raises_one_alert(database: Database) -> None:
     for offset in range(3):
         await seed_post(database, msg_id=POST + offset, album=777)
         await snapshot(
-            database, msg_id=POST + offset, views=int(EXPECTED_AT_2H * 4)
+            database, msg_id=POST + offset, views=int(EXPECTED_AT_2H * SPIKE)
         )
     await seed_baselines(database)
 
@@ -382,7 +407,7 @@ async def test_a_burst_raises_one_alert_under_its_first_message(
             database,
             msg_id=POST + offset,
             published_ago=ago,
-            views=int(EXPECTED_AT_2H * 4),
+            views=int(EXPECTED_AT_2H * SPIKE),
         )
     await seed_baselines(database)
 
@@ -421,8 +446,8 @@ async def test_channels_crossing_together_each_get_a_head(
     other = CHANNEL + 1
     await seed_post(database)
     await seed_post(database, channel=other)
-    await snapshot(database, views=int(EXPECTED_AT_2H * 4))
-    await snapshot(database, channel=other, views=int(EXPECTED_AT_2H * 4))
+    await snapshot(database, views=int(EXPECTED_AT_2H * SPIKE))
+    await snapshot(database, channel=other, views=int(EXPECTED_AT_2H * SPIKE))
     async with database.session() as session:
         run = await start_run(
             session,
@@ -461,7 +486,7 @@ async def test_a_later_crossing_folds_into_the_head_in_the_queue(
     """An event that keeps going is still one message."""
     await seed_post(database)
     await seed_baselines(database)
-    await snapshot(database, views=int(EXPECTED_AT_2H * 4))
+    await snapshot(database, views=int(EXPECTED_AT_2H * SPIKE))
     await run_scoring(database, now=NOW)
     await raised_at(database, NOW)
 
@@ -474,7 +499,7 @@ async def test_a_later_crossing_folds_into_the_head_in_the_queue(
         msg_id=POST + 1,
         published_ago=timedelta(minutes=60),
         age=timedelta(hours=2),
-        views=int(EXPECTED_AT_2H * 4),
+        views=int(EXPECTED_AT_2H * SPIKE),
     )
     summary = await run_scoring(database, now=later)
 
@@ -491,7 +516,7 @@ async def test_a_crossing_after_the_window_is_a_new_head(
     """Tomorrow's event is tomorrow's message."""
     await seed_post(database)
     await seed_baselines(database)
-    await snapshot(database, views=int(EXPECTED_AT_2H * 4))
+    await snapshot(database, views=int(EXPECTED_AT_2H * SPIKE))
     await run_scoring(database, now=NOW)
     await raised_at(database, NOW - timedelta(hours=7))
 
@@ -503,7 +528,7 @@ async def test_a_crossing_after_the_window_is_a_new_head(
         database,
         msg_id=POST + 1,
         published_ago=ago,
-        views=int(EXPECTED_AT_2H * 4),
+        views=int(EXPECTED_AT_2H * SPIKE),
     )
     summary = await run_scoring(database, now=NOW)
 
@@ -532,7 +557,7 @@ async def test_a_folded_post_is_not_raised_again_after_the_window(
             msg_id=msg,
             published_ago=ago,
             age=timedelta(hours=1),
-            views=int(1000 * 0.44 * 0.33 * 4),
+            views=int(1000 * 0.44 * 0.33 * SPIKE),
         )
     await seed_baselines(database)
     first = NOW - timedelta(hours=6, minutes=49)
@@ -545,7 +570,7 @@ async def test_a_folded_post_is_not_raised_again_after_the_window(
         msg_id=POST + 1,
         published_ago=published[POST + 1],
         age=timedelta(hours=7, minutes=40),
-        views=int(1000 * 0.44 * 0.96 * 4),
+        views=int(1000 * 0.44 * 0.96 * SPIKE),
     )
     summary = await run_scoring(database, now=NOW)
 
@@ -630,7 +655,7 @@ async def test_nothing_collected_is_modified(database: Database) -> None:
     """The pass reads the raw layer and the snapshots and writes alerts."""
     await seed_post(database)
     await seed_baselines(database)
-    await snapshot(database, views=int(EXPECTED_AT_2H * 4))
+    await snapshot(database, views=int(EXPECTED_AT_2H * SPIKE))
 
     async def fingerprint() -> tuple[int, int]:
         async with database.session() as session:
@@ -661,7 +686,7 @@ async def test_a_replay_of_the_present_names_what_the_pass_named(
     """
     await seed_post(database)
     await seed_baselines(database)
-    await snapshot(database, views=int(EXPECTED_AT_2H * 4))
+    await snapshot(database, views=int(EXPECTED_AT_2H * SPIKE))
 
     replayed = await run_scoring(database, now=NOW, dry_run=True)
     live = await run_scoring(database, now=NOW)
@@ -675,7 +700,7 @@ async def test_a_replay_of_the_present_names_what_the_pass_named(
 async def test_a_replay_writes_nothing(database: Database) -> None:
     await seed_post(database)
     await seed_baselines(database)
-    await snapshot(database, views=int(EXPECTED_AT_2H * 4))
+    await snapshot(database, views=int(EXPECTED_AT_2H * SPIKE))
 
     summary = await run_scoring(database, now=NOW, dry_run=True)
 
@@ -694,7 +719,7 @@ async def test_a_replay_does_not_see_the_future(database: Database) -> None:
     await seed_post(database, published_ago=timedelta(hours=3))
     await seed_baselines(database)
     await snapshot(
-        database, age=timedelta(hours=2), views=int(EXPECTED_AT_2H * 4)
+        database, age=timedelta(hours=2), views=int(EXPECTED_AT_2H * SPIKE)
     )
 
     summary = await run_scoring(
@@ -781,7 +806,7 @@ async def test_a_channel_on_the_fallback_is_scored_and_counted(
 ) -> None:
     await seed_post(database)
     await seed_baselines(database)
-    await snapshot(database, views=int(EXPECTED_AT_2H * 4))
+    await snapshot(database, views=int(EXPECTED_AT_2H * SPIKE))
 
     summary = await run_scoring(database, now=NOW)
 
