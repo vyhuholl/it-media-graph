@@ -83,11 +83,30 @@ footer.site {
   color: var(--muted);
   font-size: 0.9rem;
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.75rem;
 }
 
-.badge { display: inline-block; line-height: 0; }
-.badge img { width: 168px; height: auto; }
+/* The official badge is 700x250 with the lettering at x 104..599,
+   y 94..154 and transparent space around it. The file is used as
+   published; the box below shows only the lettering, scaled by --s
+   (0.4032 makes it 200px wide), and leaves the transparent margin
+   unrendered. A plain number, because dividing a length by a length
+   in calc() is not supported everywhere yet. */
+.badge {
+  --s: 0.4032;
+  display: block;
+  width: calc(496px * var(--s));
+  height: calc(61px * var(--s));
+  overflow: hidden;
+  line-height: 0;
+}
+
+.badge img {
+  display: block;
+  max-width: none;
+  width: calc(700px * var(--s));
+  height: auto;
+  margin: calc(-94px * var(--s)) 0 0 calc(-104px * var(--s));
+}
