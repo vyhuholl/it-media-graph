@@ -333,8 +333,8 @@ class Settings(BaseSettings):
     # --- virality scoring ---------------------------------------------
     #
     # The threshold a post's highest-scoring metric must cross. Measured
-    # rather than chosen, and **re-priced once** — the number moved
-    # without the intent behind it moving.
+    # rather than chosen, and **re-priced twice** — each time the number
+    # moved without the intent behind it moving.
     #
     # It began at 3.0, from a distribution whose noise floor sat near z 2
     # and which flattened above 2.5. Correcting the reference then
@@ -350,13 +350,29 @@ class Settings(BaseSettings):
     # volume: 40 alerts over 7 days, 5.7 a day. Leaving 3.0 in place
     # would have raised the volume by half without anyone deciding to.
     #
+    # Then 3.7, when channels began to be measured against their own
+    # newest posts. Most of what the spreads had called post-to-post noise
+    # was channels sitting off a frozen reference; without it the views
+    # spread at eight hours fell from 0.395 to 0.183 (personal), 0.230 to
+    # 0.178 (aggregator), 0.355 to 0.144 (community). Replaying the same
+    # 14 days, with each post scored against the reference its day's
+    # refresh would have stored, messages a day after folding:
+    #
+    #   z      3.3   3.5   3.7   3.9   4.1   4.3   4.5   4.9   5.5
+    #   /day  10.3   9.0   7.8   7.1   6.2   5.3   4.9   4.2   3.5
+    #
+    # against 8.0 a day from the code it replaced at 3.3. The volume is
+    # the same; what fills it is not — the channels a stale median had
+    # biased upward drop out, and posts that really jumped on their own
+    # channel take their place.
+    #
     # One threshold across all metrics, not one each. Per-metric
     # thresholds would equalise the volumes and thereby stop meaning
     # anything: the spreads already differ (0.38 for views against 1.01
     # for comments), so a z is comparable across metrics *because* it is
     # divided by its own spread, and tuning it back per metric would undo
     # exactly that.
-    alert_spike_z: float = Field(default=3.3, gt=0)
+    alert_spike_z: float = Field(default=3.7, gt=0)
 
     # Which metrics may raise an alert. A subset of what is *measured* —
     # baselines are computed for all four regardless, so enabling one is
@@ -439,6 +455,32 @@ class Settings(BaseSettings):
     baseline_mature_max_days: int = Field(default=120, ge=2)
     baseline_min_channel_posts: int = Field(default=20, ge=1)
 
+    # A channel's own reference: the median eight-hour value of its newest
+    # this-many posts, needing at least the minimum, none older than the
+    # cap. The mature median above is only the fallback for a channel too
+    # quiet to fill it — it froze at the July backfill, because the raw
+    # layer keeps the first fetch and the watch loop fetches at age zero.
+    #
+    # Rolling out of sample over 28 days, daily refresh, bias of an
+    # ordinary post per channel:
+    #
+    #   reference               channels   bias MAD   |bias| > 1z    p95
+    #   frozen mature median         229       0.81            72  +1.17
+    #   90 days, at least 15         215       0.21             5  +0.75
+    #   newest 10                    231       0.14             2  +0.45
+    #   newest 20, at least 10       231       0.15             3  +0.54
+    #   newest 50                    215       0.17             5  +0.74
+    #
+    # Counting posts rather than days follows a fast-growing channel (+3.8
+    # z against a 90-day window, +1.3 against its newest twenty). Twenty
+    # over ten because a median of ten is one day of a prolific channel,
+    # so one boosted day would *be* its reference; the minimum of ten
+    # keeps the coverage ten would have had. Ninety days caps how stale a
+    # slow channel's reference may be.
+    baseline_recent_posts: int = Field(default=20, ge=1)
+    baseline_recent_min_posts: int = Field(default=10, ge=1)
+    baseline_recent_max_days: int = Field(default=90, ge=1)
+
     # The minimum observations behind one age band of one curve. A band
     # under it is omitted, which means posts of that age are not scored —
     # a gap, and better than a fraction fitted on four readings.
@@ -460,10 +502,12 @@ class Settings(BaseSettings):
     # ruler for a worse one.
     baseline_min_band_spread_posts: int = Field(default=100, ge=1)
 
-    # Past this, the pass says its baselines are stale. A refresh is
-    # cheap and a scoring pass reading month-old medians would compare
-    # today's posts against a channel that has since doubled.
-    baseline_refresh_days: float = Field(default=7.0, gt=0)
+    # Past this, the pass says its baselines are stale. A recent reference
+    # is only as fresh as the last refresh, and the refresh now runs daily
+    # — measured, daily against weekly narrows the bias MAD from 0.19 to
+    # 0.15 for a minute of database time — so two days tolerates one
+    # missed run and reports the second.
+    baseline_refresh_days: float = Field(default=2.0, gt=0)
 
     # How far back `--replay` reasons by default. Long enough to cover
     # everything collected since the snapshot layer started, so a

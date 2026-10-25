@@ -34,15 +34,17 @@ figure makes a threshold stricter at some ages than at others without
 saying so, which is the one thing a comparable score may not do.
 """
 
+from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from itertools import pairwise
 
 __all__ = [
     "AGE_BANDS",
     "BAND_EDGES_MINUTES",
     "REFERENCE_BAND",
+    "REFERENCE_SETTLED",
     "Curve",
     "Observation",
     "band_of",
@@ -51,6 +53,8 @@ __all__ = [
     "fit_factor",
     "fit_spread",
     "median",
+    "recent_reference",
+    "reference_at",
 ]
 
 # The edges of the age bands, in minutes: contiguous from ten minutes to
@@ -104,6 +108,14 @@ REFERENCE_BAND = next(
     name for low, high, name in AGE_BANDS if low <= timedelta(hours=8) < high
 )
 
+# How old a post must be before its reference-band value is final: the
+# band's upper edge. A post younger than this has a largest-reading-so-far
+# in the band, not a largest reading, and a reference built from it would
+# be biased low by exactly the posts still being read.
+REFERENCE_SETTLED = next(
+    high for low, high, name in AGE_BANDS if name == REFERENCE_BAND
+)
+
 
 @dataclass(frozen=True, slots=True)
 class Observation:
@@ -120,11 +132,17 @@ class Observation:
     supposed to be. Samples are irregular by design, and a fit that
     assumed the schedule was met would mis-age exactly the posts whose
     sampling was unusual.
+
+    ``published`` is when the post went out, and it is what a residual
+    needs to know which reference the post would have been scored
+    against — the one built from the posts settled before it. ``None``
+    where nobody asked, which takes the channel's fallback reference.
     """
 
     post_key: tuple[int, int]
     age: timedelta
     value: float
+    published: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -317,3 +335,62 @@ def fit_band_spreads(
         if spread is not None:
             fitted[band] = spread
     return fitted
+
+
+def recent_reference(
+    values: Sequence[float], *, newest: int, minimum: int
+) -> tuple[float, int] | None:
+    """The median of a channel's newest reference-band values, and how
+    many it was taken over — or ``None`` under the minimum.
+
+    ``values`` is ordered by publication, oldest first, so "newest" is a
+    property of the input rather than of a sort this function would have
+    to guess the key of.
+
+    **Newest posts, not a window of days.** A window lets a prolific
+    channel fill it with hundreds of posts and lag its own growth by half
+    of it, while a slow one barely fills it; counting posts follows both.
+    Measured rolling out of sample: a 90-day window left a channel that
+    grew ninefold at +3.8 z, its newest twenty at +1.3. Under the minimum
+    is refused rather than taken thinly — a median of three is not a
+    reference, and the channel still has its fallback.
+    """
+    taken = [value for value in values[-newest:] if value > 0]
+    if len(taken) < minimum:
+        return None
+    return median(taken), len(taken)
+
+
+def reference_at(
+    history: Sequence[tuple[datetime, float]],
+    moment: datetime,
+    *,
+    newest: int,
+    minimum: int,
+    max_age: timedelta,
+) -> tuple[float, int] | None:
+    """The reference a channel had at ``moment``.
+
+    Built from posts whose reference band had closed by then — published
+    at least ``REFERENCE_SETTLED`` earlier, so each value is final — and
+    no older than ``max_age``. ``history`` is the channel's posts as
+    (published, reference-band value), oldest first.
+
+    One function for both uses, which is the point. At a refresh,
+    ``moment`` is the refresh and this is the stored reference. For a
+    residual, ``moment`` is the post's own publication, and this is the
+    reference it would have been scored against: it cannot contain the
+    post, nor anything published after it. A reference that contains
+    the posts it is measured on fits them, and the ruler comes out too
+    narrow — measured, by 5%, in the over-alerting direction.
+    """
+    upper = bisect_right(history, moment - REFERENCE_SETTLED, key=_published)
+    lower = bisect_left(history, moment - max_age, key=_published)
+    window = history[lower:upper]
+    return recent_reference(
+        [value for _, value in window], newest=newest, minimum=minimum
+    )
+
+
+def _published(entry: tuple[datetime, float]) -> datetime:
+    return entry[0]

@@ -15,6 +15,7 @@ import pytest
 
 from itgraph.scoring.curves import (
     AGE_BANDS,
+    REFERENCE_SETTLED,
     Curve,
     Observation,
     band_of,
@@ -23,6 +24,8 @@ from itgraph.scoring.curves import (
     fit_factor,
     fit_spread,
     median,
+    recent_reference,
+    reference_at,
 )
 from itgraph.scoring.fold import Head, burst_heads, fold
 from itgraph.scoring.score import (
@@ -54,7 +57,7 @@ VIEWS_CURVE = Curve(
 def baseline(median_views: float = 1000.0, spread: float = 0.38) -> Baseline:
     """A channel whose typical mature post reaches `median_views`."""
     return Baseline(
-        mature_median=median_views,
+        reference=median_views,
         factor=0.44,
         curve=VIEWS_CURVE,
         spread=spread,
@@ -328,7 +331,7 @@ def test_the_spread_is_taken_from_the_readings_own_band() -> None:
     the one thing a score comparable across posts may not do.
     """
     wide = Baseline(
-        mature_median=1000.0,
+        reference=1000.0,
         factor=0.44,
         curve=VIEWS_CURVE,
         spread=0.38,
@@ -352,7 +355,7 @@ def test_a_band_without_its_own_spread_falls_back() -> None:
     to the dispersion rather than to the shape.
     """
     partial = Baseline(
-        mature_median=1000.0,
+        reference=1000.0,
         factor=0.44,
         curve=VIEWS_CURVE,
         spread=0.38,
@@ -566,3 +569,73 @@ def test_a_head_in_the_queue_past_its_window_is_not_folded_into() -> None:
     )
 
     assert placed[0].into is None
+
+
+# --- a channel's own newest posts -----------------------------------
+
+
+def test_the_newest_posts_make_the_reference() -> None:
+    """A channel that grew is measured against what it is now."""
+    old, new = [100.0] * 30, [900.0] * 20
+
+    reference = recent_reference(old + new, newest=20, minimum=10)
+
+    assert reference == (900.0, 20)
+
+
+def test_too_few_posts_make_no_reference() -> None:
+    """Refused, not a median of three: the channel has its fallback."""
+    assert recent_reference([500.0] * 9, newest=20, minimum=10) is None
+
+
+def test_fewer_than_newest_but_enough_still_count() -> None:
+    assert recent_reference([500.0] * 12, newest=20, minimum=10) == (500.0, 12)
+
+
+def history(*pairs: tuple[timedelta, float]) -> list[tuple[datetime, float]]:
+    """A channel's posts as (published before T0, value), oldest first."""
+    return sorted((T0 - ago, value) for ago, value in pairs)
+
+
+def test_a_reference_never_contains_the_post_or_what_followed() -> None:
+    """The residual's ruler, as scoring would have met it."""
+    posts = history(
+        *[(timedelta(days=d), 100.0) for d in range(2, 12)],
+        (timedelta(0), 10_000.0),  # the post itself
+        (-timedelta(hours=3), 10_000.0),  # published after it
+    )
+
+    assert reference_at(
+        posts, T0, newest=20, minimum=10, max_age=timedelta(days=90)
+    ) == (100.0, 10)
+
+
+def test_a_post_whose_band_is_still_open_is_left_out() -> None:
+    """Its largest reading so far is not its largest reading."""
+    settled = [(timedelta(days=d), 100.0) for d in range(2, 12)]
+    still_open = REFERENCE_SETTLED - timedelta(minutes=1)
+    posts = history(*settled, (still_open, 1.0))
+
+    reference = reference_at(
+        posts, T0, newest=20, minimum=10, max_age=timedelta(days=90)
+    )
+
+    assert reference == (100.0, 10)
+
+
+def test_the_maximum_age_cuts() -> None:
+    """A slow channel's reference may not be older than the cap."""
+    posts = history(
+        *[(timedelta(days=100 + d), 100.0) for d in range(10)],
+        *[(timedelta(days=d), 300.0) for d in range(2, 7)],
+    )
+
+    assert (
+        reference_at(
+            posts, T0, newest=20, minimum=10, max_age=timedelta(days=90)
+        )
+        is None
+    )
+    assert reference_at(
+        posts, T0, newest=20, minimum=5, max_age=timedelta(days=90)
+    ) == (300.0, 5)

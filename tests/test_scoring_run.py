@@ -18,7 +18,7 @@ from itgraph.db.baselines import (
     store_channel_medians,
     store_curves,
 )
-from itgraph.db.models import AlertKind, ChannelKind, Metric
+from itgraph.db.models import AlertKind, BaselineReference, ChannelKind, Metric
 from itgraph.db.session import Database
 from itgraph.scoring.curves import Curve
 from itgraph.scoring.run import run_scoring
@@ -113,8 +113,13 @@ async def seed_baselines(
     forwards_median: float | None = None,
     channel: int = CHANNEL,
     spread: float = 0.38,
+    reference: BaselineReference = BaselineReference.MATURE,
 ) -> None:
-    """A completed baseline run covering this channel."""
+    """A completed baseline run covering this channel.
+
+    With `reference=RECENT`, `views_median` is the channel's own
+    eight-hour value and takes no factor.
+    """
     async with database.session() as session:
         run = await start_run(
             session,
@@ -124,7 +129,11 @@ async def seed_baselines(
             channels_in_scope=await count_in_scope(session),
         )
         await store_channel_medians(
-            session, run, Metric.VIEWS, {channel: (views_median, 40)}
+            session,
+            run,
+            Metric.VIEWS,
+            {channel: (views_median, 40)},
+            reference=reference,
         )
         await store_curves(
             session,
@@ -725,3 +734,57 @@ async def test_a_replay_reports_folds(database: Database) -> None:
         if entry.into is not None
     } == {POST + 1: POST, POST + 2: POST}
     assert await alerts(database) == []
+
+
+# --- what a post is measured against --------------------------------
+
+
+async def ordinary_z(database: Database) -> float:
+    """The one post's score, whatever it is: a replay with no threshold."""
+    summary = await run_scoring(database, now=NOW, dry_run=True, threshold=-99)
+    assert len(summary.spikes) == 1
+    return summary.spikes[0].score.z
+
+
+async def test_a_grown_channel_s_ordinary_post_scores_near_zero(
+    database: Database,
+) -> None:
+    """Its own eight-hour value is 2000; the frozen median said 440.
+
+    Against the frozen figure this post would score about +4 and alert —
+    the noise this change exists to remove.
+    """
+    await seed_post(database)
+    await seed_baselines(
+        database, views_median=2000.0, reference=BaselineReference.RECENT
+    )
+    await snapshot(database, views=1000)
+
+    assert abs(await ordinary_z(database)) < 0.1
+
+
+async def test_a_shrunk_channel_s_ordinary_post_scores_near_zero(
+    database: Database,
+) -> None:
+    """And the silence on the other side: against 440 it would score −2."""
+    await seed_post(database)
+    await seed_baselines(
+        database, views_median=200.0, reference=BaselineReference.RECENT
+    )
+    await snapshot(database, views=100)
+
+    assert abs(await ordinary_z(database)) < 0.1
+
+
+async def test_a_channel_on_the_fallback_is_scored_and_counted(
+    database: Database,
+) -> None:
+    await seed_post(database)
+    await seed_baselines(database)
+    await snapshot(database, views=int(EXPECTED_AT_2H * 4))
+
+    summary = await run_scoring(database, now=NOW)
+
+    assert summary.raised == 1
+    assert summary.channels_on_fallback == 1
+    assert "1 scored against their settled history" in summary.line()

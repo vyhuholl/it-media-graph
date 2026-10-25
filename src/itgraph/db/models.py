@@ -43,6 +43,7 @@ __all__ = [
     "BackfillState",
     "BackfillStatus",
     "Base",
+    "BaselineReference",
     "BaselineRun",
     "CandidateOrigin",
     "Channel",
@@ -263,6 +264,23 @@ class AlertDelivery(enum.StrEnum):
     DIRECT = "direct"
     DIGEST = "digest"
     FOLDED = "folded"
+
+
+class BaselineReference(enum.StrEnum):
+    """What a channel's baseline value is the median *of*.
+
+    ``RECENT`` is the channel's own newest posts at the age the curve is
+    normalised to — its eight-hour value, needing no factor. ``MATURE``
+    is the median of its settled posts, which the kind's factor scales to
+    eight hours; it is the fallback for a channel too quiet to fill a
+    recent reference, and it is only as recent as the history it came
+    from. Stored rather than inferred, because "scored against what it is
+    now" and "scored against what it was" are different claims about the
+    same z.
+    """
+
+    RECENT = "recent"
+    MATURE = "mature"
 
 
 class AlertVerdict(enum.StrEnum):
@@ -1292,6 +1310,13 @@ class BaselineRun(Base):
     # existed: those fitted band spreads on readings alone, and a server
     # default would claim they ran under a rule they never saw.
     min_band_spread_posts: Mapped[int | None] = mapped_column(Integer)
+    # How a channel's recent reference was taken: over its newest this
+    # many posts, needing at least the minimum, none older than the cap.
+    # Null on a run made before recent references existed, for the same
+    # reason as the floor above.
+    recent_posts: Mapped[int | None] = mapped_column(Integer)
+    recent_min_posts: Mapped[int | None] = mapped_column(Integer)
+    recent_max_days: Mapped[int | None] = mapped_column(Integer)
 
     # What the refresh could see. The denominator matters for the same
     # reason it does in `AffiliationRun`: a channel with no baseline and
@@ -1304,12 +1329,18 @@ class BaselineRun(Base):
 
 
 class ChannelBaseline(Base):
-    """What one channel's settled post normally reaches, per metric.
+    """What one channel's post normally reaches, per metric.
 
     The median rather than the mean, and for the reason every baseline in
     this project is a median: one viral post moves a mean, and the viral
     post is the thing being measured — a baseline the outlier drags
     upward hides the next outlier.
+
+    ``reference`` says what it is a median of: the channel's newest posts
+    at eight hours, or its settled posts, which only become an eight-hour
+    figure through the kind's factor. The same column holds both because
+    the scoring lookup is the same; the two mean different things and the
+    row says which.
 
     ``samples`` travels with it because a median over thirty posts and
     one over three hundred are not the same claim, and the run that
@@ -1332,6 +1363,9 @@ class ChannelBaseline(Base):
 
     median: Mapped[float] = mapped_column(Float)
     samples: Mapped[int] = mapped_column(Integer)
+    reference: Mapped[BaselineReference] = mapped_column(
+        _pg_enum(BaselineReference, "baseline_reference")
+    )
 
     def __repr__(self) -> str:
         return (

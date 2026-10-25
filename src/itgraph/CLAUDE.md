@@ -33,7 +33,7 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `alerts/cascade.py` | Which posts are travelling: distinct unaffiliated families, pure functions over edge rows |
 | `alerts/run.py` | The detection pass: load, detect, store, report. Touches no network and no snapshots |
 | `alerts/` | Deciding that something is worth telling the operator. Writes the queue; sends nothing |
-| `scoring/curves.py` | How a metric accrues with a post's age, and the two factors that join a curve to history; pure |
+| `scoring/curves.py` | How a metric accrues with a post's age, the factors that join a curve to history, and a channel's own reference from its newest posts; pure |
 | `scoring/score.py` | What a post should have reached by now, and how far past it went; pure |
 | `scoring/fold.py` | What counts as one thing: a burst of messages is one post, a channel's spikes inside a window are one event; pure |
 | `scoring/refresh.py` | The baseline refresh: fit, store, publish as one run. A refresh replaces rather than accumulates |

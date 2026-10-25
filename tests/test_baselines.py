@@ -261,7 +261,7 @@ async def test_baselines_read_back(database: Database) -> None:
     assert isinstance(loaded, Baselines)
     baseline = loaded.for_channel(CHANNEL, Metric.VIEWS)
     assert baseline is not None
-    assert baseline.mature_median == 1000.0
+    assert baseline.reference == 1000.0
     assert baseline.spread == 0.38
     assert baseline.curve.fractions["48m"] == 0.33
 
@@ -303,7 +303,7 @@ async def test_a_refresh_replaces_rather_than_accumulates(
     baseline = loaded.for_channel(CHANNEL, Metric.VIEWS)
     assert baseline is not None
     # Entirely the newer run — not a median from one and a curve from the other.
-    assert baseline.mature_median == 2000.0
+    assert baseline.reference == 2000.0
     assert baseline.spread == 0.3
 
 
@@ -440,7 +440,7 @@ async def test_a_refresh_fits_and_publishes_one_run(
     assert loaded is not None
     baseline = loaded.for_channel(CHANNEL, Metric.VIEWS)
     assert baseline is not None
-    assert baseline.mature_median == 1000.0
+    assert baseline.reference == 1000.0
     # The reference band is the 8h one, so its fraction is 1 by
     # construction and the 1h one is the shape actually measured.
     assert baseline.curve.fractions["420m"] == 1.0
@@ -695,3 +695,178 @@ async def test_a_band_seen_on_too_few_posts_keeps_no_spread(
     baseline = loaded.for_channel(CHANNEL, Metric.VIEWS)
     assert baseline is not None
     assert baseline.spread_at(timedelta(hours=1)) == baseline.spread
+
+
+# --- a channel's own newest posts -----------------------------------
+
+
+async def seed_recent(
+    database: Database,
+    *,
+    channel: int = CHANNEL,
+    posts: int = 12,
+    value: int = 500,
+    first_id: int = 5000,
+    newest_ago: timedelta = timedelta(days=1),
+    moment: datetime = NOW,
+) -> None:
+    """Posts a day apart, each read once at eight hours.
+
+    A day apart so no two are a burst, and the newest still a day old at
+    `moment`, so every one has its reference band closed.
+    """
+    async with database.session() as session:
+        for index in range(posts):
+            msg_id = first_id + index
+            published = moment - newest_ago - timedelta(days=posts - 1 - index)
+            await session.execute(
+                text(
+                    "INSERT INTO raw_messages "
+                    "(channel_id, msg_id, payload, fetched_at) VALUES "
+                    "(:c, :m, CAST(:p AS jsonb), :f)"
+                ),
+                {
+                    "c": channel,
+                    "m": msg_id,
+                    "f": published,
+                    "p": json.dumps(
+                        {
+                            "_": "Message",
+                            "id": msg_id,
+                            "date": published.isoformat(),
+                        }
+                    ),
+                },
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO message_metrics "
+                    "(channel_id, msg_id, observed_at, views) "
+                    "VALUES (:c, :m, :at, :v)"
+                ),
+                {
+                    "c": channel,
+                    "m": msg_id,
+                    "at": published + timedelta(hours=8),
+                    "v": value,
+                },
+            )
+
+
+async def stored_views(
+    database: Database,
+) -> dict[int, tuple[float, int, str]]:
+    """The newest run's views baselines, as (value, samples, reference)."""
+    async with database.session() as session:
+        rows = await session.execute(
+            text(
+                "SELECT channel_id, median, samples, reference::text "
+                "FROM channel_baselines WHERE metric = 'views' AND run_id = "
+                "(SELECT max(id) FROM baseline_runs)"
+            )
+        )
+    return {channel: (value, n, ref) for channel, value, n, ref in rows}
+
+
+async def test_a_channel_is_measured_against_its_newest_posts(
+    database: Database,
+) -> None:
+    """And one too quiet for that falls back to its settled posts."""
+    await seed_channel(database, CHANNEL)
+    await seed_recent(database, posts=12, value=500)
+    await seed_channel(database, OTHER, mature_posts=40, views=1000)
+
+    summary = await refresh_baselines(database, now=NOW)
+
+    stored = await stored_views(database)
+    assert stored[CHANNEL] == (500.0, 12, "recent")
+    assert stored[OTHER] == (1000.0, 40, "mature")
+    assert summary.references[Metric.VIEWS] == (1, 1)
+    assert "recent/mature references: views 1/1" in summary.line()
+
+
+async def test_a_channel_without_settled_history_is_still_scored(
+    database: Database,
+) -> None:
+    """Added after its history could be collected: its posts are enough."""
+    await seed_channel(database, CHANNEL)
+    await seed_recent(database, posts=12)
+
+    summary = await refresh_baselines(database, now=NOW)
+
+    assert summary.channels_with_baseline == 1
+    async with database.session() as session:
+        loaded = await load_baselines(session)
+    assert loaded is not None
+    assert loaded.fallback_channels == 0
+
+
+async def test_too_few_recent_posts_make_no_reference(
+    database: Database,
+) -> None:
+    await seed_channel(database, CHANNEL)
+    await seed_recent(database, posts=9)
+
+    summary = await refresh_baselines(database, now=NOW)
+
+    assert summary.channels_with_baseline == 0
+
+
+async def test_the_reference_follows_the_channel(database: Database) -> None:
+    """What a frozen median could never do: a refresh a month later sees
+    the posts published since."""
+    await seed_channel(database, CHANNEL)
+    await seed_recent(database, posts=12, value=500)
+    await refresh_baselines(database, now=NOW)
+    assert (await stored_views(database))[CHANNEL][0] == 500.0
+
+    later = NOW + timedelta(days=30)
+    await seed_recent(
+        database, posts=20, value=900, first_id=6000, moment=later
+    )
+    await refresh_baselines(database, now=later)
+
+    assert (await stored_views(database))[CHANNEL] == (900.0, 20, "recent")
+
+
+async def test_the_run_records_how_references_were_taken(
+    database: Database,
+) -> None:
+    await seed_channel(database, CHANNEL)
+    await refresh_baselines(database, now=NOW)
+
+    async with database.session() as session:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT recent_posts, recent_min_posts, recent_max_days "
+                    "FROM baseline_runs"
+                )
+            )
+        ).one()
+
+    assert tuple(row) == (
+        settings.baseline_recent_posts,
+        settings.baseline_recent_min_posts,
+        settings.baseline_recent_max_days,
+    )
+
+
+def test_a_residual_is_measured_from_the_posts_before_it() -> None:
+    """The ruler as scoring meets it: never containing its own post."""
+    from itgraph.scoring.curves import Observation
+    from itgraph.scoring.refresh import _rolling
+
+    published = [NOW - timedelta(days=d) for d in range(30, 0, -1)]
+    history = {CHANNEL: [(at, 100.0) for at in published[:-1]]}
+    # The newest post went viral; its own reading must not raise the
+    # reference it is measured from.
+    history[CHANNEL].append((published[-1], 100_000.0))
+    viral = Observation(
+        post_key=(CHANNEL, 30),
+        age=timedelta(hours=2),
+        value=50_000.0,
+        published=published[-1],
+    )
+
+    assert _rolling(history)(viral) == 100.0

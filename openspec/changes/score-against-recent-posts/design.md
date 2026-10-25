@@ -124,8 +124,8 @@ A first estimate, with a 90-day reference rather than the chosen rule and the ol
 
 ## Migration Plan
 
-One revision: `CREATE TYPE baseline_reference AS ENUM ('recent', 'mature')`, `channel_baselines.reference` added with a server default of `mature`, the default dropped; the three nullable parameters on `baseline_runs`. Creating a type and using it in one transaction is allowed — the restriction is on `ADD VALUE` to an existing one. Downgrade drops the columns and the type; existing runs read the same afterwards.
+One revision: `CREATE TYPE baseline_reference AS ENUM ('recent', 'mature')`, `channel_baselines.reference` added with a server default of `mature`, the default dropped; the three nullable parameters on `baseline_runs`. Creating a type and using it in one transaction is allowed — the restriction is on `ADD VALUE` to an existing one. Downgrade drops the columns and the type, after making every run that holds a `recent` row invisible (see Rollback); runs made before the change read the same afterwards.
 
 Deploy order: back up (the upgrade does), upgrade, run `itgraph baselines` once so the current run carries recent references, then let the timers run. The bot needs no restart: it reads none of this. The timer change goes through the playbook — `baselines_schedule` in `deploy/group_vars/all/main.yml`, which is what the timer template actually reads — not by hand on the machine.
 
-Rollback: downgrade and refresh; the next run is a mature-only run again, exactly as before.
+Rollback: downgrade. A `recent` row without its column would read as a mature median and be scaled by the factor a second time, so the downgrade first makes every run holding one invisible, as a refresh that died half way is; readers fall back to the newest mature-only run, which is what the old code computes anyway, since its medians do not move.

@@ -115,6 +115,9 @@ class SpikeSummary:
     folded: int = 0
     # Each new spike and the head it folded into, for the replay listing.
     placed: list[Placed] = field(default_factory=list)
+    # Scored, but against what they were when their history was collected
+    # rather than what they are: too quiet for a recent reference.
+    channels_on_fallback: int = 0
 
     def line(self) -> str:
         if self.channels_with_baseline == 0:
@@ -137,6 +140,11 @@ class SpikeSummary:
             line += (
                 f"; {unscored} of {self.channels_in_scope} channel(s) have "
                 "too little history to be scored"
+            )
+        if self.channels_on_fallback:
+            line += (
+                f"; {self.channels_on_fallback} scored against their "
+                "settled history, too quiet for a recent reference"
             )
 
         if self.baseline_age is not None and self.baseline_age > timedelta(
@@ -378,6 +386,7 @@ async def run_scoring(
         raised=written,
         channels_in_scope=baselines.channels_in_scope,
         channels_with_baseline=baselines.scored_channels,
+        channels_on_fallback=baselines.fallback_channels,
         threshold=limit,
         replay=dry_run,
         now=moment,

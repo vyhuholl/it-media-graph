@@ -6,11 +6,17 @@ so a replay can try a different one without touching a setting.
 
 The estimate, and every part of it measured rather than assumed:
 
-    expected(age) = channel's mature median      ← 30 days of its own posts
-                  × factor                       ← mature → 8h, per metric
+    expected(age) = channel's reference          ← its own newest posts at 8h
+                  × factor                       ← 1 for those; mature → 8h
+                                                   for the fallback
                   × curve(age, kind, metric)     ← the shape, per kind
 
     z = log(actual / expected) / spread          ← spread per metric and kind
+
+The reference is the channel's eight-hour value where it has enough
+recent posts to measure one, and its mature median otherwise — which the
+kind's factor turns into an eight-hour figure, and which is only as recent
+as the history it came from.
 
 **Levels are scored, never ratios**, and that is a correction to what
 ``docs/PLAN.md`` originally specified. A ratio like ``forwards / views``
@@ -61,9 +67,13 @@ class Baseline:
     against 0.98 at eight hours, so one figure for all ages would make
     the threshold mean different things at different points of a post's
     life without saying so.
+
+    ``reference`` and ``factor`` together are the channel's eight-hour
+    value: its own, measured, with a factor of 1, or its mature median
+    scaled by the kind's factor where it is too quiet for its own.
     """
 
-    mature_median: float
+    reference: float
     factor: float
     curve: Curve
     spread: float
@@ -135,7 +145,7 @@ def expected(baseline: Baseline, age: timedelta) -> float | None:
     fraction = baseline.curve.at(age)
     if fraction is None or fraction <= 0:
         return None
-    value = baseline.mature_median * baseline.factor * fraction
+    value = baseline.reference * baseline.factor * fraction
     return value if value > 0 else None
 
 

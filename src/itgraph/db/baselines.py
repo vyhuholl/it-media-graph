@@ -15,7 +15,7 @@ some channels and curves fitted without them.
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from sqlalchemy import func, select, text
@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from itgraph.db.backfill import in_scope
 from itgraph.db.models import (
     BackfillState,
+    BaselineReference,
     BaselineRun,
     Channel,
     ChannelBaseline,
@@ -32,7 +33,13 @@ from itgraph.db.models import (
     Metric,
     MetricBaseline,
 )
-from itgraph.scoring.curves import Curve, Observation
+from itgraph.scoring.curves import (
+    AGE_BANDS,
+    REFERENCE_BAND,
+    Curve,
+    Observation,
+)
+from itgraph.scoring.fold import burst_heads
 from itgraph.scoring.score import Baseline
 
 __all__ = [
@@ -42,6 +49,7 @@ __all__ = [
     "load_baselines",
     "mature_medians",
     "observations",
+    "recent_values",
     "start_run",
     "store_channel_medians",
     "store_curves",
@@ -87,6 +95,10 @@ class Baselines:
     for the median, by kind and metric for the ruler — rather than
     mirroring the tables. A pass scoring thousands of readings should not
     be joining anything.
+
+    ``references`` says which of the medians are a channel's own
+    eight-hour value; a pair missing from it is a mature median, which is
+    what every run before recent references stored.
     """
 
     run_id: int
@@ -98,6 +110,9 @@ class Baselines:
     curves: dict[tuple[ChannelKind, Metric], Curve]
     band_spreads: dict[tuple[ChannelKind, Metric], dict[str, float]]
     channels_in_scope: int
+    references: dict[tuple[int, Metric], BaselineReference] = field(
+        default_factory=dict
+    )
 
     def for_channel(self, channel_id: int, metric: Metric) -> Baseline | None:
         """The baseline for one channel and metric, or ``None``.
@@ -106,18 +121,27 @@ class Baselines:
         channel is too thin, no curve because that kind and metric were
         never fitted. A partial baseline would score against a mixture of
         measured and assumed, which is the one thing a z may not be.
+
+        A recent reference takes a factor of 1: it is already the value
+        at the age the curve is normalised to, and the kind's factor is
+        the bridge from a *mature* median to that age, not a property of
+        the channel.
         """
         kind = self.kinds.get(channel_id)
         if kind is None:
             return None
         median = self.medians.get((channel_id, metric))
-        factor = self.factors.get((kind, metric))
+        recent = (
+            self.references.get((channel_id, metric))
+            is BaselineReference.RECENT
+        )
+        factor = 1.0 if recent else self.factors.get((kind, metric))
         spread = self.spreads.get((kind, metric))
         curve = self.curves.get((kind, metric))
         if median is None or factor is None or spread is None or curve is None:
             return None
         return Baseline(
-            mature_median=median,
+            reference=median,
             factor=factor,
             curve=curve,
             spread=spread,
@@ -128,6 +152,21 @@ class Baselines:
     def scored_channels(self) -> int:
         """How many channels have a median for at least one metric."""
         return len({channel for channel, _ in self.medians})
+
+    @property
+    def fallback_channels(self) -> int:
+        """How many scored channels have no recent reference at all.
+
+        Scored against what they were when their history was collected,
+        rather than against what they are — counted, so that "scored"
+        does not quietly mean both.
+        """
+        recent = {
+            channel
+            for (channel, _), reference in self.references.items()
+            if reference is BaselineReference.RECENT
+        }
+        return len({channel for channel, _ in self.medians} - recent)
 
 
 async def mature_medians(
@@ -194,6 +233,98 @@ async def mature_medians(
     }
 
 
+# The reference band, as the interval a reading's age has to fall in.
+_REFERENCE_LOW, _REFERENCE_HIGH = next(
+    (low, high) for low, high, name in AGE_BANDS if name == REFERENCE_BAND
+)
+
+
+async def recent_values(
+    session: AsyncSession,
+    metric: Metric,
+    *,
+    since: datetime,
+    until: datetime,
+    burst_gap: timedelta,
+) -> dict[int, list[tuple[datetime, float]]]:
+    """Each in-scope channel's posts and the value each reached at 8h.
+
+    Per post, the largest reading in the reference band — the same value
+    ``scoring/curves.py`` normalises a curve to, so a reference built
+    from these and a curve fraction multiply into the same quantity.
+    Oldest first, positive values only, which is what a median over them
+    is taken over; a post never read in the band (the collector sleeps
+    through the eighth hour of anything published around 19:00) is left
+    out rather than guessed.
+
+    **Posts are counted the way the scorer counts them**: an album as its
+    first part, a burst as its first message. Otherwise an album of ten
+    parts is ten votes for one post's reach.
+
+    ``until`` bounds both the posts and the readings, so a refresh
+    reasoning from a past moment sees what it would have seen then.
+    """
+    result = await session.execute(
+        text(f"""
+            WITH posts AS (
+              SELECT channel_id, msg_id, published FROM (
+                SELECT r.channel_id, r.msg_id,
+                       (r.payload->>'date')::timestamptz AS published,
+                       row_number() OVER (
+                         PARTITION BY r.channel_id,
+                           coalesce(r.payload->>'grouped_id', r.msg_id::text)
+                         ORDER BY r.msg_id
+                       ) AS part
+                FROM raw_messages r
+                JOIN channels c ON c.tg_id = r.channel_id
+                LEFT JOIN backfill_state b ON b.channel_id = c.tg_id
+                WHERE r.payload->>'_' = 'Message'
+                  AND c.status = 'seed'
+                  AND c.is_chat = false
+                  AND b.failure_kind IS DISTINCT FROM 'permanent'
+                  AND (r.payload->>'date')::timestamptz >= :since
+                  AND (r.payload->>'date')::timestamptz <= :until
+              ) t
+              WHERE part = 1
+            )
+            SELECT p.channel_id, p.msg_id, p.published,
+                   max({SNAPSHOT_VALUE[metric]}) FILTER (
+                     WHERE m.observed_at - p.published >= :low
+                       AND m.observed_at - p.published < :high
+                       AND m.observed_at <= :until
+                   ) AS v
+            FROM posts p
+            LEFT JOIN message_metrics m
+              ON m.channel_id = p.channel_id AND m.msg_id = p.msg_id
+            GROUP BY p.channel_id, p.msg_id, p.published
+        """),
+        {
+            "since": since,
+            "until": until,
+            "low": _REFERENCE_LOW,
+            "high": _REFERENCE_HIGH,
+        },
+    )
+    rows = result.all()
+
+    # Every post takes part in chaining a burst, read or not; only a
+    # burst's first message then contributes its value.
+    heads = burst_heads(
+        (((channel, msg), published) for channel, msg, published, _ in rows),
+        gap=burst_gap,
+    )
+    history: dict[int, list[tuple[datetime, float]]] = {}
+    for channel, msg, published, value in rows:
+        if heads[(channel, msg)] != (channel, msg):
+            continue
+        if value is None or value <= 0:
+            continue
+        history.setdefault(channel, []).append((published, float(value)))
+    for entries in history.values():
+        entries.sort()
+    return history
+
+
 async def observations(
     session: AsyncSession, metric: Metric, *, since: datetime
 ) -> dict[ChannelKind, list[Observation]]:
@@ -210,7 +341,8 @@ async def observations(
                    EXTRACT(EPOCH FROM (
                      m.observed_at - (r.payload->>'date')::timestamptz
                    )) AS age_seconds,
-                   {SNAPSHOT_VALUE[metric]} AS v
+                   {SNAPSHOT_VALUE[metric]} AS v,
+                   (r.payload->>'date')::timestamptz AS published
             FROM message_metrics m
             JOIN raw_messages r
               ON r.channel_id = m.channel_id AND r.msg_id = m.msg_id
@@ -222,7 +354,7 @@ async def observations(
     )
 
     grouped: dict[ChannelKind, list[Observation]] = {}
-    for kind, channel, msg, age_seconds, value in result.all():
+    for kind, channel, msg, age_seconds, value, published in result.all():
         # A reading predating its post is clock skew or a bad stored
         # date; a negative age passes every band test silently, which is
         # the worst way for bad data to behave.
@@ -235,6 +367,7 @@ async def observations(
                 post_key=(channel, msg),
                 age=timedelta(seconds=float(age_seconds)),
                 value=float(value),
+                published=published,
             )
         )
     return grouped
@@ -268,6 +401,9 @@ async def start_run(
     min_band_samples: int,
     channels_in_scope: int,
     min_band_spread_posts: int | None = None,
+    recent_posts: int | None = None,
+    recent_min_posts: int | None = None,
+    recent_max_days: int | None = None,
 ) -> BaselineRun:
     """Open a refresh. Nothing reads it until it is completed."""
     run = BaselineRun(
@@ -275,6 +411,9 @@ async def start_run(
         min_channel_posts=min_channel_posts,
         min_band_samples=min_band_samples,
         min_band_spread_posts=min_band_spread_posts,
+        recent_posts=recent_posts,
+        recent_min_posts=recent_min_posts,
+        recent_max_days=recent_max_days,
         channels_in_scope=channels_in_scope,
         channels_with_baseline=0,
     )
@@ -288,8 +427,15 @@ async def store_channel_medians(
     run: BaselineRun,
     metric: Metric,
     medians: dict[int, tuple[float, int]],
+    *,
+    reference: BaselineReference = BaselineReference.MATURE,
 ) -> None:
-    """Write one metric's channel medians for this run."""
+    """Write one metric's channel medians for this run, of one reference.
+
+    ``reference`` defaults to mature because that is what every median
+    stored before recent references was, and a caller writing a recent
+    one has to say so.
+    """
     session.add_all(
         ChannelBaseline(
             run_id=run.id,
@@ -297,6 +443,7 @@ async def store_channel_medians(
             metric=metric,
             median=median,
             samples=samples,
+            reference=reference,
         )
         for channel, (median, samples) in medians.items()
     )
@@ -370,12 +517,14 @@ async def load_baselines(session: AsyncSession) -> Baselines | None:
     if run is None or run.completed_at is None:
         return None
 
-    medians = {
-        (median_row.channel_id, median_row.metric): median_row.median
-        for median_row in await session.scalars(
-            select(ChannelBaseline).where(ChannelBaseline.run_id == run.id)
-        )
-    }
+    medians: dict[tuple[int, Metric], float] = {}
+    references: dict[tuple[int, Metric], BaselineReference] = {}
+    for median_row in await session.scalars(
+        select(ChannelBaseline).where(ChannelBaseline.run_id == run.id)
+    ):
+        pair = (median_row.channel_id, median_row.metric)
+        medians[pair] = median_row.median
+        references[pair] = median_row.reference
 
     factors: dict[tuple[ChannelKind, Metric], float] = {}
     spreads: dict[tuple[ChannelKind, Metric], float] = {}
@@ -419,4 +568,5 @@ async def load_baselines(session: AsyncSession) -> Baselines | None:
         },
         band_spreads=band_spreads,
         channels_in_scope=run.channels_in_scope,
+        references=references,
     )
