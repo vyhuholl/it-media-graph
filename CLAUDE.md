@@ -54,9 +54,18 @@ Test fixtures are synthetic or anonymized. There is no such thing as a "small re
 - The operator's own private dialogs, work chats and legacy group chats are out of scope. Only publicly addressable channels enter the inventory; history is fetched only for channels with status `seed` or `accepted`.
 - Nothing derived from the operator's own subscriptions is publishable. Exports select an explicit column list filtered to `status = 'seed'`; never `SELECT *`, and never include `discovered_via`, `reject_reason`, `reject_note` or `kind_note`.
 
+## Requirements discipline
+A gap or a contradiction in the requirements is **a question for the user**, never a guess in the code. A guess pinned down by a green test is worse than no code at all: it looks like a solution.
+
+Before starting on a feature:
+
+1. Ask about everything that admits more than one reading — and wait for the answers.
+2. List the assumptions you made explicitly. Mark any assumption the user has not confirmed as **"not covered by the requirements"** in the artifacts.
+
+When the prompt and the actual behaviour of a library or of the code disagree, do not pick a side silently. Check the sources, show the evidence, and record the user's decision.
 
 ## Workflow
-- Standard / infrastructure tasks (collector, schema, API, bot): write an OpenSpec change proposal first, then implement.
+- Standard / infrastructure tasks (collector, schema, API, bot): implement via OpenSpec: `/opsx:explore` -> write change artifacts -> `/opsx:apply` -> `/opsx:verify` -> `/opsx:archive`.
 - Exploratory analytics (clustering, edge weights, engagement baselines): no spec. Iterate in `notebooks/`, promote to `src/` only once the approach is settled.
 - **Commit to `master`. Never create a branch unless asked for one.** One person works on this repository, so a branch buys no review and costs a merge on every change. If something is risky enough to want isolating, say so and ask — do not decide it by branching.
 
