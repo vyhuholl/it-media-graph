@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import text
-from test_alerts_db import PUBLISHER, seed
+from test_alerts_db import PUBLISHER, delivery_of, seed, seed_series
 
 from itgraph.alerts.cascade import Cascade
 from itgraph.bot.app import BotStats, Sender, deliver_once
@@ -166,6 +166,19 @@ def test_a_bigger_spike_reads_as_bigger() -> None:
 def test_a_spike_links_to_the_post() -> None:
     assert "https://t.me/example/500" in spike().text
     assert "t.me" not in spike(channel_username=None).text
+
+
+def test_a_head_says_the_whole_channel_moved() -> None:
+    """Not "this post interests people" but "this channel's audience
+    grew" — the finding a series of seven messages used to bury."""
+    text = spike(folded=6).text
+
+    assert "ещё 6 пост" in text
+    assert "всего канала" in text
+
+
+def test_a_spike_with_nothing_folded_says_nothing_about_the_channel() -> None:
+    assert "📶" not in spike().text
 
 
 def test_the_digest_says_how_many_it_covers() -> None:
@@ -409,3 +422,71 @@ async def test_an_ordinary_shutdown_leaves_the_siblings_alone() -> None:
     assert not second.done()
     first.cancel()
     second.cancel()
+
+
+# --- folds ----------------------------------------------------------
+
+
+async def test_a_series_is_one_message_that_counts_the_rest(
+    database: Database,
+) -> None:
+    """The 15 October series, as the reader now receives it."""
+    await seed_series(database, folded=6)
+    sender = Recorder()
+
+    await deliver_once(database, sender, BotStats(), now=NOW)
+
+    assert len(sender.messages) == 1
+    assert "ещё 6 пост" in sender.messages[0][0]
+
+
+async def test_folds_are_settled_with_their_head(database: Database) -> None:
+    await seed_series(database)
+
+    await deliver_once(database, Recorder(), BotStats(), now=NOW)
+
+    assert set((await delivery_of(database)).values()) == {"direct", "folded"}
+
+
+async def test_a_fold_after_its_head_was_sent_is_settled_silently(
+    database: Database,
+) -> None:
+    """Part of an event the reader has already been told about."""
+    head = await seed_series(database, folded=0)
+    sender = Recorder()
+    await deliver_once(database, sender, BotStats(), now=NOW)
+
+    async with database.session() as session:
+        await session.execute(
+            text(
+                "INSERT INTO raw_messages (channel_id, msg_id, payload) "
+                'VALUES (:c, :m, \'{"_": "Message"}\'::jsonb)'
+            ),
+            {"c": PUBLISHER, "m": POST + 1},
+        )
+        await session.execute(
+            text(
+                "INSERT INTO alerts (kind, channel_id, msg_id, band, value, "
+                "folded_into) VALUES ('views_spike', :c, :m, 1, 4.0, :h)"
+            ),
+            {"c": PUBLISHER, "m": POST + 1, "h": head},
+        )
+    await deliver_once(database, sender, BotStats(), now=NOW)
+
+    assert len(sender.messages) == 1
+    assert (await delivery_of(database))[POST + 1] == "folded"
+
+
+async def test_folds_of_a_held_head_wait_with_it(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Settled when the head goes out, not when it is held."""
+    await seed_series(database)
+    monkeypatch.setattr(settings, "alert_quiet_from_hour", 2)
+    monkeypatch.setattr(settings, "alert_quiet_to_hour", 7)
+
+    await deliver_once(
+        database, Recorder(), BotStats(), now=NOW.replace(hour=3)
+    )
+
+    assert set((await delivery_of(database)).values()) == {None}

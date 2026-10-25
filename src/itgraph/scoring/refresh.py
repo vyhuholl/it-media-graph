@@ -99,8 +99,8 @@ def _residuals(
     *,
     curve: Curve,
     factor: float,
-) -> dict[str, list[float]]:
-    """``log(actual / expected)`` per age band, for those that have both.
+) -> dict[str, dict[tuple[int, int], list[float]]]:
+    """``log(actual / expected)`` per age band and post, where both exist.
 
     Computed against the curve and factor just fitted, not against a
     previous run's: the spread has to describe *this* estimate's error,
@@ -111,9 +111,10 @@ def _residuals(
     post's life — measured, 1.18 at fifteen minutes against 0.98 at eight
     hours. The caller both pools these and fits each band separately, so
     a band too thin to speak for itself still has something to fall back
-    on.
+    on. Kept per post within the band because how many posts a band saw,
+    not how many readings, is what says whether it can speak for itself.
     """
-    residuals: dict[str, list[float]] = {}
+    residuals: dict[str, dict[tuple[int, int], list[float]]] = {}
     for entry in entries:
         band = band_of(entry.age)
         if band is None:
@@ -125,7 +126,9 @@ def _residuals(
         expected = median[0] * factor * fraction
         if expected <= 0 or entry.value <= 0:
             continue
-        residuals.setdefault(band, []).append(math.log(entry.value / expected))
+        residuals.setdefault(band, {}).setdefault(entry.post_key, []).append(
+            math.log(entry.value / expected)
+        )
     return residuals
 
 
@@ -162,7 +165,11 @@ def _fit(
     if factor is None:
         return "too few posts with a mature median"
 
-    residuals = _residuals(entries, medians, curve=curve, factor=factor)
+    by_post = _residuals(entries, medians, curve=curve, factor=factor)
+    residuals = {
+        band: [value for values in posts.values() for value in values]
+        for band, posts in by_post.items()
+    }
     pooled = fit_spread(
         [value for values in residuals.values() for value in values],
         min_samples=floor,
@@ -176,7 +183,12 @@ def _fit(
         curve=curve,
         factor=factor,
         spread=pooled,
-        band_spreads=fit_band_spreads(residuals, min_samples=floor),
+        band_spreads=fit_band_spreads(
+            residuals,
+            min_samples=floor,
+            posts={band: len(posts) for band, posts in by_post.items()},
+            min_posts=settings.baseline_min_band_spread_posts,
+        ),
         samples=len(entries),
     )
 
@@ -205,6 +217,7 @@ async def refresh_baselines(
             mature_days=settings.baseline_mature_days,
             min_channel_posts=settings.baseline_min_channel_posts,
             min_band_samples=settings.baseline_min_band_samples,
+            min_band_spread_posts=settings.baseline_min_band_spread_posts,
             channels_in_scope=await count_in_scope(session),
         )
 

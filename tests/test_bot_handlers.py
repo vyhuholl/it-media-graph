@@ -307,3 +307,54 @@ async def test_status_is_quiet_when_there_is_nothing_waiting(
 
     assert "⚠️" not in replies[0]
     assert "ждут отправки" not in replies[0]
+
+
+async def test_status_counts_what_was_folded(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ "Raised" overstates the messages there were unless folds are named,
+    and a fold waiting for its head is not one more thing undelivered."""
+    from sqlalchemy import text
+
+    from itgraph.config import settings
+
+    monkeypatch.setattr(settings, "alert_quiet_from_hour", 0)
+    monkeypatch.setattr(settings, "alert_quiet_to_hour", 0)
+    database = Database(database_url)
+    try:
+        async with database.session() as session:
+            await session.execute(
+                text(
+                    "INSERT INTO channels (tg_id, username, title, "
+                    "discovered_via, status) VALUES "
+                    "(1, 'example', 'Example', 'manual', 'seed')"
+                )
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO raw_messages (channel_id, msg_id, payload) "
+                    'VALUES (1, 1, \'{"_": "Message"}\'::jsonb), '
+                    '(1, 2, \'{"_": "Message"}\'::jsonb)'
+                )
+            )
+            head = await session.scalar(
+                text(
+                    "INSERT INTO alerts (kind, channel_id, msg_id, band, "
+                    "value) VALUES ('views_spike', 1, 1, 1, 6) RETURNING id"
+                )
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO alerts (kind, channel_id, msg_id, band, "
+                    "value, folded_into) "
+                    "VALUES ('views_spike', 1, 2, 1, 5, :h)"
+                ),
+                {"h": head},
+            )
+    finally:
+        await database.dispose()
+
+    _, replies = await feed(database_url, OPERATOR, text="/status")
+
+    assert "свёрнуто в серии: 1" in replies[0]
+    assert "не доставлено: 1" in replies[0]

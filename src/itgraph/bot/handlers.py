@@ -135,14 +135,26 @@ def build_dispatcher(database: Database, chat_id: int) -> Dispatcher:
                 session, attempts=settings.alert_failure_report_after
             )
             waiting = await outstanding_alerts(session)
-            raised, newest = (
+            raised, folded, newest = (
                 await session.execute(
-                    select(func.count(Alert.id), func.max(Alert.raised_at))
+                    select(
+                        func.count(Alert.id),
+                        func.count(Alert.id).filter(
+                            Alert.folded_into.is_not(None)
+                        ),
+                        func.max(Alert.raised_at),
+                    )
                 )
             ).one()
 
+        # Folds are counted apart because they are alerts nobody was sent
+        # on their own: without the figure, "raised" overstates how many
+        # messages there were, and the difference reads as a loss.
         lines = [
-            f"оповещений всего: {raised}, не доставлено: {waiting.total}",
+            (
+                f"оповещений всего: {raised} (из них свёрнуто в серии: "
+                f"{folded}), не доставлено: {waiting.total}"
+            ),
             (
                 f"последнее поднято: {newest.astimezone(MOSCOW_TZ):%Y-%m-%d %H:%M} MSK"
                 if newest

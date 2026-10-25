@@ -253,10 +253,16 @@ class AlertDelivery(enum.StrEnum):
     in a summary, and a reader treats it as a record rather than as news.
     Which one an alert got is also how the cap is accounted for, so it is
     a fact about delivery rather than a display preference.
+
+    ``FOLDED`` is neither: the alert was counted inside its head's
+    message rather than sent. Its own value rather than its head's,
+    because the cap counts ``DIRECT`` rows — six folds marked direct
+    would spend six of the day's messages on one that was sent.
     """
 
     DIRECT = "direct"
     DIGEST = "digest"
+    FOLDED = "folded"
 
 
 class AlertVerdict(enum.StrEnum):
@@ -1114,6 +1120,16 @@ class Alert(Base):
     scoring change brings three rate-based kinds with four numbers each,
     and a table with fourteen mostly-null columns would describe the
     union of its producers rather than what an alert is.
+
+    **A spike can be folded into another.** When a whole channel's
+    audience grows at once, every recent post crosses together; the first
+    becomes the *head* and the rest point at it through ``folded_into``.
+    A fold is a row rather than an absence because the unique constraint
+    is what stops a post being raised twice: a folded post is still
+    inside the scoring window when the fold window closes, and without
+    its row the next pass would raise it as a new head. The bot never
+    sends a fold; it counts them into the head's message and marks them
+    ``FOLDED`` once the head has gone out.
     """
 
     __tablename__ = "alerts"
@@ -1141,6 +1157,14 @@ class Alert(Base):
             "raised_at",
             postgresql_where=text("delivered_at IS NULL"),
         ),
+        # The head's message counts its folds, and settling them is a
+        # join on it. Partial, because almost every alert is not a fold.
+        Index(
+            "ix_alerts_folded_into",
+            "folded_into",
+            postgresql_where=text("folded_into IS NOT NULL"),
+        ),
+        CheckConstraint("folded_into <> id", name="not_folded_into_itself"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -1172,6 +1196,14 @@ class Alert(Base):
 
     attempts: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     last_error: Mapped[str | None] = mapped_column(Text)
+
+    # The head this spike was told through, or null for an alert that is
+    # a message of its own. Written by the pass, never by the bot — the
+    # same split as every other column here. Cascading, because a head
+    # and its folds are one event.
+    folded_into: Mapped[int | None] = mapped_column(
+        ForeignKey("alerts.id", ondelete="CASCADE")
+    )
 
     def __repr__(self) -> str:
         return (
@@ -1255,6 +1287,11 @@ class BaselineRun(Base):
     # fitted thinly: an absent band is a gap, a band fitted on four
     # observations is a wrong number.
     min_band_samples: Mapped[int] = mapped_column(Integer)
+    # Below this many distinct posts a band keeps no spread of its own and
+    # is divided by the pooled one. Null on a run made before the floor
+    # existed: those fitted band spreads on readings alone, and a server
+    # default would claim they ran under a rule they never saw.
+    min_band_spread_posts: Mapped[int | None] = mapped_column(Integer)
 
     # What the refresh could see. The denominator matters for the same
     # reason it does in `AffiliationRun`: a channel with no baseline and

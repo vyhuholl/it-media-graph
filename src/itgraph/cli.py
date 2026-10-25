@@ -778,6 +778,10 @@ def score(
     `--replay` answers "what would this have said" over history, writing
     no alert and sending nothing. With `--threshold` it is how a
     threshold is chosen in minutes rather than one experiment per day.
+
+    Spikes of one channel inside `alert_spike_fold_hours` of its first
+    are one event: the first is raised, the rest are folded into it and
+    told inside its message. The listing marks each fold and its head.
     """
     from itgraph.config import settings
     from itgraph.db.session import Database
@@ -806,14 +810,23 @@ def score(
             await database.dispose()
 
         typer.echo(summary.line())
+        heads = {
+            entry.spike.post_key: entry.into.post_key
+            for entry in summary.placed
+            if entry.into is not None
+        }
         for spike in summary.spikes:
             channel, msg = spike.post_key
-            typer.echo(
+            line = (
                 f"  z {spike.score.z:5.1f}  {spike.score.metric:<9} "
                 f"{channel}/{msg}  "
                 f"{spike.score.observed:.0f} vs {spike.score.expected:.0f} "
                 f"expected at {_hours(spike.score.age)}"
             )
+            head = heads.get(spike.post_key)
+            if head is not None:
+                line += f"  ↳ folded into {head[0]}/{head[1]}"
+            typer.echo(line)
 
     _run(run())
 

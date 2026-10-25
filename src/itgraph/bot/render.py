@@ -174,6 +174,7 @@ def render_spike(
     now: datetime,
     z: float,
     text: str | None,
+    folded: int = 0,
 ) -> RenderedAlert:
     """One post doing unusually well on one metric, as one message.
 
@@ -186,6 +187,13 @@ def render_spike(
     more here: a spike alert can arrive fifteen minutes after publication,
     so a reader who has learned to expect hours would misread how early
     this is.
+
+    ``folded`` is how many other posts of the channel were folded into
+    this one. Stated because it changes what the message means — not
+    "this post interests people" but "this channel's whole audience
+    grew" — and counted rather than listed, because a list of links is
+    the series folding exists to replace. Nothing is said when it is
+    zero: a single post standing out is the ordinary claim.
     """
     who = channel_title or (
         f"@{channel_username}" if channel_username else "канал"
@@ -204,6 +212,14 @@ def render_spike(
     if excerpt:
         lines.append("")
         lines.append(excerpt)
+
+    if folded:
+        lines.append("")
+        lines.append(
+            f"📶 Вместе с ним выше нормы ещё {folded} пост(ов) канала — "
+            "похоже, вырос охват всего канала (реклама, событие или "
+            "накрутка), а не интерес к этому посту."
+        )
 
     return RenderedAlert(alert_id=alert_id, text="\n".join(lines))
 

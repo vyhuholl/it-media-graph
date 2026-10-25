@@ -642,6 +642,7 @@ async def test_a_band_spread_is_stored_where_it_could_be_measured(
     """
     monkeypatch.setattr(settings, "baseline_min_channel_posts", 3)
     monkeypatch.setattr(settings, "baseline_min_band_samples", 3)
+    monkeypatch.setattr(settings, "baseline_min_band_spread_posts", 3)
     await seed_history(database)
     await refresh_baselines(database, now=NOW)
 
@@ -656,3 +657,41 @@ async def test_a_band_spread_is_stored_where_it_could_be_measured(
 
     assert spreads
     assert any(value is not None for value in spreads.values())
+
+
+async def test_a_band_seen_on_too_few_posts_keeps_no_spread(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Enough readings is not enough: they can all be a handful of posts.
+
+    The band still has its curve point and is still scored — against the
+    pooled spread, which is what a `NULL` here means at scoring time.
+    """
+    monkeypatch.setattr(settings, "baseline_min_channel_posts", 3)
+    monkeypatch.setattr(settings, "baseline_min_band_samples", 3)
+    # One more than the six posts `seed_history` reads.
+    monkeypatch.setattr(settings, "baseline_min_band_spread_posts", 7)
+    await seed_history(database)
+    await refresh_baselines(database, now=NOW)
+
+    async with database.session() as session:
+        rows = await session.execute(
+            text(
+                "SELECT band, spread FROM curve_points "
+                "WHERE kind = 'personal' AND metric = 'views'"
+            )
+        )
+        spreads = dict(rows.all())
+        recorded = await session.scalar(
+            text("SELECT min_band_spread_posts FROM baseline_runs")
+        )
+        loaded = await load_baselines(session)
+
+    assert spreads
+    assert all(value is None for value in spreads.values())
+    # The rule travels with the run it shaped.
+    assert recorded == 7
+    assert loaded is not None
+    baseline = loaded.for_channel(CHANNEL, Metric.VIEWS)
+    assert baseline is not None
+    assert baseline.spread_at(timedelta(hours=1)) == baseline.spread

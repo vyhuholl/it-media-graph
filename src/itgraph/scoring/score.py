@@ -29,7 +29,7 @@ distinction worth having.
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from itgraph.scoring.curves import Curve, band_of
 
@@ -106,15 +106,22 @@ class Score:
 class Spike:
     """One post that scored past the threshold, and on what.
 
-    The pair a raise needs: which post, and the single score it is being
+    What a raise needs: which post, and the single score it is being
     raised under. Kept here beside ``Score`` rather than in the pass, for
     the reason ``Cascade`` lives in ``alerts/cascade.py`` — the queue
     writer takes this type, and a type defined in the pass would make the
     two import each other.
+
+    ``crossed_at`` is when the first reading past the threshold was
+    taken — the moment a live pass could first have seen it. It is what
+    decides which spike of a channel heads its event, so it is the
+    reading's own ``observed_at``, never the moment of the pass: a replay
+    has no passes, and must still pick the same head.
     """
 
     post_key: tuple[int, int]
     score: Score
+    crossed_at: datetime
 
 
 def expected(baseline: Baseline, age: timedelta) -> float | None:

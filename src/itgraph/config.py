@@ -376,6 +376,33 @@ class Settings(BaseSettings):
         Metric.FORWARDS,
     )
 
+    # How long after a channel's first spike its later spikes are folded
+    # into it rather than sent. When a whole channel's audience grows at
+    # once — an ad, a broadcast, bought views — every post younger than
+    # the scoring window crosses together, and one message per post tells
+    # one event many times: 81 of 196 spike alerts over 14 days arrived in
+    # same-channel series. Measured, gaps between one channel's crossings:
+    #
+    #     0–15 min   54     the series itself
+    #   15 min–3 h   15     same event, staggered
+    #        3–6 h    7     same event (late boosts at 3.0 h, 5.5 h)
+    #      6–9.5 h    6     distinct posts on one busy day
+    #      12–24 h   19     the next day's boost, or distinct posts
+    #
+    # Six hours covers the widest gap inside one event. Twenty-four would
+    # fold genuinely different posts into yesterday's alert, and would
+    # hide the stale-median noise that is a separate fix's to remove.
+    alert_spike_fold_hours: float = Field(default=6.0, gt=0)
+
+    # Consecutive messages of one channel closer than this are one post,
+    # scored under the first — the "text, then each video" way of
+    # publishing, which the album collapse does not see because nothing
+    # groups the messages. Measured over 60 days, gaps per second of
+    # interval: 87 under 5 s, 24 at 5–15 s, 9.3 at 15–30 s, 3.6 at
+    # 30–60 s, then the 2.5–3 background of separate posts from a minute
+    # on. Zero turns it off.
+    scoring_burst_seconds: float = Field(default=60.0, ge=0)
+
     # How far back a scoring pass looks for posts. Just past the last age
     # band's upper edge (9h), so every band a post can be scored in is
     # reachable — the same reachability check `watch_horizon_hours` gets,
@@ -416,6 +443,22 @@ class Settings(BaseSettings):
     # under it is omitted, which means posts of that age are not scored —
     # a gap, and better than a fraction fitted on four readings.
     baseline_min_band_samples: int = Field(default=20, ge=1)
+
+    # The distinct posts behind a band's own spread; under it the band is
+    # divided by the pooled spread. Readings overstate a band — a post is
+    # read several times inside one — and a spread from few posts is
+    # biased *low*, the over-alerting direction: on 18 October 20
+    # readings gave the event kind's 150m band 0.104 against a pooled
+    # 0.345, and ×1.41 of the expectation scored z 6.86. Bootstrapped over
+    # the 137 bands with 400+ posts, the estimate from k posts over the
+    # full one, 5th percentile:
+    #
+    #     k = 10 → 0.34   20 → 0.52   40 → 0.65   60 → 0.72   100 → 0.78
+    #
+    # 100 is where that tail matches the pooled fallback's own worst
+    # error (0.74, at the earliest band), so the rule never trades a
+    # ruler for a worse one.
+    baseline_min_band_spread_posts: int = Field(default=100, ge=1)
 
     # Past this, the pass says its baselines are stale. A refresh is
     # cheap and a scoring pass reading month-old medians would compare

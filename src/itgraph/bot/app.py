@@ -43,8 +43,10 @@ from itgraph.db.alerts import (
     claim_undelivered,
     count_delivered_since,
     digest_is_due,
+    folded_posts,
     mark_delivered,
     mark_failed,
+    settle_folds,
 )
 from itgraph.db.models import AlertDelivery, AlertKind
 from itgraph.db.session import Database
@@ -102,6 +104,7 @@ async def _render(
     claim, the cap, quiet hours and the retry never look at this.
     """
     window = timedelta(hours=settings.alert_cascade_window_hours)
+    spike = alert.kind is not AlertKind.REPOST_CASCADE
     async with database.session() as session:
         evidence = await alert_evidence(
             session,
@@ -109,10 +112,11 @@ async def _render(
             msg_id=alert.msg_id,
             window=window,
         )
+        folded = await folded_posts(session, head=alert) if spike else 0
     if evidence is None:
         return None
 
-    if alert.kind is not AlertKind.REPOST_CASCADE:
+    if spike:
         return render_spike(
             alert_id=alert.id,
             kind=alert.kind,
@@ -123,6 +127,7 @@ async def _render(
             now=now,
             z=alert.value,
             text=evidence.text,
+            folded=folded,
         )
 
     return render_cascade(
@@ -150,13 +155,27 @@ async def deliver_once(
 ) -> None:
     """One pass over the queue: send what is due, hold what is not.
 
+    Then settle every fold whose head has gone out — on every pass and
+    whatever the pass did, so a fold recorded after its head was sent is
+    settled by the same statement as one that was counted in it.
+    """
+    await _deliver_due(database, sender, stats, now=now or datetime.now(UTC))
+    async with database.session() as session:
+        await settle_folds(session, at=datetime.now(UTC))
+
+
+async def _deliver_due(
+    database: Database, sender: Sender, stats: BotStats, *, now: datetime
+) -> None:
+    """Send what is due and hold the rest.
+
     Three reasons an alert is held rather than sent, and none of them is
     a drop. Quiet hours mean the operator is asleep; the daily cap means
     enough has been said today; and both leave ``delivered_at`` null, so
     the digest picks the alert up and the reader is told how many there
     were.
     """
-    moment = now or datetime.now(UTC)
+    moment = now
 
     async with database.session() as session:
         claimed = await claim_undelivered(session, limit=BATCH)

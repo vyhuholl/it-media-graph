@@ -8,7 +8,7 @@ rather than an answer of zero.
 """
 
 import math
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 
 import pytest
@@ -24,7 +24,15 @@ from itgraph.scoring.curves import (
     fit_spread,
     median,
 )
-from itgraph.scoring.score import Baseline, expected, score_metric, score_post
+from itgraph.scoring.fold import Head, burst_heads, fold
+from itgraph.scoring.score import (
+    Baseline,
+    Score,
+    Spike,
+    expected,
+    score_metric,
+    score_post,
+)
 
 # The measured shape of views, from `docs/PLAN.md`: a third of the
 # eight-hour value by an hour, half by two hours. Named by the band each
@@ -369,3 +377,192 @@ def test_fitting_skips_a_band_too_thin_to_measure() -> None:
 
     assert "15m" in fitted
     assert "22m" not in fitted
+
+
+def test_a_band_seen_on_too_few_posts_is_not_fitted() -> None:
+    """Twenty readings can be four posts, and four posts are too narrow.
+
+    The 18 October band met the reading minimum and came out at a third
+    of the pooled spread; counting posts is what refuses it.
+    """
+    values = [n / 100 for n in range(-50, 51)]
+    fitted = fit_band_spreads(
+        {"150m": values, "220m": values},
+        min_samples=10,
+        posts={"150m": 4, "220m": 120},
+        min_posts=100,
+    )
+
+    assert "150m" not in fitted
+    assert "220m" in fitted
+
+
+# --- what counts as one post, and one event -------------------------
+
+T0 = datetime(2026, 10, 15, 15, 0, tzinfo=UTC)
+
+
+def test_messages_seconds_apart_are_one_post() -> None:
+    """Text, then each video: chained by the gaps, named by the first."""
+    heads = burst_heads(
+        [
+            ((1, 41), T0),
+            ((1, 42), T0 + timedelta(seconds=14)),
+            ((1, 43), T0 + timedelta(seconds=62)),
+            ((1, 44), T0 + timedelta(seconds=85)),
+        ],
+        gap=timedelta(seconds=60),
+    )
+
+    # 85 s end to end, but no single gap reaches a minute.
+    assert set(heads.values()) == {(1, 41)}
+
+
+def test_messages_minutes_apart_are_separate_posts() -> None:
+    heads = burst_heads(
+        [((1, 41), T0), ((1, 42), T0 + timedelta(minutes=3))],
+        gap=timedelta(seconds=60),
+    )
+
+    assert heads == {(1, 41): (1, 41), (1, 42): (1, 42)}
+
+
+def test_bursts_never_cross_channels() -> None:
+    """Two channels posting in the same second are two posts."""
+    heads = burst_heads(
+        [((1, 41), T0), ((2, 7), T0), ((1, 42), T0)],
+        gap=timedelta(seconds=60),
+    )
+
+    assert heads[(2, 7)] == (2, 7)
+    assert heads[(1, 42)] == (1, 41)
+
+
+def test_a_zero_gap_joins_nothing() -> None:
+    heads = burst_heads(
+        [((1, 41), T0), ((1, 42), T0)], gap=timedelta(seconds=0)
+    )
+
+    assert heads[(1, 42)] == (1, 42)
+
+
+def crossing(
+    channel: int, msg: int, *, at: timedelta, z: float = 4.0
+) -> Spike:
+    """A spike of one post that crossed `at` after T0."""
+    return Spike(
+        post_key=(channel, msg),
+        score=Score(
+            metric="views",
+            age=timedelta(hours=2),
+            observed=400.0,
+            expected=100.0,
+            z=z,
+        ),
+        crossed_at=T0 + at,
+    )
+
+
+WINDOW = timedelta(hours=6)
+
+
+def test_a_channel_crossing_together_has_one_head() -> None:
+    """The whole series of 15 October, as one event."""
+    spikes = [crossing(1, msg, at=timedelta(0)) for msg in range(48, 55)]
+
+    placed = fold(spikes, heads={}, window=WINDOW)
+
+    heads = [entry for entry in placed if entry.into is None]
+    folded = [entry for entry in placed if entry.into is not None]
+    assert len(heads) == 1
+    assert len(folded) == 6
+    assert all(entry.into is heads[0].spike for entry in folded)
+
+
+def test_the_head_is_the_earliest_crossing_whatever_the_scores() -> None:
+    late_but_bigger = crossing(1, 2, at=timedelta(minutes=30), z=9.0)
+    early = crossing(1, 1, at=timedelta(0), z=3.5)
+
+    placed = fold([late_but_bigger, early], heads={}, window=WINDOW)
+
+    heads = [entry.spike for entry in placed if entry.into is None]
+    assert heads == [early]
+
+
+def test_among_simultaneous_crossings_the_highest_score_heads() -> None:
+    placed = fold(
+        [
+            crossing(1, 1, at=timedelta(0), z=4.0),
+            crossing(1, 2, at=timedelta(0), z=6.0),
+        ],
+        heads={},
+        window=WINDOW,
+    )
+
+    heads = [entry.spike.post_key for entry in placed if entry.into is None]
+    assert heads == [(1, 2)]
+
+
+def test_a_crossing_after_the_window_opens_a_new_event() -> None:
+    """The next day's boost is a new message, not a fold into yesterday."""
+    placed = fold(
+        [
+            crossing(1, 1, at=timedelta(0)),
+            crossing(1, 2, at=timedelta(hours=18)),
+        ],
+        heads={},
+        window=WINDOW,
+    )
+
+    assert [entry.into for entry in placed] == [None, None]
+
+
+def test_the_window_is_anchored_at_the_head() -> None:
+    """Sliding, crossings every four hours would chain forever."""
+    placed = fold(
+        [
+            crossing(1, 1, at=timedelta(0)),
+            crossing(1, 2, at=timedelta(hours=4)),
+            crossing(1, 3, at=timedelta(hours=8)),
+        ],
+        heads={},
+        window=WINDOW,
+    )
+
+    folded = {entry.spike.post_key: entry.into for entry in placed}
+    assert folded[(1, 2)] is not None
+    assert folded[(1, 3)] is None
+
+
+def test_two_channels_never_fold_together() -> None:
+    placed = fold(
+        [crossing(1, 1, at=timedelta(0)), crossing(2, 1, at=timedelta(0))],
+        heads={},
+        window=WINDOW,
+    )
+
+    assert [entry.into for entry in placed] == [None, None]
+
+
+def test_a_crossing_folds_into_a_head_already_in_the_queue() -> None:
+    raised = Head(alert_id=17, post_key=(1, 1), raised_at=T0)
+
+    placed = fold(
+        [crossing(1, 2, at=timedelta(hours=2))],
+        heads={1: raised},
+        window=WINDOW,
+    )
+
+    assert placed[0].into is raised
+
+
+def test_a_head_in_the_queue_past_its_window_is_not_folded_into() -> None:
+    raised = Head(alert_id=17, post_key=(1, 1), raised_at=T0)
+
+    placed = fold(
+        [crossing(1, 2, at=timedelta(hours=7))],
+        heads={1: raised},
+        window=WINDOW,
+    )
+
+    assert placed[0].into is None

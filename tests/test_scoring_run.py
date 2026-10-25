@@ -189,6 +189,61 @@ def alerts_one(
     return rows[0]
 
 
+async def folds(database: Database) -> list[tuple[str, int, str, int]]:
+    """Every fold, as (kind, msg, head kind, head msg)."""
+    async with database.session() as session:
+        rows = await session.execute(
+            text(
+                "SELECT f.kind::text, f.msg_id, h.kind::text, h.msg_id "
+                "FROM alerts f JOIN alerts h ON h.id = f.folded_into "
+                "ORDER BY f.id"
+            )
+        )
+    return [(kind, msg, head, at) for kind, msg, head, at in rows]
+
+
+async def heads(database: Database) -> list[int]:
+    """The msg of every alert that is a message of its own."""
+    async with database.session() as session:
+        rows = await session.execute(
+            text(
+                "SELECT msg_id FROM alerts WHERE folded_into IS NULL "
+                "ORDER BY id"
+            )
+        )
+    return [msg for (msg,) in rows]
+
+
+async def raised_at(database: Database, moment: datetime) -> None:
+    """Say when the alerts so far were raised.
+
+    `raised_at` defaults to the database clock, which is not the clock a
+    test reasons in, and the fold window is measured from it.
+    """
+    async with database.session() as session:
+        await session.execute(
+            text("UPDATE alerts SET raised_at = :at"), {"at": moment}
+        )
+
+
+async def seed_series(database: Database, *, posts: int = 3) -> None:
+    """Several posts of one channel, all lifted at once.
+
+    Published ten minutes apart and read at the same age, so each
+    crossed at a different reading — the earliest is the oldest post.
+    """
+    for index in range(posts):
+        ago = timedelta(hours=3) - timedelta(minutes=10 * index)
+        await seed_post(database, msg_id=POST + index, published_ago=ago)
+        await snapshot(
+            database,
+            msg_id=POST + index,
+            published_ago=ago,
+            views=int(EXPECTED_AT_2H * 4),
+        )
+    await seed_baselines(database)
+
+
 async def test_an_ordinary_post_raises_nothing(database: Database) -> None:
     """The threshold has to be the thing that decides, not the presence
     of a reading."""
@@ -261,6 +316,12 @@ async def test_a_later_spike_on_another_metric_is_a_separate_alert(
         AlertKind.VIEWS_SPIKE,
         AlertKind.FORWARD_SPIKE,
     }
+    # Recorded, and told through the post's own first alert: an hour
+    # later is inside the fold window, so this is the same event.
+    assert summary.folded == 1
+    assert await folds(database) == [
+        (AlertKind.FORWARD_SPIKE, POST, AlertKind.VIEWS_SPIKE, POST)
+    ]
 
 
 async def test_a_post_is_scored_at_its_most_remarkable_age(
@@ -299,6 +360,189 @@ async def test_an_album_raises_one_alert(database: Database) -> None:
     # ...and against the first part, which is what a t.me link resolves to.
     _, _, msg, _ = alerts_one(await alerts(database))
     assert msg == POST
+
+
+async def test_a_burst_raises_one_alert_under_its_first_message(
+    database: Database,
+) -> None:
+    """Text, then each video: messages seconds apart are one post."""
+    for offset in range(3):
+        ago = timedelta(hours=3) - timedelta(seconds=20 * offset)
+        await seed_post(database, msg_id=POST + offset, published_ago=ago)
+        await snapshot(
+            database,
+            msg_id=POST + offset,
+            published_ago=ago,
+            views=int(EXPECTED_AT_2H * 4),
+        )
+    await seed_baselines(database)
+
+    summary = await run_scoring(database, now=NOW)
+
+    assert summary.posts == 1
+    assert summary.raised == 1
+    _, _, msg, _ = alerts_one(await alerts(database))
+    assert msg == POST
+
+
+# --- one event per channel ------------------------------------------
+
+
+async def test_a_channel_crossing_together_raises_one_head(
+    database: Database,
+) -> None:
+    """The series this exists for: the whole channel moved, once."""
+    await seed_series(database)
+
+    summary = await run_scoring(database, now=NOW)
+
+    assert summary.raised == 3
+    assert summary.folded == 2
+    # The head is the post that crossed first, at the earliest reading.
+    assert await heads(database) == [POST]
+    assert {msg for _, msg, _, head in await folds(database)} == {
+        POST + 1,
+        POST + 2,
+    }
+
+
+async def test_channels_crossing_together_each_get_a_head(
+    database: Database,
+) -> None:
+    other = CHANNEL + 1
+    await seed_post(database)
+    await seed_post(database, channel=other)
+    await snapshot(database, views=int(EXPECTED_AT_2H * 4))
+    await snapshot(database, channel=other, views=int(EXPECTED_AT_2H * 4))
+    async with database.session() as session:
+        run = await start_run(
+            session,
+            mature_days=28,
+            min_channel_posts=30,
+            min_band_samples=20,
+            channels_in_scope=2,
+        )
+        await store_channel_medians(
+            session,
+            run,
+            Metric.VIEWS,
+            {CHANNEL: (1000.0, 40), other: (1000.0, 40)},
+        )
+        await store_curves(
+            session,
+            run,
+            ChannelKind.PERSONAL,
+            Metric.VIEWS,
+            curve=CURVE,
+            factor=0.44,
+            spread=0.38,
+            samples=500,
+        )
+        run.completed_at = NOW - timedelta(hours=1)
+
+    summary = await run_scoring(database, now=NOW)
+
+    assert summary.raised == 2
+    assert summary.folded == 0
+
+
+async def test_a_later_crossing_folds_into_the_head_in_the_queue(
+    database: Database,
+) -> None:
+    """An event that keeps going is still one message."""
+    await seed_post(database)
+    await seed_baselines(database)
+    await snapshot(database, views=int(EXPECTED_AT_2H * 4))
+    await run_scoring(database, now=NOW)
+    await raised_at(database, NOW)
+
+    later = NOW + timedelta(hours=2)
+    await seed_post(
+        database, msg_id=POST + 1, published_ago=timedelta(minutes=60)
+    )
+    await snapshot(
+        database,
+        msg_id=POST + 1,
+        published_ago=timedelta(minutes=60),
+        age=timedelta(hours=2),
+        views=int(EXPECTED_AT_2H * 4),
+    )
+    summary = await run_scoring(database, now=later)
+
+    assert summary.raised == 1
+    assert summary.folded == 1
+    assert await folds(database) == [
+        (AlertKind.VIEWS_SPIKE, POST + 1, AlertKind.VIEWS_SPIKE, POST)
+    ]
+
+
+async def test_a_crossing_after_the_window_is_a_new_head(
+    database: Database,
+) -> None:
+    """Tomorrow's event is tomorrow's message."""
+    await seed_post(database)
+    await seed_baselines(database)
+    await snapshot(database, views=int(EXPECTED_AT_2H * 4))
+    await run_scoring(database, now=NOW)
+    await raised_at(database, NOW - timedelta(hours=7))
+
+    # Ten minutes after the first, so it is a post of its own and not
+    # the second message of a burst.
+    ago = timedelta(hours=2, minutes=50)
+    await seed_post(database, msg_id=POST + 1, published_ago=ago)
+    await snapshot(
+        database,
+        msg_id=POST + 1,
+        published_ago=ago,
+        views=int(EXPECTED_AT_2H * 4),
+    )
+    summary = await run_scoring(database, now=NOW)
+
+    assert summary.folded == 0
+    assert await heads(database) == [POST, POST + 1]
+
+
+async def test_a_folded_post_is_not_raised_again_after_the_window(
+    database: Database,
+) -> None:
+    """Why a fold is a row: the post outlives the window it was folded in.
+
+    Still inside the scoring window and still past the threshold once
+    the fold window has closed, so without its row the next pass would
+    raise it as a new head — the series again, a few hours late.
+    """
+    # Ten minutes apart, so two posts rather than one burst.
+    published = {
+        POST: timedelta(hours=8),
+        POST + 1: timedelta(hours=7, minutes=50),
+    }
+    for msg, ago in published.items():
+        await seed_post(database, msg_id=msg, published_ago=ago)
+        await snapshot(
+            database,
+            msg_id=msg,
+            published_ago=ago,
+            age=timedelta(hours=1),
+            views=int(1000 * 0.44 * 0.33 * 4),
+        )
+    await seed_baselines(database)
+    first = NOW - timedelta(hours=6, minutes=49)
+    await run_scoring(database, now=first)
+    await raised_at(database, first)
+    assert len(await folds(database)) == 1
+
+    await snapshot(
+        database,
+        msg_id=POST + 1,
+        published_ago=published[POST + 1],
+        age=timedelta(hours=7, minutes=40),
+        views=int(1000 * 0.44 * 0.96 * 4),
+    )
+    summary = await run_scoring(database, now=NOW)
+
+    assert summary.crossed == 2
+    assert summary.raised == 0
+    assert len(await alerts(database)) == 2
 
 
 # --- refusals -------------------------------------------------------
@@ -465,3 +709,19 @@ async def test_a_replay_accepts_another_threshold(
 
     assert strict.crossed == 0
     assert loose.crossed == 1
+
+
+async def test_a_replay_reports_folds(database: Database) -> None:
+    """The same folding as the live pass, from no queue at all."""
+    await seed_series(database)
+
+    summary = await run_scoring(database, now=NOW, dry_run=True)
+
+    assert summary.folded == 2
+    assert "2 folded" in summary.line()
+    assert {
+        entry.spike.post_key[1]: entry.into.post_key[1]
+        for entry in summary.placed
+        if entry.into is not None
+    } == {POST + 1: POST, POST + 2: POST}
+    assert await alerts(database) == []

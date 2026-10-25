@@ -267,12 +267,14 @@ async def start_run(
     min_channel_posts: int,
     min_band_samples: int,
     channels_in_scope: int,
+    min_band_spread_posts: int | None = None,
 ) -> BaselineRun:
     """Open a refresh. Nothing reads it until it is completed."""
     run = BaselineRun(
         mature_days=mature_days,
         min_channel_posts=min_channel_posts,
         min_band_samples=min_band_samples,
+        min_band_spread_posts=min_band_spread_posts,
         channels_in_scope=channels_in_scope,
         channels_with_baseline=0,
     )

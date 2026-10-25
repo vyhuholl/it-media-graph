@@ -19,9 +19,11 @@ from itgraph.db.alerts import (
     failing_alerts,
     mark_delivered,
     mark_failed,
+    outstanding_alerts,
     raise_cascades,
     raised_bands,
     record_verdict,
+    settle_folds,
 )
 from itgraph.db.models import AlertDelivery, AlertKind, AlertVerdict
 from itgraph.db.session import Database
@@ -110,6 +112,62 @@ def _json(payload: dict[str, object]) -> str:
     import json
 
     return json.dumps(payload)
+
+
+async def seed_series(database: Database, *, folded: int = 2) -> int:
+    """A head spike on the publisher's post, and spikes of its other
+    posts folded into it. Returns the head's id.
+
+    Written directly, as `seed` writes its edges: what is under test is
+    the queue, and the scoring pass that decides folds has its own tests.
+    """
+    await seed(database)
+    async with database.session() as session:
+        for offset in range(1, folded + 1):
+            await session.execute(
+                text(
+                    "INSERT INTO raw_messages (channel_id, msg_id, payload) "
+                    "VALUES (:c, :m, CAST(:p AS jsonb))"
+                ),
+                {
+                    "c": PUBLISHER,
+                    "m": POST + offset,
+                    "p": _json(
+                        {
+                            "_": "Message",
+                            "id": POST + offset,
+                            "date": (NOW - timedelta(hours=1)).isoformat(),
+                        }
+                    ),
+                },
+            )
+        head = await session.scalar(
+            text(
+                "INSERT INTO alerts (kind, channel_id, msg_id, band, value) "
+                "VALUES ('views_spike', :c, :m, 1, 6.0) RETURNING id"
+            ),
+            {"c": PUBLISHER, "m": POST},
+        )
+        for offset in range(1, folded + 1):
+            await session.execute(
+                text(
+                    "INSERT INTO alerts (kind, channel_id, msg_id, band, "
+                    "value, folded_into) "
+                    "VALUES ('views_spike', :c, :m, 1, 5.0, :h)"
+                ),
+                {"c": PUBLISHER, "m": POST + offset, "h": head},
+            )
+    assert head is not None
+    return int(head)
+
+
+async def delivery_of(database: Database) -> dict[int, str | None]:
+    """How each alert was delivered, by msg, or None while outstanding."""
+    async with database.session() as session:
+        rows = await session.execute(
+            text("SELECT msg_id, delivery::text FROM alerts")
+        )
+    return {msg: delivery for msg, delivery in rows}
 
 
 async def alerts(database: Database) -> list[tuple[int, int, float]]:
@@ -559,3 +617,71 @@ async def test_concurrent_claims_do_not_deadlock(
         await other.dispose()
 
     assert sum(taken) == 2
+
+
+# --- folds ----------------------------------------------------------
+
+
+async def test_a_fold_is_never_claimed(database: Database) -> None:
+    """Told through its head, never sent as a message of its own."""
+    head = await seed_series(database)
+
+    async with database.session() as session:
+        claimed = await claim_undelivered(session, limit=10)
+
+    assert [alert.id for alert in claimed] == [head]
+
+
+async def test_a_fold_waiting_for_its_head_is_not_outstanding(
+    database: Database,
+) -> None:
+    """Otherwise a head held for the morning reads as a dead loop."""
+    await seed_series(database)
+
+    async with database.session() as session:
+        waiting = await outstanding_alerts(session)
+
+    assert waiting.total == 1
+    assert waiting.never_attempted == 1
+
+
+async def test_folds_are_settled_only_once_their_head_is_delivered(
+    database: Database,
+) -> None:
+    head = await seed_series(database)
+
+    async with database.session() as session:
+        assert await settle_folds(session, at=NOW) == 0
+    assert set((await delivery_of(database)).values()) == {None}
+
+    async with database.session() as session:
+        await mark_delivered(
+            session, [head], delivery=AlertDelivery.DIRECT, at=NOW
+        )
+        settled = await settle_folds(session, at=NOW)
+
+    assert settled == 2
+    assert await delivery_of(database) == {
+        POST: "direct",
+        POST + 1: "folded",
+        POST + 2: "folded",
+    }
+
+
+async def test_settled_folds_do_not_count_towards_the_cap(
+    database: Database,
+) -> None:
+    """One message went out, so one is what the cap is charged."""
+    head = await seed_series(database)
+    async with database.session() as session:
+        await mark_delivered(
+            session, [head], delivery=AlertDelivery.DIRECT, at=NOW
+        )
+        await settle_folds(session, at=NOW)
+        sent = await count_delivered_since(
+            session,
+            since=NOW - timedelta(days=1),
+            delivery=AlertDelivery.DIRECT,
+        )
+
+    assert sent == 1

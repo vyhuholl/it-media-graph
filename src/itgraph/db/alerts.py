@@ -29,6 +29,7 @@ from itgraph.db.models import (
     AlertVerdict,
     Metric,
 )
+from itgraph.scoring.fold import Head, Placed
 from itgraph.scoring.score import Spike
 
 __all__ = [
@@ -41,14 +42,18 @@ __all__ = [
     "count_delivered_since",
     "digest_is_due",
     "failing_alerts",
+    "folded_posts",
     "listen",
     "mark_delivered",
     "mark_failed",
+    "open_heads",
     "outstanding_alerts",
     "raise_cascades",
     "raise_spikes",
     "raised_bands",
+    "raised_spikes",
     "record_verdict",
+    "settle_folds",
 ]
 
 logger = logging.getLogger(__name__)
@@ -137,8 +142,61 @@ async def raise_cascades(
     return written
 
 
-async def raise_spikes(session: AsyncSession, spikes: Sequence[Spike]) -> int:
-    """Record spike alerts. Returns how many were new.
+def _spike_kind(spike: Spike) -> AlertKind:
+    return Metric(spike.score.metric).alert_kind()
+
+
+async def raised_spikes(
+    session: AsyncSession, *, since: datetime
+) -> set[tuple[AlertKind, int, int]]:
+    """Every spike already in the queue since a moment, folded or not.
+
+    What a live pass removes from its spikes *before* folding them. A
+    pass re-scores everything in its window, so it sees again posts it
+    raised an hour ago; left to the conflict clause they would still take
+    part in folding, and an old head would be read as a new crossing and
+    open an event of its own.
+    """
+    rows = await session.execute(
+        select(Alert.kind, Alert.channel_id, Alert.msg_id).where(
+            Alert.kind != AlertKind.REPOST_CASCADE, Alert.raised_at >= since
+        )
+    )
+    return {(kind, channel, msg) for kind, channel, msg in rows}
+
+
+async def open_heads(
+    session: AsyncSession, *, since: datetime
+) -> dict[int, Head]:
+    """Each channel's newest head spike raised since a moment.
+
+    A head is a spike that is not itself folded. Only the newest matters:
+    the windows are anchored at their heads and a channel's events do not
+    overlap, so an older head's window has closed by the time a newer one
+    opens.
+    """
+    rows = await session.execute(
+        select(Alert.id, Alert.channel_id, Alert.msg_id, Alert.raised_at)
+        .where(
+            Alert.kind != AlertKind.REPOST_CASCADE,
+            Alert.folded_into.is_(None),
+            Alert.raised_at >= since,
+        )
+        .distinct(Alert.channel_id)
+        .order_by(Alert.channel_id, Alert.raised_at.desc(), Alert.id.desc())
+    )
+    return {
+        channel: Head(
+            alert_id=alert_id, post_key=(channel, msg), raised_at=raised_at
+        )
+        for alert_id, channel, msg, raised_at in rows
+    }
+
+
+async def raise_spikes(
+    session: AsyncSession, placed: Sequence[Placed]
+) -> tuple[int, int]:
+    """Record spike alerts, heads and folds. Returns (new, of which folded).
 
     The same insert ``raise_cascades`` makes, against the same
     constraint, and deliberately not a generalisation of it: the two
@@ -152,39 +210,75 @@ async def raise_spikes(session: AsyncSession, spikes: Sequence[Spike]) -> int:
     the same event, and a second message about it would reintroduce from
     the age axis exactly the noise that scoring one metric per post
     removes from the metric axis. So a post raises at most one alert per
-    metric, ever, and the constraint enforces it without a flag.
+    metric, ever, and the constraint enforces it without a flag — folded
+    or not, which is why a fold is a row.
 
     ``value`` is the z. It is the number that crossed the threshold, and
     it is what a replay at another threshold has to be able to compare
     against. The multiple it corresponds to depends on the spread of the
     baseline run that produced it, which is why the run's parameters are
     kept in ``baseline_runs`` rather than the ratio being frozen here.
+
+    Heads go in first so their ids exist for the folds, and all of it in
+    the caller's one transaction, so the bot never sees a fold before
+    its head. A fold whose head conflicted — another pass raised it a
+    moment ago — is left for the next pass, which will find that head in
+    the queue and fold into it there.
     """
-    if not spikes:
-        return 0
+    if not placed:
+        return 0, 0
 
-    statement = insert(Alert).values(
-        [
-            {
-                "kind": Metric(spike.score.metric).alert_kind(),
-                "channel_id": spike.post_key[0],
-                "msg_id": spike.post_key[1],
-                "band": 1,
-                "value": float(spike.score.z),
-            }
-            for spike in spikes
+    def row(spike: Spike) -> dict[str, object]:
+        return {
+            "kind": _spike_kind(spike),
+            "channel_id": spike.post_key[0],
+            "msg_id": spike.post_key[1],
+            "band": 1,
+            "value": float(spike.score.z),
+        }
+
+    async def write(
+        rows: list[dict[str, object]],
+    ) -> list[tuple[int, AlertKind, int, int]]:
+        if not rows:
+            return []
+        result = await session.execute(
+            insert(Alert)
+            .values(rows)
+            .on_conflict_do_nothing(constraint="uq_alerts_post_band")
+            .returning(Alert.id, Alert.kind, Alert.channel_id, Alert.msg_id)
+        )
+        return [
+            (alert_id, kind, channel, msg)
+            for alert_id, kind, channel, msg in result.all()
         ]
-    )
-    result = await session.execute(
-        statement.on_conflict_do_nothing(
-            constraint="uq_alerts_post_band"
-        ).returning(Alert.id)
-    )
-    written = len(result.all())
 
-    if written:
-        await session.execute(select(func.pg_notify(CHANNEL, str(written))))
-    return written
+    heads = await write(
+        [row(entry.spike) for entry in placed if entry.into is None]
+    )
+    ids = {
+        (kind, channel, msg): alert_id
+        for alert_id, kind, channel, msg in heads
+    }
+
+    folds: list[dict[str, object]] = []
+    for entry in placed:
+        if entry.into is None:
+            continue
+        if isinstance(entry.into, Head):
+            head_id: int | None = entry.into.alert_id
+        else:
+            head_id = ids.get((_spike_kind(entry.into), *entry.into.post_key))
+        if head_id is None:
+            continue
+        folds.append({**row(entry.spike), "folded_into": head_id})
+    folded = await write(folds)
+
+    # Only heads are anything for the bot to do; a fold is settled on
+    # its poll whether or not it was told.
+    if heads:
+        await session.execute(select(func.pg_notify(CHANNEL, str(len(heads)))))
+    return len(heads) + len(folded), len(folded)
 
 
 async def claim_undelivered(
@@ -203,10 +297,13 @@ async def claim_undelivered(
     open across the send would keep a row lock for the duration of a
     network call — see ``mark_delivered`` for what that trade actually
     is.
+
+    A fold is never claimed: it is told through its head, and settled by
+    ``settle_folds`` once the head has gone out.
     """
     rows = await session.execute(
         select(Alert)
-        .where(Alert.delivered_at.is_(None))
+        .where(Alert.delivered_at.is_(None), Alert.folded_into.is_(None))
         .order_by(Alert.raised_at, Alert.id)
         .limit(limit)
         .with_for_update(skip_locked=True)
@@ -253,6 +350,52 @@ async def mark_delivered(
         update(Alert)
         .where(Alert.id.in_(alert_ids))
         .values(delivered_at=at, delivery=delivery, last_error=None)
+    )
+
+
+async def settle_folds(session: AsyncSession, *, at: datetime) -> int:
+    """Mark delivered every fold whose head has been. Returns how many.
+
+    Whichever way the head went — directly or in a digest — its message
+    counted the folds that existed when it was rendered, and a fold
+    recorded since belongs to an event the reader has been told about.
+    Either way nothing more is sent, so this is a write the bot makes on
+    its own columns and never a message.
+
+    Not called at the moment a head is marked, but on every pass, so a
+    fold that arrives after its head is settled by the same statement as
+    one that arrived before.
+    """
+    # Aliased, or the subquery would correlate with the row being updated
+    # and ask whether the fold itself was delivered.
+    head = aliased(Alert)
+    delivered = select(head.id).where(head.delivered_at.is_not(None))
+    result = await session.execute(
+        update(Alert)
+        .where(
+            Alert.delivered_at.is_(None),
+            Alert.folded_into.in_(delivered),
+        )
+        .values(delivered_at=at, delivery=AlertDelivery.FOLDED)
+        .returning(Alert.id)
+    )
+    return len(result.all())
+
+
+async def folded_posts(session: AsyncSession, *, head: PendingAlert) -> int:
+    """How many *other* posts were folded into this head.
+
+    Posts, not rows: the same post's later spike on another metric folds
+    into its own head, and "one more post of this channel" would then be
+    false. Read at rendering, like every other piece of evidence.
+    """
+    return (
+        await session.scalar(
+            select(func.count(func.distinct(Alert.msg_id))).where(
+                Alert.folded_into == head.id, Alert.msg_id != head.msg_id
+            )
+        )
+        or 0
     )
 
 
@@ -343,14 +486,19 @@ class OutstandingAlerts:
 
 
 async def outstanding_alerts(session: AsyncSession) -> OutstandingAlerts:
-    """Everything undelivered, counted the way the two failures differ."""
+    """Everything undelivered, counted the way the two failures differ.
+
+    Folds are not counted. One waiting for a held head has never been
+    attempted and never will be, and counting it would make "the head is
+    waiting for morning" read as "nothing is trying to send".
+    """
     total, never, oldest = (
         await session.execute(
             select(
                 func.count(Alert.id),
                 func.count(Alert.id).filter(Alert.attempts == 0),
                 func.min(Alert.raised_at),
-            ).where(Alert.delivered_at.is_(None))
+            ).where(Alert.delivered_at.is_(None), Alert.folded_into.is_(None))
         )
     ).one()
     return OutstandingAlerts(
