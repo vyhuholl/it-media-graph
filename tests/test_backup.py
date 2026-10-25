@@ -147,6 +147,30 @@ def test_the_full_dump_names_no_tables(
     assert "--table" not in fake_run[0]
 
 
+def test_the_inventory_dump_keeps_the_youtube_review(
+    tmp_path: Path, fake_run: list[list[str]]
+) -> None:
+    """Hand work, like Telegram's: the records, not the API data."""
+    take_backup(inventory_kind(), tmp_path, now=NOW)
+
+    assert "yt_channels" in fake_run[0]
+    assert "yt_raw_channels" not in fake_run[0]
+
+
+@pytest.mark.parametrize("kind", [inventory_kind, full_kind])
+def test_no_dump_carries_youtube_api_data(
+    tmp_path: Path, fake_run: list[list[str]], kind: Any
+) -> None:
+    """Thirty days is the most YouTube API data may be kept, and a dump
+    is kept for as long as pruning decides. The pre-migration dump is a
+    full one, so it is covered by the same flag."""
+    take_backup(kind(), tmp_path, now=NOW)
+
+    dump_command = fake_run[0]
+    flag = dump_command.index("--exclude-table-data")
+    assert dump_command[flag + 1] == "yt_raw_*"
+
+
 def test_a_dump_is_read_back_before_it_counts(
     tmp_path: Path, fake_run: list[list[str]]
 ) -> None:

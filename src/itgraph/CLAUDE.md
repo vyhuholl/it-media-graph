@@ -9,7 +9,11 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `config.py` | pydantic-settings; the single `settings` object |
 | `cli.py` | typer app — thin command wrappers only |
 | `usernames.py` | Operator-supplied entries → usernames; refuses what cannot be looked up, before anything is spent |
+| `yt_review.py` | The review file: rendered for a text editor, read back strictly — every mistake at once with its line, the export moment and the 30-day expiry in the header |
+| `yt_entries.py` | The same door for YouTube: pasted handles, links and ids → the three lookups `channels.list` can make; `/c/`, vanity and video links refused together, before anything is spent |
 | `schedule.py` | When a post is read again and a channel looked at; pure arithmetic. A missed sample is skipped, never replayed |
+| `yt_policy.py` | What the YouTube Developer Policies fix, as constants: the 30-day retention. Not settings — they are not ours to raise |
+| `yt_quota.py` | The YouTube quota day (Pacific date, 23 or 25 hours twice a year), its reset, and the general pool's cap; pure arithmetic |
 | `tg/client.py` | Telethon client lifecycle; the only place a `TelegramClient` is built |
 | `tg/dialogs.py` | The account's own subscriptions → inventory rows |
 | `tg/manual.py` | Channels named by hand → inventory rows; resolves, never joins |
@@ -22,6 +26,12 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `tg/resolve.py` | The resolution pass: username and title for channels found by reference |
 | `tg/watch.py` | The poll loop: new posts and fresh counters from one request, forever. Spends no quota-bearing request; absorbs a rate limit and a lost connection rather than exiting, and exits only when it has stopped making progress at all |
 | `tg/` | MTProto collection: fetch and store raw payloads |
+| `yt/errors.py` | YouTube failures a caller names without importing the HTTP client |
+| `yt/client.py` | The only `httpx.AsyncClient`. Key in a header, never a URL; every request booked in the ledger before it is sent; what each answer means |
+| `yt/channels.py` | `channels.list` by ids (fifty a call; a 404 batch asked again id by id), by handle, by legacy name; the parts requested |
+| `yt/add.py` | The import pass: entries → ids → records, unreviewed. What the inventory already answers costs nothing; every call committed before the next, so the same input resumes |
+| `yt/refresh.py` | The refresh pass: every payload due, fifty a call, whatever the status; gone and back; progress committed per call. Logs ids only |
+| `yt/` | YouTube Data API collection: fetch channel resources and store them |
 | `derive/references.py` | Pure parsing of a payload — or of plain text — into the channels it references |
 | `derive/edges.py` | The derivation pass: raw messages → edges; touches no network |
 | `derive/metrics.py` | Pure reading of a payload into the four counters; absent is never zero |
@@ -55,6 +65,8 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `db/baselines.py` | The baseline tables: what a post of a given age is expected to reach, and the run it was measured in |
 | `db/poll.py` | The poll queue: which channel is due, and when it is due again. Timing only |
 | `db/floods.py` | The record of rate limits: one row per wait, and the two questions asked of it |
+| `db/yt_channels.py` | The YouTube inventory: records (the operator's, never deleted) and payloads (YouTube's, 30 days at most); creation, expiry, gone and back, what is due for refresh, review, listing |
+| `db/yt_quota.py` | The YouTube quota ledger: booking before sending, in a transaction that commits first; the journal; exhaustion; the day's report. Units are never returned |
 | `db/backfill.py` | Which channels to walk, how far each got, and why one stopped |
 | `db/backup.py` | Dumps, the schedule that picks which, and the pruning |
 | `db/session_lease.py` | The exclusive claim on the session file, as a Postgres advisory lock |

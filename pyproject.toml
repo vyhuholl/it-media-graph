@@ -8,6 +8,7 @@ dependencies = [
     "aiogram>=3.30.0",
     "alembic>=1.18.5",
     "asyncpg>=0.31.0",
+    "httpx>=0.28.1",
     "pydantic-settings>=2.14.2",
     "python-socks>=2.8.2",
     "qrcode>=8.2",

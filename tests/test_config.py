@@ -265,3 +265,81 @@ def test_a_deadline_above_the_flood_sleep_is_accepted(
     env.setenv("REQUEST_TIMEOUT_SECONDS", "90")
     env.setenv("FLOOD_SLEEP_THRESHOLD", "60")
     assert build().request_timeout_seconds == 90
+
+
+# Spelled out in words for the same reason as the api hash: a real key
+# starts `AIza`, and a fake that looked like one would cost gitleaks and a
+# reviewer the ability to tell them apart.
+YOUTUBE_KEY = "test-youtube-api-key"
+
+
+def test_youtube_key_is_optional(env: pytest.MonkeyPatch) -> None:
+    """A machine without the key still runs Telegram and the bot."""
+    assert build().youtube_api_key is None
+
+
+def test_an_empty_youtube_key_is_no_key(env: pytest.MonkeyPatch) -> None:
+    """The line `.env.example` and the deploy template leave blank."""
+    env.setenv("YOUTUBE_API_KEY", "")
+    assert build().youtube_api_key is None
+
+
+def test_youtube_key_is_not_printed(env: pytest.MonkeyPatch) -> None:
+    env.setenv("YOUTUBE_API_KEY", YOUTUBE_KEY)
+    settings = build()
+    assert YOUTUBE_KEY not in repr(settings)
+    assert settings.youtube_api_key is not None
+    assert settings.youtube_api_key.get_secret_value() == YOUTUBE_KEY
+
+
+def test_a_refresh_age_at_the_policy_limit_is_refused(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """Thirty days is when the payload is deleted, refreshed or not."""
+    env.setenv("YOUTUBE_API_KEY", YOUTUBE_KEY)
+    env.setenv("YOUTUBE_REFRESH_AFTER_DAYS", "30")
+
+    with pytest.raises(
+        ValidationError, match="youtube_refresh_after_days"
+    ) as caught:
+        build()
+
+    assert YOUTUBE_KEY not in str(caught.value)
+
+
+def test_a_refresh_age_under_the_limit_is_accepted(
+    env: pytest.MonkeyPatch,
+) -> None:
+    env.setenv("YOUTUBE_REFRESH_AFTER_DAYS", "29")
+    assert build().youtube_refresh_after_days == 29
+
+
+def test_caps_leaving_the_general_pool_nothing_are_refused(
+    env: pytest.MonkeyPatch,
+) -> None:
+    env.setenv("YOUTUBE_API_KEY", YOUTUBE_KEY)
+    env.setenv("YOUTUBE_QUOTA_MARGIN", "0.5")
+    env.setenv("YOUTUBE_WATCH_RESERVE", "5000")
+
+    with pytest.raises(
+        ValidationError, match="youtube_watch_reserve"
+    ) as caught:
+        build()
+
+    assert "youtube_quota_margin" in str(caught.value)
+    assert YOUTUBE_KEY not in str(caught.value)
+
+
+def test_the_default_caps_leave_six_thousand(env: pytest.MonkeyPatch) -> None:
+    """10,000 less a 10% margin less the poll loop's 3,000."""
+    from itgraph.yt_quota import general_cap
+
+    settings = build()
+    assert (
+        general_cap(
+            settings.youtube_daily_quota,
+            settings.youtube_quota_margin,
+            settings.youtube_watch_reserve,
+        )
+        == 6000
+    )

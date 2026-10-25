@@ -5,7 +5,7 @@ never one without the other.
 """
 
 import enum
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
@@ -13,6 +13,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     Enum,
     Float,
@@ -66,6 +67,18 @@ __all__ = [
     "RawChannel",
     "RawMessage",
     "RejectReason",
+    "YtChannel",
+    "YtChannelKind",
+    "YtCommand",
+    "YtDiscoverySource",
+    "YtLang",
+    "YtQuotaDay",
+    "YtQuotaExhausted",
+    "YtQuotaPool",
+    "YtRawChannel",
+    "YtRejectReason",
+    "YtRequest",
+    "YtRequestOutcome",
 ]
 
 # Explicit constraint names, so autogenerate emits stable identifiers
@@ -360,6 +373,111 @@ class AboutDirection(enum.StrEnum):
     A_TO_B = "a_to_b"
     B_TO_A = "b_to_a"
     MUTUAL = "mutual"
+
+
+class YtChannelKind(enum.StrEnum):
+    """What a YouTube channel *is* — Telegram's rule, YouTube's values.
+
+    ``EVENT`` takes conferences, meetups and communities alike: on YouTube
+    all three are archives of talks. ``EDUCATION`` is an institution or a
+    course publisher; a person who teaches is ``PERSONAL``. There is no
+    podcast — a format, not an identity — and neither vacancies, which
+    YouTube hardly has, nor aggregator, which on YouTube is a re-upload
+    channel and rejected as a content farm.
+
+    Its own type rather than Telegram's ``channel_kind``: a shared one
+    would make these values valid in Telegram review, and removing one
+    later would mean recreating a type under the live ``channels`` table.
+    """
+
+    PERSONAL = "personal"
+    COMPANY = "company"
+    MEDIA = "media"
+    EVENT = "event"
+    EDUCATION = "education"
+
+
+class YtRejectReason(enum.StrEnum):
+    """Why a YouTube channel is out of scope.
+
+    Telegram's reasons less ``other_scene``, which Telegram review never
+    used, plus ``CONSUMER_TECH`` — gadget reviews and PC building, which
+    every machine-assembled list of "tech YouTubers" carries. Kept for the
+    same reason Telegram's are: rejections are labelled data, and they
+    cannot be reconstructed afterwards.
+    """
+
+    NOT_IT = "not_it"
+    ADJACENT = "adjacent"
+    CRYPTO = "crypto"
+    INFOBIZ = "infobiz"
+    ADS = "ads"
+    CONTENT_FARM = "content_farm"
+    CONSUMER_TECH = "consumer_tech"
+
+
+class YtDiscoverySource(enum.StrEnum):
+    """How a YouTube channel entered the inventory.
+
+    Only what something produces. Unlike Telegram's, this type is not
+    shared with a live table, so the mention graph and discovery can add
+    their values with the migrations that bring them, at no risk to
+    anything running.
+    """
+
+    MANUAL = "manual"
+
+
+class YtLang(enum.StrEnum):
+    """The language a channel speaks, as its reviewer judged it.
+
+    Set by hand. Detecting it from titles would be "new or derived data"
+    under the base Developer Policies (III.E.4.h), and it routes alerts,
+    where a wrong guess is expensive. ``OTHER`` is in scope: subject
+    decides, not language.
+    """
+
+    EN = "en"
+    RU = "ru"
+    OTHER = "other"
+
+
+class YtQuotaPool(enum.StrEnum):
+    """Which share of the daily quota a request is booked against.
+
+    ``GENERAL`` is every command but the poll loop. The loop's own pool
+    arrives with the loop; its reserve is already held out of
+    ``GENERAL`` by settings, so nothing written before it can spend it.
+    """
+
+    GENERAL = "general"
+
+
+class YtCommand(enum.StrEnum):
+    """Which YouTube command made a request.
+
+    Only the commands that make requests. Review, listing and the quota
+    report are offline, and a row under one of them would be the
+    regression this column exists to show.
+    """
+
+    ADD = "add"
+    REFRESH = "refresh"
+
+
+class YtRequestOutcome(enum.StrEnum):
+    """What came of a booked request.
+
+    No value — NULL — means the outcome was never learned: the process
+    died or the connection broke after the units were booked. That is
+    recorded as itself rather than as a failure, because Google may well
+    have answered and charged.
+    """
+
+    OK = "ok"
+    NOT_FOUND = "not_found"
+    QUOTA_EXCEEDED = "quota_exceeded"
+    ERROR = "error"
 
 
 def _pg_enum(members: type[enum.Enum], name: str) -> Enum:
@@ -1535,3 +1653,202 @@ class FloodEvent(Base):
 
     def __repr__(self) -> str:
         return f"FloodEvent(method={self.method!r}, seconds={self.seconds})"
+
+
+class YtChannel(Base):
+    """One YouTube channel, and the review it has had.
+
+    Holds nothing read from the API. Title, handle, description and
+    statistics live only in ``YtRawChannel.payload``, which expires after
+    30 days (Developer Policies III.E.4); keeping a copy here — the way
+    Telegram's ``channels`` keeps ``username`` and ``title`` — would give
+    every expiry two places to clear, and the one it missed would be the
+    violation. What is here is the operator's: the review, the provenance,
+    and the channel id, which the policies say nothing about and which is
+    kept for as long as the record.
+    """
+
+    __tablename__ = "yt_channels"
+    __table_args__ = (
+        # The shape YouTube's ids have, not one it documents. A real id
+        # that fails this fails the first import loudly, and the check is
+        # relaxed by migration — better than a typo stored as a channel.
+        CheckConstraint(
+            "channel_id ~ '^UC[0-9A-Za-z_-]{22}$'", name="id_shape"
+        ),
+        CheckConstraint(
+            "(status = 'rejected') = (reject_reason IS NOT NULL)",
+            name="rejected_has_reason",
+        ),
+        # Stricter than Telegram, which defaults a seed's kind to
+        # `personal`. Most YouTube review happens in a file, where an
+        # empty column is a slip rather than a choice; and the language
+        # is what routes an alert.
+        CheckConstraint(
+            "status <> 'seed' OR (kind IS NOT NULL AND lang IS NOT NULL)",
+            name="seed_is_labelled",
+        ),
+    )
+
+    channel_id: Mapped[str] = mapped_column(Text, primary_key=True)
+
+    # Telegram's type, deliberately: status is a workflow whose values the
+    # code filters on, and it means the same thing on both platforms.
+    status: Mapped[ChannelStatus] = mapped_column(
+        _pg_enum(ChannelStatus, "channel_status"),
+        server_default=ChannelStatus.CANDIDATE.value,
+    )
+    kind: Mapped[YtChannelKind | None] = mapped_column(
+        _pg_enum(YtChannelKind, "yt_channel_kind")
+    )
+    kind_note: Mapped[str | None] = mapped_column(Text)
+    reject_reason: Mapped[YtRejectReason | None] = mapped_column(
+        _pg_enum(YtRejectReason, "yt_reject_reason")
+    )
+    reject_note: Mapped[str | None] = mapped_column(Text)
+    lang: Mapped[YtLang | None] = mapped_column(_pg_enum(YtLang, "yt_lang"))
+
+    discovered_via: Mapped[YtDiscoverySource] = mapped_column(
+        _pg_enum(YtDiscoverySource, "yt_discovery_source")
+    )
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    # Whether a channel still needs a decision is `reviewed_at IS NULL`,
+    # as on Telegram.
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+    # When YouTube stopped returning the channel. Its payload is removed
+    # at the same moment; the record and the review stay. Cleared if the
+    # channel comes back.
+    gone_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    def __repr__(self) -> str:
+        return (
+            f"YtChannel(channel_id={self.channel_id!r}, "
+            f"status={self.status.value!r})"
+        )
+
+
+class YtRawChannel(Base):
+    """The latest channel resource YouTube returned, and when.
+
+    The one place data read from the API is kept, so the one place the
+    30-day rule has to reach: a refresh replaces the row, expiry deletes
+    it, a channel YouTube stops returning loses it. Never versioned —
+    keeping every fetch would be keeping data past 30 days by another
+    name — and never in a backup, because fetching the whole inventory
+    again costs about ten units and keeping it is not allowed.
+
+    The opposite of ``RawMessage`` on purpose. There the first fetch wins
+    because re-fetching is expensive and keeping is free; here both are
+    reversed.
+    """
+
+    __tablename__ = "yt_raw_channels"
+    __table_args__ = (
+        # The two questions asked of this table: which payloads are due
+        # for a refresh, and which have expired.
+        Index("ix_yt_raw_channels_fetched_at", "fetched_at"),
+    )
+
+    channel_id: Mapped[str] = mapped_column(
+        ForeignKey("yt_channels.channel_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    def __repr__(self) -> str:
+        return f"YtRawChannel(channel_id={self.channel_id!r})"
+
+
+class YtQuotaDay(Base):
+    """How many units one pool has booked on one quota day.
+
+    The counter a booking is made against, with a conditional ``UPDATE``
+    that refuses to pass the cap — which is what keeps two processes
+    inside it without a lock. The day is the Pacific date, Google's, not
+    ours; see ``itgraph.yt_quota``.
+    """
+
+    __tablename__ = "yt_quota_days"
+    __table_args__ = (
+        CheckConstraint("spent >= 0", name="spent_is_not_negative"),
+    )
+
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    pool: Mapped[YtQuotaPool] = mapped_column(
+        _pg_enum(YtQuotaPool, "yt_quota_pool"), primary_key=True
+    )
+    spent: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+
+    def __repr__(self) -> str:
+        return (
+            f"YtQuotaDay(day={self.day}, pool={self.pool.value!r}, "
+            f"spent={self.spent})"
+        )
+
+
+class YtQuotaExhausted(Base):
+    """A quota day YouTube declared over with ``quotaExceeded``.
+
+    One row ends the day for every pool. Our counts decide who may spend
+    what; Google's decides whether anyone can, and when the two disagree
+    Google is right.
+    """
+
+    __tablename__ = "yt_quota_exhausted"
+
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    command: Mapped[YtCommand] = mapped_column(
+        _pg_enum(YtCommand, "yt_command")
+    )
+
+    def __repr__(self) -> str:
+        return f"YtQuotaExhausted(day={self.day})"
+
+
+class YtRequest(Base):
+    """One booked request: who made it, what it cost, what came of it.
+
+    Written in the same transaction as the booking and before the request
+    is sent, so a request can never have been paid for without a row
+    saying so. The outcome is filled in afterwards; a process killed in
+    between leaves it NULL, which is the honest answer.
+
+    Holds no API data — the method name and the units, never what came
+    back.
+    """
+
+    __tablename__ = "yt_requests"
+    __table_args__ = (Index("ix_yt_requests_day", "day"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    day: Mapped[date] = mapped_column(Date)
+    pool: Mapped[YtQuotaPool] = mapped_column(
+        _pg_enum(YtQuotaPool, "yt_quota_pool")
+    )
+    command: Mapped[YtCommand] = mapped_column(
+        _pg_enum(YtCommand, "yt_command")
+    )
+    # `channels.list`, as the API reference names it.
+    method: Mapped[str] = mapped_column(Text)
+    units: Mapped[int] = mapped_column(Integer)
+    outcome: Mapped[YtRequestOutcome | None] = mapped_column(
+        _pg_enum(YtRequestOutcome, "yt_request_outcome")
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"YtRequest(method={self.method!r}, units={self.units}, "
+            f"outcome={self.outcome})"
+        )

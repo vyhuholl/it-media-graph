@@ -1,0 +1,15 @@
+# {{ ansible_managed }}
+[Unit]
+Description=itgraph: daily refresh of YouTube channel data
+
+[Timer]
+# Daily, with days to spare: payloads are refreshed past 25 days and
+# deleted at 30, so a few missed runs cost nothing. Ten units a cycle for
+# five hundred channels — the timing is about nothing but the calendar.
+OnCalendar={{ yt_refresh_schedule | default('*-*-* 05:00:00') }}
+# A host that was off at the scheduled moment refreshes on the next boot
+# instead of waiting another day.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

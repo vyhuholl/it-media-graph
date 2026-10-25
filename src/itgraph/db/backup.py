@@ -50,7 +50,16 @@ logger = logging.getLogger(__name__)
 # Everything the operator decided by hand. `backfill_state` rides along
 # because losing the cursors means walking every channel's history again
 # — the one operation this project treats as expensive.
-INVENTORY_TABLES = ("channels", "backfill_state")
+INVENTORY_TABLES = ("channels", "backfill_state", "yt_channels")
+
+# Tables whose rows no dump may carry, only their definitions. YouTube API
+# data may be kept at most 30 days (Developer Policies III.E.4), and a
+# dump is kept as long as pruning decides — which, since pruning only
+# follows a good dump, is as long as dumps keep failing. Leaving the rows
+# out makes that irrelevant, and costs nothing worth having: fetching the
+# whole YouTube inventory again is about ten units of quota, the one
+# thing in this database cheaper to fetch than to keep.
+EXCLUDED_DATA = ("yt_raw_*",)
 
 # UTC, and said so in the name: a dump taken at 13:08 local is stamped
 # 10:08, and without the Z that reads as a machine with the wrong clock.
@@ -187,6 +196,10 @@ def _pg_dump_command(kind: BackupKind) -> list[str]:
     ]
     for table in kind.tables or ():
         args += ["--table", table]
+    # On every tier, not only the full one: a tier that named one of these
+    # tables later would otherwise start carrying their rows unnoticed.
+    for pattern in EXCLUDED_DATA:
+        args += ["--exclude-table-data", pattern]
     return _exec_in_postgres(*args)
 
 

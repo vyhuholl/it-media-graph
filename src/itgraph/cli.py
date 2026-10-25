@@ -6,7 +6,7 @@ bodies, so `itgraph --help` works on a machine with no `.env` yet.
 
 import asyncio
 import logging
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -31,6 +31,10 @@ from itgraph.db.models import (
     ChannelStatus,
     EdgeKind,
     RejectReason,
+    YtChannel,
+    YtChannelKind,
+    YtLang,
+    YtRejectReason,
 )
 
 app = typer.Typer(
@@ -1628,3 +1632,545 @@ def floods(
             await database.dispose()
 
     _run(run())
+
+
+# --- YouTube ------------------------------------------------------------
+#
+# A sub-app of its own, so `itgraph --help` keeps listing Telegram's
+# commands and `itgraph yt --help` lists YouTube's. Only `add` and
+# `refresh` make requests; everything else reads the database alone.
+
+yt_app = typer.Typer(
+    no_args_is_help=True,
+    help="Inventory and review of YouTube channels.",
+)
+app.add_typer(yt_app, name="yt")
+
+
+async def _expire_youtube_data() -> None:
+    """Delete every YouTube payload past its 30 days.
+
+    Needs no key and no network: a payload past its 30 days is a
+    violation whether or not anything was going to read it.
+    """
+    from itgraph.db.session import Database
+    from itgraph.db.yt_channels import purge_expired
+
+    database = Database()
+    try:
+        async with database.session() as session:
+            removed = await purge_expired(session)
+    finally:
+        await database.dispose()
+    if removed:
+        logging.getLogger(__name__).info(
+            "removed %d YouTube payloads older than 30 days", removed
+        )
+
+
+def _run_yt(body: Coroutine[Any, Any, None]) -> None:
+    """``_run`` for the YouTube commands: expiry first, then the command,
+    and its expected failures as sentences on stderr and exit 1.
+
+    Expiry lives here, not in each command, so a command added later
+    cannot forget it — and not in the sub-app's callback, which click
+    runs before a subcommand's ``--help`` is handled: there it made help
+    need a database and a `.env`.
+
+    A spent quota is an ordinary thing to discover, and so is a channel
+    nobody has added yet; neither deserves a traceback.
+    """
+    from itgraph.db.yt_channels import YtChannelLookupError
+    from itgraph.db.yt_quota import QuotaError
+    from itgraph.yt.errors import YtError
+    from itgraph.yt_review import ReviewFileError, UnreadableReviewFile
+
+    async def expired_first() -> None:
+        await _expire_youtube_data()
+        await body
+
+    try:
+        asyncio.run(expired_first())
+    except (
+        QuotaError,
+        YtError,
+        YtChannelLookupError,
+        ReviewFileError,
+        UnreadableReviewFile,
+    ) as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from exc
+
+
+@yt_app.command("quota")
+def yt_quota() -> None:
+    """Show today's YouTube quota: per pool, per command, and the reset.
+
+    Makes no request. The day is Google's — the Pacific date — so the
+    reset is printed in UTC and on this machine's clock.
+    """
+    from itgraph.db.session import Database
+    from itgraph.db.yt_quota import describe_reset, quota_report
+
+    async def run() -> None:
+        database = Database()
+        try:
+            async with database.session() as session:
+                report = await quota_report(session)
+        finally:
+            await database.dispose()
+
+        typer.echo(
+            f"quota day {report.day} (Pacific), next reset "
+            f"{describe_reset(report.reset)}"
+        )
+        for use in report.pools:
+            typer.echo(
+                f"{use.pool.value:<10} {use.spent:>6} of {use.cap:>6} units, "
+                f"{max(use.cap - use.spent, 0)} left"
+            )
+        if report.exhausted is not None:
+            typer.secho(
+                f"exhausted: YouTube answered quotaExceeded at "
+                f"{report.exhausted.observed_at:%H:%M} UTC, during "
+                f"`yt {report.exhausted.command.value}`; nothing is sent "
+                "until the reset",
+                fg=typer.colors.RED,
+            )
+        if not report.methods:
+            typer.echo("No requests today.")
+            return
+
+        typer.echo("")
+        typer.echo(
+            f"{'command':<10} {'method':<16} {'requests':>8} {'units':>6} "
+            f"{'unknown':>7}"
+        )
+        for method in report.methods:
+            typer.echo(
+                f"{method.command.value:<10} {method.method:<16} "
+                f"{method.requests:>8} {method.units:>6} {method.unknown:>7}"
+            )
+        if any(method.unknown for method in report.methods):
+            typer.echo(
+                "\n`unknown` is a request booked and never answered — the "
+                "process died or the\nconnection broke. Its units stay "
+                "counted: YouTube may well have charged them."
+            )
+
+    _run_yt(run())
+
+
+@yt_app.command("refresh")
+def yt_refresh() -> None:
+    """Fetch again the channel data that is about to expire.
+
+    What YouTube says about a channel may be kept 30 days. Anything older
+    than the refresh age (25 days by default) is asked for again, fifty
+    channels a unit, whatever the channel's status. A channel YouTube no
+    longer returns loses its data and is marked gone; its record and
+    review stay. Runs daily from a timer on the host.
+    """
+    from itgraph.db.models import YtCommand
+    from itgraph.db.session import Database
+    from itgraph.db.yt_quota import check_not_exhausted
+    from itgraph.yt.client import youtube
+    from itgraph.yt.refresh import refresh_channels
+
+    async def run() -> None:
+        database = Database()
+        try:
+            await check_not_exhausted(database)
+            async with youtube(database, YtCommand.REFRESH) as client:
+                summary = await refresh_channels(client, database)
+        finally:
+            await database.dispose()
+
+        typer.echo(summary.line())
+        for channel_id in summary.gone:
+            typer.echo(f"  gone: {channel_id}")
+        for channel_id in summary.returned:
+            typer.echo(f"  back: {channel_id}")
+        if summary.stopped is not None:
+            typer.secho(str(summary.stopped), fg=typer.colors.RED, err=True)
+            raise typer.Exit(1)
+
+    _run_yt(run())
+
+
+def _read_input(source: str) -> str:
+    """A file's text, or standard input's when the source is ``-``."""
+    import sys
+
+    if source == "-":
+        return sys.stdin.read()
+    path = Path(source)
+    if not path.is_file():
+        raise typer.BadParameter(f"no such file: {source}")
+    return path.read_text(encoding="utf-8")
+
+
+@yt_app.command("add")
+def yt_add(
+    entries: Annotated[
+        list[str] | None,
+        typer.Argument(
+            metavar="[CHANNEL]...",
+            help="@handle, handle, a channel link, or a UC… id.",
+        ),
+    ] = None,
+    from_file: Annotated[
+        str | None,
+        typer.Option(
+            "--from-file",
+            metavar="PATH|-",
+            help="Read channels from a file, one per line; - for stdin.",
+        ),
+    ] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", help="Make at most this many requests."),
+    ] = None,
+    failures: Annotated[
+        str | None,
+        typer.Option(
+            "--failures",
+            metavar="PATH|-",
+            help="Write the channels not found, as the next run's input; "
+            "- for stdout.",
+        ),
+    ] = None,
+) -> None:
+    """Add YouTube channels to the inventory, resolving each through the API.
+
+    Every entry becomes a channel id before a record exists; one YouTube
+    returns nothing for creates nothing. Forms the API cannot look up — a
+    /c/ link, a bare youtube.com/NAME, a video — are refused, all of them
+    at once, before anything is spent.
+
+    An entry the inventory already answers costs no request, so the same
+    input continues a run that stopped. Ids go fifty to a unit, handles one
+    each; `--limit` counts requests. Records are created unreviewed: review
+    them with `itgraph yt review-export` once you have seen what each entry
+    resolved to.
+
+    With `--failures -` the failures go to stdout and the report to
+    stderr, so the two can be separated over SSH.
+    """
+    from itgraph.db.models import YtCommand
+    from itgraph.db.session import Database
+    from itgraph.db.yt_quota import check_not_exhausted
+    from itgraph.yt.add import add_channels
+    from itgraph.yt.client import youtube
+    from itgraph.yt_entries import EntryError, parse_entries, read_entries
+
+    if bool(entries) == bool(from_file):
+        raise typer.BadParameter(
+            "give channels or --from-file, not both and not neither"
+        )
+    if limit is not None and limit < 1:
+        raise typer.BadParameter("--limit must be at least 1")
+
+    try:
+        parsed = (
+            read_entries(_read_input(from_file))
+            if from_file is not None
+            else parse_entries(entries or [])
+        )
+    except EntryError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    if not parsed:
+        typer.echo("Nothing to add.")
+        return
+
+    # The report goes wherever the failures do not.
+    report_to_stderr = failures == "-"
+
+    def say(line: str) -> None:
+        typer.echo(line, err=report_to_stderr)
+
+    async def run() -> None:
+        database = Database()
+        try:
+            await check_not_exhausted(database)
+            async with youtube(database, YtCommand.ADD, limit=limit) as client:
+                summary = await add_channels(client, database, parsed)
+        finally:
+            await database.dispose()
+
+        say(summary.line())
+        for entry, resource in summary.added:
+            snippet = resource.get("snippet", {})
+            say(
+                f"  + {resource['id']}  {snippet.get('customUrl', '-')}  "
+                f"{snippet.get('title', '-')}"
+            )
+        for entry, first in summary.same:
+            say(
+                f"  = {entry.where} {entry.text!r}: same channel as "
+                f"{first.where} {first.text!r}"
+            )
+        for entry in summary.not_found:
+            say(f"  ? {entry.where} {entry.text!r}: not found")
+        if summary.unreached:
+            say(f"{len(summary.unreached)} not reached")
+
+        lost = summary.failures()
+        if failures is not None and lost:
+            text = "".join(
+                f"{entry.text}  # {reason}\n" for entry, reason in lost
+            )
+            if failures == "-":
+                typer.echo(text, nl=False)
+            else:
+                Path(failures).write_text(text, encoding="utf-8")
+                say(f"failures written to {failures}")
+
+        if summary.limited is not None:
+            say(str(summary.limited))
+        if summary.stopped is not None:
+            typer.secho(str(summary.stopped), fg=typer.colors.RED, err=True)
+            raise typer.Exit(1)
+
+    _run_yt(run())
+
+
+@yt_app.command("review-export")
+def yt_review_export(
+    status: Annotated[
+        ChannelStatus | None,
+        typer.Option(
+            "--status",
+            help="Export channels with this status instead of the "
+            "unreviewed ones.",
+        ),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            dir_okay=False,
+            help="Write here instead of to stdout.",
+        ),
+    ] = None,
+) -> None:
+    """Write a review file: the channels awaiting review, one per line.
+
+    Tab-separated, for a text editor: decision, kind, lang, reason and
+    note to fill in, then the handle, title, subscribers and a link to
+    look at. Makes no request. The file holds YouTube API data, so it
+    expires 30 days after export and is refused after that; delete it
+    once applied, and never commit it.
+
+    From the operator's machine:
+    `scripts/on-host.sh yt review-export > ~/itgraph-review/batch.review.tsv`
+    """
+    from itgraph.db.session import Database
+    from itgraph.db.yt_channels import list_channels
+    from itgraph.yt_review import export_row, render_review
+
+    async def run() -> None:
+        database = Database()
+        try:
+            async with database.session() as session:
+                listed = await list_channels(
+                    session, status=status, unreviewed=status is None
+                )
+        finally:
+            await database.dispose()
+
+        text = render_review(
+            (export_row(item.channel, item.payload) for item in listed),
+            exported_at=datetime.now(UTC),
+        )
+        if output is None:
+            typer.echo(text, nl=False)
+        else:
+            output.write_text(text, encoding="utf-8")
+        typer.echo(f"{len(listed)} channels exported", err=True)
+
+    _run_yt(run())
+
+
+@yt_app.command("review-apply")
+def yt_review_apply(
+    source: Annotated[
+        str,
+        typer.Argument(
+            metavar="PATH|-", help="The edited review file; - for stdin."
+        ),
+    ],
+) -> None:
+    """Apply an edited review file, all of it or none of it.
+
+    Every mistake — a seed without a kind or a language, a rejection
+    without a reason, a misspelt value, an unknown channel, a channel
+    listed twice — is reported at once with its line number, and nothing
+    is written while any is left. A row left blank is skipped. A channel
+    whose review changed after the file was exported is a conflict and is
+    not written; change a decision already made with `itgraph yt mark`.
+    Applying the same file twice changes nothing. Makes no request.
+    """
+    from itgraph.db.session import Database
+    from itgraph.db.yt_channels import apply_review
+    from itgraph.yt_review import parse_review
+
+    text = _read_input(source)
+
+    async def run() -> None:
+        parsed = parse_review(text, now=datetime.now(UTC))
+        database = Database()
+        try:
+            async with database.session() as session:
+                summary = await apply_review(session, parsed)
+        finally:
+            await database.dispose()
+
+        typer.echo(summary.line())
+        for decision in summary.conflicts:
+            typer.echo(
+                f"  ! {decision.where} {decision.channel_id}: reviewed since "
+                "the export — not written; use `itgraph yt mark` to change it"
+            )
+
+    _run_yt(run())
+
+
+@yt_app.command("mark")
+def yt_mark(
+    channel_ref: Annotated[
+        str,
+        typer.Argument(metavar="CHANNEL", help="UC… id or @handle."),
+    ],
+    seed: Annotated[
+        bool, typer.Option("--seed", help="In scope: collect from it.")
+    ] = False,
+    maybe: Annotated[
+        bool, typer.Option("--maybe", help="Undecided; look again later.")
+    ] = False,
+    reject: Annotated[
+        bool, typer.Option("--reject", help="Out of scope.")
+    ] = False,
+    kind: Annotated[
+        YtChannelKind | None,
+        typer.Option(
+            "--kind", help="What the channel is. Required with --seed."
+        ),
+    ] = None,
+    lang: Annotated[
+        YtLang | None,
+        typer.Option("--lang", help="Its language. Required with --seed."),
+    ] = None,
+    reason: Annotated[
+        YtRejectReason | None,
+        typer.Option("--reason", help="Required with --reject."),
+    ] = None,
+    note: Annotated[
+        str | None,
+        typer.Option(
+            "--note", help="Free text beside the kind or the reason."
+        ),
+    ] = None,
+) -> None:
+    """Record one review decision, replacing any made before.
+
+    The way to change a decision already made: a review file never
+    overwrites a decision it did not see. A kind, language or note left
+    out keeps its current value; a rejection without --note has none.
+    Makes no request.
+    """
+    from itgraph.db.session import Database
+    from itgraph.db.yt_channels import Review, mark_channel
+
+    if sum((seed, maybe, reject)) != 1:
+        raise typer.BadParameter(
+            "give exactly one of --seed, --maybe, --reject"
+        )
+    if seed and (kind is None or lang is None):
+        raise typer.BadParameter("--seed needs --kind and --lang")
+    if reject and reason is None:
+        raise typer.BadParameter("--reject needs --reason")
+    if reason is not None and not reject:
+        raise typer.BadParameter("--reason only goes with --reject")
+
+    if seed:
+        status = ChannelStatus.SEED
+    elif maybe:
+        status = ChannelStatus.MAYBE
+    else:
+        status = ChannelStatus.REJECTED
+    review = Review(
+        status=status, kind=kind, lang=lang, reason=reason, note=note
+    )
+
+    async def run() -> None:
+        database = Database()
+        try:
+            async with database.session() as session:
+                channel = await mark_channel(session, channel_ref, review)
+                typer.echo(f"{channel.channel_id} -> {channel.status.value}")
+        finally:
+            await database.dispose()
+
+    _run_yt(run())
+
+
+def _yt_row(channel: YtChannel, payload: Mapping[str, Any] | None) -> str:
+    """One inventory line: id, handle, title, status, kind, language."""
+    if payload is not None:
+        snippet = payload.get("snippet") or {}
+        handle = str(snippet.get("customUrl") or "-")
+        title = str(snippet.get("title") or "-")[:40]
+    else:
+        # Said, not left blank: an empty title reads as a channel without
+        # one, and these have one YouTube may no longer be asked about.
+        handle = "(gone)" if channel.gone_at is not None else "(expired)"
+        title = "-"
+    kind = channel.kind.value if channel.kind else "-"
+    lang = channel.lang.value if channel.lang else "-"
+    return (
+        f"{channel.channel_id:<25} {handle:<24} {title:<42} "
+        f"{channel.status.value:<10} {kind:<10} {lang}"
+    )
+
+
+@yt_app.command("channels")
+def yt_channels(
+    status: Annotated[
+        ChannelStatus | None,
+        typer.Option("--status", help="Show only this status."),
+    ] = None,
+) -> None:
+    """List the YouTube inventory, or summarise review progress.
+
+    Without a filter, the counts come first: per status, seeds per
+    language, and how many channels have current data, expired data, or
+    are no longer returned by YouTube. Makes no request.
+    """
+    from itgraph.db.session import Database
+    from itgraph.db.yt_channels import inventory_summary, list_channels
+
+    async def run() -> None:
+        database = Database()
+        try:
+            async with database.session() as session:
+                if status is None:
+                    summary = await inventory_summary(session)
+                    for name, total in summary.by_status.items():
+                        typer.echo(f"{name.value:<10} {total}")
+                    seeds = ", ".join(
+                        f"{lang.value} {total}"
+                        for lang, total in summary.seeds_by_lang.items()
+                    )
+                    typer.echo(f"{'seeds':<10} {seeds}")
+                    typer.echo(
+                        f"{'data':<10} current {summary.current}, expired "
+                        f"{summary.expired}, gone {summary.gone}"
+                    )
+                    typer.echo("")
+                for item in await list_channels(session, status=status):
+                    typer.echo(_yt_row(item.channel, item.payload))
+        finally:
+            await database.dispose()
+
+    _run_yt(run())

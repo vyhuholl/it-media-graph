@@ -4,7 +4,7 @@ Analytics over the IT-media graph: who reposts, mentions and comments on whom. T
 Roadmap and phase breakdown live in `docs/PLAN.md`. Read it before proposing architectural changes — most "obvious improvements" are already scheduled for a later phase, or were deliberately rejected.
 
 ## Hard rules
-1. **Never run Python directly.** Always `uv run <cmd>` — no bare `python`, no `pip`, no activating a venv. Dependencies change via `uv add` / `uv add --dev`, never by hand-editing `pyproject.toml`. Ansible tooling is also run via `uv run`.
+1. **Never run project code via Python directly.** Always `uv run <cmd>` — no bare `python`, no `pip`, no activating a venv. Dependencies change via `uv add` / `uv add --dev`, never by hand-editing `pyproject.toml`. Ansible tooling is also run via `uv run`.
 2. **Run `make validate` after every change that touches code.** Fix what it reports before declaring the task done. Never report success on a red validate.
 3. **Never commit secrets or personal data.** See "Never commit" below. If it looks like a secret has to live in a file, stop and ask.
 
@@ -24,6 +24,7 @@ uv run itgraph --help    # CLI entrypoint (typer)
 ## Architecture invariants
 - **Collection is MTProto (Telethon), from a user account.** The Bot API cannot read channel history, so aiogram is never an option for collection. aiogram is used only for the alert bot that sends notifications to the user.
 - **The raw layer is immutable.** The collector writes raw payloads to `raw_messages` and does nothing else. All parsing, enrichment and metrics derive from it and must be re-runnable from scratch. Never move parsing logic into the collector — re-fetching history is expensive and risks the account.
+- **YouTube's raw layer is the exception, and the policy is why.** Everything read with the API key is Non-Authorized Data, kept at most 30 calendar days (YouTube API Services Developer Policies III.E.4.b, III.E.4.d). A `yt_raw_*` row is overwritten in place by a refresh, deleted once 30 days pass without one, and deleted when YouTube stops returning the object. API data lives only in `yt_raw_*` — no copied titles or handles elsewhere, none of it in backups — so expiring it stays one `DELETE`. The rest of the invariant holds: the collector only stores payloads, and everything derived is re-runnable from them. The reason does not carry over: re-fetching fifty channels costs one unit, so on YouTube the expensive mistake is keeping data, not losing it.
 - **Postgres only.** No graph database. Graph work loads edges into `igraph`/`networkx` in memory.
 - **Schema changes only through an Alembic migration.** Never edit tables directly.
 - **The inventory is backed up, and the backups are read back.** `db/backup.py` dumps the hand-reviewed tables often and the whole database weekly, into `~/itgraph-backups` — outside the repository, because a dump carries the operator's own subscriptions. Every dump is verified with `pg_restore --list` before it counts, and pruning only ever follows a good one. An `alembic upgrade` on the working database takes a full dump first. Restoring is exercised, not assumed: see `src/itgraph/README.md`.
@@ -47,6 +48,8 @@ uv run itgraph --help    # CLI entrypoint (typer)
 - the Telegram **bot token**. Unlike the api hash it plausibly ends up on a machine you do not own, which is why the bot also gets its own database role: the role is what bounds the damage when the token leaks, and a token in a migration or a fixture defeats both
 - the **proxy password** (`PROXY_PASSWORD`), on the same footing as the api hash. It buys someone else a shared exit billed to the operator, and — worse — an address the collector's traffic is known to come from
 - the **vault password** (`deploy/.vault_pass`), or `deploy/group_vars/all/secrets.vault.yml` in plaintext. The vault is committed encrypted, and the repository is public: the password is all that stands between anyone and the bot token, the api hash and the proxy endpoint, and rotating it does not re-protect the ciphertext already in history. Pre-commit refuses both, so a hook failure there is never fixed by skipping the hook
+- the **YouTube API key** (`YOUTUBE_API_KEY`), on the same footing as the api hash. Whoever holds it spends the quota of the one API project the policies allow (III.D.1.c) — a second project to escape that is not an option, any more than a second Telegram account is
+- **review files** from `itgraph yt review-export` (`*.review.tsv`). They hold YouTube API data that has to be gone within 30 days, so they live outside the repository and are deleted once applied
 - any dump of the user's own subscriptions or real collected channel data
 - commenter user IDs or any other personal data; store hashed, keep out of git
 

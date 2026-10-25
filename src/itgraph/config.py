@@ -8,10 +8,18 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Self
 
-from pydantic import Field, PostgresDsn, SecretStr, model_validator
+from pydantic import (
+    Field,
+    PostgresDsn,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from itgraph.db.models import Metric
+from itgraph.yt_policy import RETENTION
+from itgraph.yt_quota import general_cap
 
 __all__ = ["ProxyType", "Settings", "settings"]
 
@@ -536,6 +544,43 @@ class Settings(BaseSettings):
     # the unhardened state is visible rather than assumed.
     bot_database_url: PostgresDsn | None = None
 
+    # --- YouTube ------------------------------------------------------
+    #
+    # Everything YouTube is read with one API key against one daily
+    # quota, and both belong to the one API project a client may have
+    # (Developer Policies III.D.1.c). A leaked key is therefore not a
+    # nuisance but someone else spending the only quota there is.
+
+    # Optional, unlike the api hash: required, it would fail settings on
+    # every machine without it, and take every Telegram command and the
+    # bot down with them. A YouTube command that needs it says so before
+    # its first request. A `SecretStr` on the api hash's footing — never
+    # committed, never logged — and sent in a header rather than in the
+    # URL, because httpx logs every URL it requests.
+    youtube_api_key: SecretStr | None = None
+
+    # Google's default allocation for a project, in units. Every pool
+    # below is carved out of it.
+    youtube_daily_quota: int = Field(default=10_000, ge=1)
+    # Held back from every pool. The ledger counts what itgraph booked;
+    # the console counts what Google charged, and the two can disagree —
+    # a timeout Google never counted, a retry it did. A tenth keeps the
+    # disagreement on our side of the line.
+    youtube_quota_margin: float = Field(default=0.10, ge=0.0, lt=1.0)
+    # The poll loop's share, which no other command may spend. Reserved
+    # before the loop exists so that nothing written in the meantime
+    # learns to rely on spending it. PLAN.md estimates polling at about
+    # 2,000 a day; the headroom over that is a guess until the loop is
+    # measured.
+    youtube_watch_reserve: int = Field(default=3_000, ge=0)
+    # How old a channel's payload may grow before the refresh asks for it
+    # again. Strictly under the policy's 30 days — the difference is what
+    # a few missed runs of the daily timer may eat.
+    youtube_refresh_after_days: int = Field(default=25, ge=1)
+    # One request. The API answers in well under a second; this bounds
+    # only the request that never answers.
+    youtube_request_timeout_seconds: float = Field(default=30.0, gt=0)
+
     backup_dir: Path = DEFAULT_BACKUP_DIR
 
     # There is no pg_dump on the host — it runs inside the Postgres
@@ -776,6 +821,65 @@ class Settings(BaseSettings):
                 "mature window would be empty and every channel would lose "
                 "its baseline, which reads exactly like an inventory with "
                 "no history"
+            )
+        return self
+
+    @field_validator("youtube_api_key", mode="after")
+    @classmethod
+    def _an_empty_key_is_no_key(
+        cls, value: SecretStr | None
+    ) -> SecretStr | None:
+        """Read ``YOUTUBE_API_KEY=`` as unset rather than as a key.
+
+        The deploy template and `.env.example` both write the line with
+        nothing after it on a host without a key. Taken literally that is
+        a key, and the first anyone would hear of it is a 400 from Google
+        after a request had been booked — instead of the sentence naming
+        the setting, before anything was spent.
+        """
+        if value is not None and not value.get_secret_value().strip():
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def _youtube_refresh_beats_the_policy(self) -> Self:
+        """Refuse a refresh age the retention rule would overtake.
+
+        A payload is deleted at 30 days whether or not it was refreshed,
+        so a refresh age at or past that would mean channels quietly
+        losing their titles every cycle — which looks exactly like a
+        refresh that ran.
+        """
+        limit = RETENTION.days
+        if self.youtube_refresh_after_days >= limit:
+            raise ValueError(
+                f"youtube_refresh_after_days "
+                f"({self.youtube_refresh_after_days}) is not under "
+                f"{limit}: YouTube API data may be kept at most {limit} "
+                "days, so every payload would expire before it was "
+                "refreshed"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _youtube_general_pool_is_not_empty(self) -> Self:
+        """Refuse caps that leave the general pool nothing to spend.
+
+        Every YouTube command but the poll loop spends from it, so an
+        empty one would refuse every request with "the pool is spent" —
+        true, and indistinguishable from a day that really used it up.
+        """
+        general = general_cap(
+            self.youtube_daily_quota,
+            self.youtube_quota_margin,
+            self.youtube_watch_reserve,
+        )
+        if general < 1:
+            raise ValueError(
+                f"youtube_quota_margin ({self.youtube_quota_margin}) and "
+                f"youtube_watch_reserve ({self.youtube_watch_reserve}) "
+                f"leave nothing of youtube_daily_quota "
+                f"({self.youtube_daily_quota}) for any other command"
             )
         return self
 

@@ -19,6 +19,12 @@
 # git turns it into a file the next `git add -A` re-publishes.
 data/channel_report_*.md
 
+# YouTube review files, from `itgraph yt review-export`. They hold
+# YouTube API data — titles, handles — which may be kept at most 30 days
+# and never published. They belong in ~/itgraph-review, outside the
+# repository; this catches the one saved here by mistake.
+*.review.tsv
+
 # Database dumps: the operator's own subscriptions and review decisions.
 # They live outside the repository by default; this is here for the day
 # someone points ITGRAPH_BACKUP_DIR at it.
