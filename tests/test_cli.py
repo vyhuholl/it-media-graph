@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -14,7 +15,10 @@ from typer.testing import CliRunner
 
 from itgraph import __version__
 from itgraph.cli import app
+from itgraph.db import backup as backup_module
+from itgraph.db import offsite as offsite_module
 from itgraph.db import session as db_session
+from itgraph.db.offsite import OffsiteError
 from itgraph.tg import auth as tg_auth
 from itgraph.tg import backfill as tg_backfill
 from itgraph.tg import client as tg_client
@@ -1880,3 +1884,70 @@ def test_affiliates_refuses_a_handle_cap_below_two(
 
     assert result.exit_code != 0
     assert "max_handle_token_channels" in result.output
+
+
+# --- backup and the off-site pass -------------------------------------
+
+
+def test_backup_copies_off_site(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pass runs after the local dumps, and its result is said."""
+    order: list[str] = []
+
+    def local(kinds: object = None) -> list[object]:
+        order.append("local")
+        return []
+
+    def offsite(*args: object, **kwargs: object) -> list[Path]:
+        order.append("off-site")
+        return [Path("/backups/weekly/full-20261022T120000Z.dump")]
+
+    monkeypatch.setattr(backup_module, "run_backup", local)
+    monkeypatch.setattr(offsite_module, "is_configured", lambda: True)
+    monkeypatch.setattr(offsite_module, "copy_new_dumps", offsite)
+
+    result = runner.invoke(app, ["backup"])
+
+    assert result.exit_code == 0
+    assert "off-site" in result.output
+    assert "full-20261022T120000Z.dump" in result.output
+    # The local dumps and their pruning are done before anything leaves.
+    assert order == ["local", "off-site"]
+
+
+def test_backup_fails_naming_every_dump_not_copied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(backup_module, "run_backup", lambda kinds=None: [])
+    monkeypatch.setattr(offsite_module, "is_configured", lambda: True)
+    monkeypatch.setattr(
+        offsite_module,
+        "copy_new_dumps",
+        MagicMock(
+            side_effect=OffsiteError(
+                "full-20261022T120000Z.dump was not copied: "
+                "HTTP 403 cap_exceeded"
+            )
+        ),
+    )
+
+    result = runner.invoke(app, ["backup"])
+
+    assert result.exit_code == 1
+    assert "full-20261022T120000Z.dump was not copied" in result.output
+
+
+def test_backup_without_offsite_configuration_makes_no_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Mac: no pass, and no request to explain."""
+    copy = MagicMock(return_value=[])
+    monkeypatch.setattr(backup_module, "run_backup", lambda kinds=None: [])
+    monkeypatch.setattr(offsite_module, "is_configured", lambda: False)
+    monkeypatch.setattr(offsite_module, "copy_new_dumps", copy)
+
+    result = runner.invoke(app, ["backup"])
+
+    assert result.exit_code == 0
+    copy.assert_not_called()

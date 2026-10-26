@@ -1,0 +1,56 @@
+# The alert bot. Recreate, like the collector: one poller per bot
+# token. No session volume and no Telegram label — the bot speaks the
+# Bot API, from the host's own address, and the proxy's policy refuses
+# it anyway.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: itgraph-bot
+  namespace: itgraph
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: itgraph-bot
+  template:
+    metadata:
+      labels:
+        app: itgraph-bot
+      annotations:
+        itgraph/commit: {{ itgraph_commit | tojson }}
+        itgraph/config-checksum: {{ itgraph_env_checksum | tojson }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 3000
+        runAsGroup: 3000
+        fsGroup: 3000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: itgraph
+          image: {{ itgraph_image | tojson }}
+          args: ["bot"]
+          envFrom:
+            - secretRef:
+                name: itgraph-env
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 20m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

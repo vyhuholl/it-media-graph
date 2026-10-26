@@ -1,23 +1,31 @@
 ---
-# Bring up collection on a fresh Ubuntu host, or bring a host that is
-# already collecting up to date: the full run is the command for both.
+# Bring up collection on the k3s host, or bring a host that is already
+# collecting up to date: the full run is the command for both.
+#
+# Everything runs through `k3s kubectl` over SSH as root. Nothing is
+# installed on the host and nothing outside the `itgraph` namespace is
+# created or changed.
 #
 # What this playbook will not do, deliberately:
 #
-#   * run `itgraph login`. The session file is copied from the operator's
-#     machine — and only to a host that has none — because it carries the
-#     entity cache `cached_peer` reads and a fresh session has none: every
-#     seed channel would be skipped for want of a cached peer, recoverable
-#     only through `resolve` at a couple of hundred usernames a day.
+#   * run `itgraph login`. The session file is copied from the
+#     operator's machine — and only into a volume that has none —
+#     because it carries the entity cache `cached_peer` reads and a
+#     fresh session has none: every seed channel would be skipped for
+#     want of a cached peer, recoverable only through `resolve` at a
+#     couple of hundred usernames a day.
 #   * restore over a database that already has channels. A re-run on a
 #     coherent one skips the restore and carries on; on a broken one it
-#     stops before migrating or starting anything (see the `data` tasks).
-#     A re-run must not be a way to lose the inventory.
-#   * stop the collector still running on the operator's machine. That
-#     stays a human decision, taken after the verification below passes.
+#     stops before migrating or starting anything (see the `data`
+#     tasks). A re-run must not be a way to lose the inventory.
+#   * stop the collector on the previous host by itself. It *checks*,
+#     over SSH, that nothing there is running or enabled, and stops
+#     before the copy otherwise — but stopping that host is the
+#     operator's decision, and retiring it has its own playbook.
 #
 # Usage, from the repository root (ansible.cfg lives there):
-#   ansible-playbook deploy/playbook.yml
+#   ansible-playbook deploy/playbook.yml                 # everything
+#   ansible-playbook deploy/playbook.yml --tags prepare  # a host, not collecting yet
 #   ansible-playbook deploy/playbook.yml --tags migrate
 #   ansible-playbook deploy/playbook.yml --tags services
 #   ansible-playbook deploy/playbook.yml --tags verify
@@ -30,325 +38,337 @@
   gather_facts: false
 
   vars:
-    repo_dir: "/home/{{ ansible_user }}/itgraph"
-    uv: "/home/{{ ansible_user }}/.local/bin/uv"
-    session_path: "{{ repo_dir }}/{{ telegram_session | default('itgraph.session') }}"
+    # One prefix for every kubectl call; every object lives here.
+    kubectl: k3s kubectl -n itgraph
+    # Root-only, on the host. The dump and the session travel through
+    # files in it — not through Ansible's `stdin`, which carries text
+    # and would corrupt either.
+    transfer_dir: /root/.itgraph-transfer
+    # The session's name inside its volume; itgraph-env's
+    # TELEGRAM_SESSION points at the same path.
+    session_volume_path: /session/itgraph.session
+    postgres_pod: itgraph-postgres-0
 
   pre_tasks:
+
     - name: Refuse to run without the things only the operator has
       ansible.builtin.assert:
         that:
           - itgraph_session_src is defined
           - itgraph_dump_src is defined
+          - itgraph_storage_class is defined
           - telegram_api_hash is defined
           - bot_db_password is defined
+          - proxy_socks_password is defined
+          - proxy_outbound is defined
+          - proxy_outbound | length > 0
+          - (b2_key_id | default("") | length == 0) == (b2_application_key | default("") | length == 0)
+          - (b2_key_id | default("") | length == 0) == (b2_bucket_name | default("") | length == 0)
+          - (b2_key_id | default("") | length == 0) == (backup_age_recipient | default("") | length == 0)
         fail_msg: >-
           Set itgraph_session_src and itgraph_dump_src in
-          deploy/group_vars/all/main.yml, and the secrets in
-          deploy/group_vars/all/secrets.vault.yml — note the `all/`
-          directory, a file named group_vars/secrets.vault.yml is read as
-          variables for a group called `secrets.vault` and silently ignored.
-          Nothing here can be invented for you.
+          deploy/group_vars/all/main.yml, the secrets in
+          deploy/group_vars/all/secrets.vault.yml and
+          itgraph_storage_class on the [collector] host in the
+          inventory — note the `all/` directory, a file named
+          group_vars/secrets.vault.yml is read as variables for a group
+          called `secrets.vault` and silently ignored. The B2 settings
+          are all four or none, as the application's settings loader
+          also demands. Nothing here can be invented for you.
         quiet: true
+      tags: [always]
+
+    # ------------------------------------------------- the image (always)
+
+    # The controller's checkout knows the URL; the registry answers
+    # what the tip of master is without a local clone of anything. Not
+    # the git module: it would clone, and the question is one line.
+    - name: Which commit is being deployed
+      ansible.builtin.command: git ls-remote origin refs/heads/master  # noqa: command-instead-of-module
+      args:
+        chdir: "{{ playbook_dir }}/.."
+      register: remote_tip
+      changed_when: false
+      delegate_to: localhost
+      when: itgraph_commit is not defined
+      tags: [always]
+
+    - name: The commit, from the flag or the tip of master
+      ansible.builtin.set_fact:
+        itgraph_commit: "{{ remote_tip.stdout.split()[0] }}"
+      when: itgraph_commit is not defined
+      tags: [always]
+
+    # CI builds on every push; a deploy run right behind a push races
+    # it. Bounded: twenty minutes, then the deploy fails — before
+    # anything in the namespace is touched, because nothing below here
+    # has run yet. Anonymous: the package is public.
+    #
+    # `|| exit 0` on both curls, so a network error or a missing tag is
+    # a retry, not a hard failure with its own shape.
+    - name: Wait for the image CI is building
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          token=$(curl -fsS
+          "https://ghcr.io/token?scope=repository:{{ itgraph_image_repository | replace('ghcr.io/', '') }}:pull"
+          | sed -n 's/.*"token": *"\([^"]*\)".*/\1/p') || exit 0;
+          test -n "$token" || exit 0;
+          curl -fsSI -H "Authorization: Bearer $token"
+          -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json"
+          "https://ghcr.io/v2/{{ itgraph_image_repository | replace('ghcr.io/', '') }}/manifests/{{ itgraph_commit }}"
+          | tr -d '\r'
+          | sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest: *//p' || exit 0
+        executable: /bin/bash
+      register: image_poll
+      until: image_poll.stdout | length > 0
+      retries: 40
+      delay: 30
+      changed_when: false
+      failed_when: false
+      delegate_to: localhost
+      tags: [always]
+
+    - name: The image exists
+      ansible.builtin.assert:
+        that: image_poll.stdout is match("^sha256:[0-9a-f]{64}$")
+        fail_msg: >-
+          ghcr has no image for {{ itgraph_commit }} after twenty
+          minutes: CI has not finished, or failed, or the commit is not
+          pushed. Stopping before anything in the namespace is changed
+          — a deploy without its image has nothing to deploy.
+        quiet: true
+      tags: [always]
+
+    # The tag is a pointer; what runs is the digest it named at this
+    # moment. A tag moved later changes nothing here.
+    - name: The image, by digest
+      ansible.builtin.set_fact:
+        itgraph_image: "{{ itgraph_image_repository }}@{{ image_poll.stdout }}"
+      tags: [always]
+
+    - name: What is being deployed
+      ansible.builtin.debug:
+        msg: "{{ itgraph_commit }} · {{ itgraph_image }}"
+      tags: [always]
+
+    # The checksum of the rendered configuration, as one value: the
+    # pod templates carry it, so a changed configuration changes the
+    # template, and the Deployment controller restarts what reads it.
+    # Computed from the same template the `config` tasks apply, so the
+    # two cannot disagree.
+    - name: The configuration's checksum
+      ansible.builtin.set_fact:
+        itgraph_env_checksum: >-
+          {{ lookup('ansible.builtin.template', 'k8s/secret-env.yml.j2') | checksum }}
+      no_log: true
       tags: [always]
 
   tasks:
 
-    # ---------------------------------------------------------------- base
+    # ---------------------------------------------------------- prepare
 
-    - name: Base packages
-      become: true
-      ansible.builtin.apt:
-        name: [git, curl, rsync, ca-certificates]
-        update_cache: true
-        cache_valid_time: 3600
-      tags: [base]
-
-    - name: Is docker already here
-      ansible.builtin.command: docker --version
-      register: docker_version
+    - name: The host's k3s kubectl answers
+      ansible.builtin.command: k3s kubectl get namespace default
+      register: kubectl_answers
       changed_when: false
-      failed_when: false
-      tags: [base]
+      tags: [prepare]
 
-    # `pipefail` is not decoration: without it a failed download leaves
-    # `sh` reading empty input, exiting zero, and Ansible reporting a
-    # successful install of nothing.
-    - name: Install docker
-      become: true
-      ansible.builtin.shell:
-        cmd: set -o pipefail && curl -fsSL https://get.docker.com | sh
-        executable: /bin/bash
-      when: docker_version.rc != 0
-      changed_when: true
-      tags: [base]
-
-    - name: Let the deploy user talk to docker
-      become: true
-      ansible.builtin.user:
-        name: "{{ ansible_user }}"
-        groups: docker
-        append: true
-      tags: [base]
-
-    # Reconnect so the new group membership is in effect; without this
-    # every later `docker` call needs sudo, which is worse.
-    - name: Pick up the docker group
-      ansible.builtin.meta: reset_connection
-      tags: [base]
-
-    # `command -v` is a shell builtin — `command:` cannot run it, and
-    # `which` is not installed on a minimal Ubuntu image.
-    - name: Where docker actually is
-      ansible.builtin.shell: command -v docker  # noqa: command-instead-of-shell
-      register: docker_path
-      changed_when: false
-      tags: [base, config, repo]
-
-    - name: Is uv already here
-      ansible.builtin.stat:
-        path: "{{ uv }}"
-      register: uv_binary
-      tags: [base]
-
-    # uv, not apt: this project needs Python 3.14 and pins it, and Ubuntu
-    # does not ship it. Bare `python`/`pip` are forbidden here anyway.
-    - name: Install uv
-      ansible.builtin.shell:
-        cmd: set -o pipefail && curl -LsSf https://astral.sh/uv/install.sh | sh
-        executable: /bin/bash
-      when: not uv_binary.stat.exists
-      changed_when: true
-      tags: [base]
-
-    # Why an update at all: uv carries its own index of downloadable
-    # interpreters, so a uv older than the pinned Python cannot fetch it.
-    # `uv python install` then answers "No download found" and `uv sync`
-    # "No interpreter found", neither of which points at uv's age.
-    # Installing only when absent left a host carrying uv from some
-    # earlier day quietly unable to build the environment.
-    #
-    # **Best effort, and deliberately unable to fail the run.** The
-    # update is a means; the requirement is that the pinned interpreter
-    # installs, and that is asserted after the clone where the message
-    # can say so. This step reaches raw.githubusercontent.com, which is
-    # not reachable from every network a collector runs on, and stopping
-    # a deployment because an update server timed out would trade a real
-    # problem for an imaginary one.
-    #
-    # Bounded by `timeout` because `uv self update` retries for about
-    # ninety seconds before giving up — ninety seconds spent on every run
-    # of a step that is allowed to fail.
-    - name: Keep uv current
-      ansible.builtin.command: "timeout 20 {{ uv }} self update"
-      register: uv_update
-      changed_when: uv_update.stdout is search('(?i)upgraded')
-      failed_when: false
-      when: uv_binary.stat.exists
-      tags: [base]
-
-    - name: Say so when uv could not be updated
-      ansible.builtin.debug:
-        msg: >-
-          uv could not check for updates (rc={{ uv_update.rc }}). Harmless
-          on its own. But if the pinned Python fails to install below, a
-          uv older than that release is the likely reason — it carries its
-          own index of what is downloadable.
-      when:
-        - uv_binary.stat.exists
-        - uv_update.rc | default(0) != 0
-      tags: [base]
-
-    - name: Firewall allows ssh and nothing else
-      become: true
-      community.general.ufw:
-        rule: allow
-        name: OpenSSH
-      tags: [base]
-
-    - name: Firewall on
-      become: true
-      community.general.ufw:
-        state: enabled
-        policy: deny
-      tags: [base]
-
-    # A 4 GB host with no swap hands the OOM killer an easy choice during
-    # a `derive` batch, and the fattest process is Postgres.
-    - name: Swap file
-      become: true
-      ansible.builtin.command:
-        cmd: fallocate -l {{ swap_size | default('2G') }} /swapfile
-        creates: /swapfile
-      tags: [base]
-
-    - name: Swap permissions
-      become: true
+    - name: The transfer directory
       ansible.builtin.file:
-        path: /swapfile
-        mode: "0600"
-      tags: [base]
-
-    - name: Format swap
-      become: true
-      ansible.builtin.shell:
-        executable: /bin/bash
-        cmd: |
-          set -eo pipefail
-          if ! swapon --show=NAME --noheadings | grep -qx /swapfile; then
-            mkswap /swapfile
-            swapon /swapfile
-          fi
-      register: swap_on
-      changed_when: "'Setting up swapspace' in swap_on.stdout"
-      tags: [base]
-
-    - name: Swap survives reboot
-      become: true
-      ansible.builtin.lineinfile:
-        path: /etc/fstab
-        line: "/swapfile none swap sw 0 0"
-        state: present
-      tags: [base]
-
-    # A laptop's default is to suspend when the lid closes, and a
-    # suspended collector does not merely pause — the snapshots it misses
-    # are gone for good. History can be re-fetched; a reading of a post's
-    # counters at age thirty minutes cannot be taken later, because the
-    # post will not be thirty minutes old again. That is the whole reason
-    # `watch` runs as its own phase, and a closed lid quietly undoes it.
-    #
-    # Off by default: on a rented machine there is no lid and masking
-    # sleep would be noise in the unit list.
-    - name: Sleep is masked on a laptop
-      become: true
-      ansible.builtin.systemd_service:
-        name: "{{ item }}"
-        masked: true
-      loop:
-        - sleep.target
-        - suspend.target
-        - hibernate.target
-        - hybrid-sleep.target
-      when: host_is_laptop | default(false) | bool
-      tags: [base, laptop]
-
-    # Belt to the masking's braces, and it earns its place: masked
-    # targets make a suspend *fail*, which logind logs as an error on
-    # every lid close. This makes it not try.
-    #
-    # A drop-in rather than an edit to logind.conf, so a package upgrade
-    # replacing that file does not silently take the setting with it.
-    - name: Somewhere to put the logind drop-in
-      become: true
-      ansible.builtin.file:
-        path: /etc/systemd/logind.conf.d
+        path: "{{ transfer_dir }}"
         state: directory
-        mode: "0755"
-      when: host_is_laptop | default(false) | bool
-      tags: [base, laptop]
+        mode: "0700"
+      tags: [prepare, data, session]
 
-    - name: The lid switch does nothing on a laptop
-      become: true
+    - name: Render the namespace's objects
       ansible.builtin.template:
-        src: 10-itgraph-no-sleep.conf.j2
-        dest: /etc/systemd/logind.conf.d/10-itgraph-no-sleep.conf
-        mode: "0644"
-        backup: true
-      when: host_is_laptop | default(false) | bool
-      notify: Reload logind
-      tags: [base, laptop]
-
-    # ---------------------------------------------------------------- repo
-
-    - name: Clone the repository
-      ansible.builtin.git:
-        repo: "{{ itgraph_repo_url }}"
-        dest: "{{ repo_dir }}"
-        version: "{{ itgraph_repo_version | default('master') }}"
-        update: true
-      register: repo_checkout
-      tags: [repo]
-
-    # The pinned interpreter, fetched explicitly rather than left to
-    # `uv sync`, so a version uv cannot supply fails here — where the
-    # message names Python — rather than inside a dependency install
-    # that reports only "No interpreter found". Reads `.python-version`
-    # from the checkout, so it has to follow the clone.
-    - name: The pinned Python is available
-      ansible.builtin.command: "{{ uv }} python install"
-      args:
-        chdir: "{{ repo_dir }}"
-      register: python_install
-      changed_when: "'Installed' in python_install.stderr"
-      failed_when: false
-      tags: [repo]
-
-    - name: The pinned Python really installed
-      ansible.builtin.assert:
-        that: python_install.rc == 0
-        fail_msg: >-
-          Could not install the Python pinned in .python-version —
-          {{ python_install.stderr | trim }}
-          If that reads "No download found", the uv on this host is older
-          than the pinned release and does not know it exists. Reinstall
-          it by hand and re-run:
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-        quiet: true
-      tags: [repo]
-
-    # Not `Resolved`: uv prints "Resolved N packages" on every run, an
-    # unchanged environment included, so the task reported a change it had
-    # not made on every run. `Installed` and `Uninstalled` appear only when
-    # the environment actually changed.
-    - name: Install dependencies
-      ansible.builtin.command: "{{ uv }} sync"
-      args:
-        chdir: "{{ repo_dir }}"
-      register: uv_sync
-      changed_when: "'Installed' in uv_sync.stderr or 'Uninstalled' in uv_sync.stderr"
-      tags: [repo]
-
-    # No compose override here, deliberately. Binding Postgres to
-    # loopback is done in the tracked `docker-compose.yaml`, because an
-    # override cannot do it: Compose appends to a `ports` list rather
-    # than replacing it, so the override published the port twice and
-    # the container failed to start with "address already in use".
-    #
-    # A leftover `docker-compose.override.yml` from an earlier run would
-    # still be picked up, so it is removed rather than merely not written.
-    - name: No stale compose override
-      ansible.builtin.file:
-        path: "{{ repo_dir }}/docker-compose.override.yml"
-        state: absent
-      tags: [repo]
-
-    - name: Configuration
-      ansible.builtin.template:
-        src: env.j2
-        dest: "{{ repo_dir }}/.env"
+        src: "k8s/{{ item }}.yml.j2"
+        dest: "{{ transfer_dir }}/{{ item }}.yml"
         mode: "0600"
-      register: env_file
+      loop:
+        - namespace
+        - netpol
+        - storage
+      tags: [prepare]
+
+    - name: Apply the namespace's objects
+      ansible.builtin.command: >-
+        {{ kubectl }} apply --server-side --field-manager=itgraph
+        -f {{ transfer_dir }}/{{ item }}.yml
+      register: prepare_applied
+      changed_when: "'configured' in prepare_applied.stdout or 'created' in prepare_applied.stdout"
+      loop:
+        - namespace
+        - netpol
+        - storage
+      tags: [prepare]
+
+    - name: Remove the rendered objects from the host
+      ansible.builtin.file:
+        path: "{{ transfer_dir }}/{{ item }}.yml"
+        state: absent
+      loop:
+        - namespace
+        - netpol
+        - storage
+      tags: [prepare]
+
+    # ------------------------------------------------------------ config
+
+    # no_log here and not on the apply: a template failure shows the
+    # line it failed on, and these lines are the secrets; kubectl apply
+    # prints object names, never content.
+    - name: Render the secrets and the proxy
+      ansible.builtin.template:
+        src: "k8s/{{ item }}.yml.j2"
+        dest: "{{ transfer_dir }}/{{ item }}.yml"
+        mode: "0600"
       no_log: true
-      tags: [repo, config]
+      loop:
+        - secret-env
+        - secret-postgres
+        - secret-proxy
+        - proxy
+      tags: [prepare, config]
 
-    # ---------------------------------------------------------------- data
+    - name: Apply the secrets and the proxy
+      ansible.builtin.command: >-
+        {{ kubectl }} apply --server-side --field-manager=itgraph
+        -f {{ transfer_dir }}/{{ item }}.yml
+      register: config_applied
+      changed_when: "'configured' in config_applied.stdout or 'created' in config_applied.stdout"
+      loop:
+        - secret-env
+        - secret-postgres
+        - secret-proxy
+        - proxy
+      tags: [prepare, config]
 
-    - name: Start Postgres
-      ansible.builtin.command: docker compose up -d
-      args:
-        chdir: "{{ repo_dir }}"
-      register: compose_up
-      changed_when: "'Started' in compose_up.stderr or 'Created' in compose_up.stderr"
+    - name: Remove the rendered secrets from the host
+      ansible.builtin.file:
+        path: "{{ transfer_dir }}/{{ item }}.yml"
+        state: absent
+      loop:
+        - secret-env
+        - secret-postgres
+        - secret-proxy
+        - proxy
+      tags: [prepare, config]
+
+    - name: The proxy is up
+      ansible.builtin.command: >-
+        {{ kubectl }} rollout status deploy/itgraph-proxy --timeout=180s
+      changed_when: false
+      tags: [prepare, config]
+
+    # The console is applied under every tag that runs a command
+    # through it — the migration, the session probe, the checks. It is
+    # a tool, not a collector: rolling it to the new image before the
+    # schema gate is safe, and it is what makes the migration run the
+    # deployed code instead of the code of some earlier deploy.
+    - name: Render the console
+      ansible.builtin.template:
+        src: k8s/console.yml.j2
+        dest: "{{ transfer_dir }}/console.yml"
+        mode: "0600"
+      register: console_rendered
+      tags: [prepare, data, migrate, session, verify]
+
+    - name: Apply the console
+      ansible.builtin.command: >-
+        {{ kubectl }} apply --server-side --field-manager=itgraph
+        -f {{ transfer_dir }}/console.yml
+      register: console_applied
+      changed_when: "'configured' in console_applied.stdout or 'created' in console_applied.stdout"
+      tags: [prepare, data, migrate, session, verify]
+
+    - name: The console is up
+      ansible.builtin.command: >-
+        {{ kubectl }} rollout status deploy/itgraph-console --timeout=180s
+      changed_when: false
+      tags: [prepare, data, migrate, session, verify]
+
+    - name: Remove the rendered console from the host
+      ansible.builtin.file:
+        path: "{{ transfer_dir }}/console.yml"
+        state: absent
+      tags: [prepare, data, migrate, session, verify]
+
+    # The exit check, run wherever the proxy is deployed or checked.
+    # `api.ipify.org` answers over IPv4 only, so both readings are
+    # comparable. This is what catches a proxy that accepts connections
+    # and sends them out from the host's own address — a state in which
+    # the collector's route line is correct and the exit is not.
+    #
+    # The proxy credentials reach curl through the environment
+    # (`ALL_PROXY=`), expanded by the shell inside the console: never
+    # an argument, where /proc would show them.
+    - name: The address the host leaves from
+      ansible.builtin.command: >-
+        {{ kubectl }} exec deploy/itgraph-console -c itgraph --
+        curl -fsS --max-time 20 https://api.ipify.org
+      register: direct_address
+      changed_when: false
+      tags: [prepare, verify]
+
+    - name: The address the proxy leaves from
+      ansible.builtin.command:
+        cmd: >-
+          {{ kubectl }} exec deploy/itgraph-console -c itgraph --
+          sh -c 'ALL_PROXY="socks5://${PROXY_USERNAME}:${PROXY_PASSWORD}@${PROXY_HOST}:${PROXY_PORT}"
+          curl -fsS --max-time 20 https://api.ipify.org'
+      register: proxied_address
+      changed_when: false
+      tags: [prepare, verify]
+
+    - name: The exit is the VPN's
+      ansible.builtin.assert:
+        that:
+          - direct_address.stdout | length > 0
+          - proxied_address.stdout | length > 0
+          - direct_address.stdout != proxied_address.stdout
+        fail_msg: >-
+          The two addresses must both answer and must differ: this host
+          leaves from {{ direct_address.stdout | default("?", true) }},
+          the proxy from {{ proxied_address.stdout | default("?", true) }}.
+          A proxy that answers with the host's own address is sending
+          traffic out directly — the one state the collector's own
+          route line cannot catch. Check proxy_outbound in the vault
+          against the VPN client configuration it came from.
+        quiet: true
+      tags: [prepare, verify]
+
+    # --------------------------------------------------------------- data
+
+    - name: Render Postgres
+      ansible.builtin.template:
+        src: k8s/postgres.yml.j2
+        dest: "{{ transfer_dir }}/postgres.yml"
+        mode: "0600"
       tags: [data, migrate]
 
+    - name: Apply Postgres
+      ansible.builtin.command: >-
+        {{ kubectl }} apply --server-side --field-manager=itgraph
+        -f {{ transfer_dir }}/postgres.yml
+      register: postgres_applied
+      changed_when: "'configured' in postgres_applied.stdout or 'created' in postgres_applied.stdout"
+      tags: [data, migrate]
+
+    - name: Remove the rendered Postgres from the host
+      ansible.builtin.file:
+        path: "{{ transfer_dir }}/postgres.yml"
+        state: absent
+      tags: [data, migrate]
+
+    # The readiness probe is pg_isready over the local socket, so this
+    # waits for a database that answers, not only for a pod that
+    # exists.
     - name: Wait for Postgres
       ansible.builtin.command: >-
-        docker exec itgraph-postgres pg_isready -U {{ db_user }} -d {{ db_name }}
-      register: pg_ready
-      until: pg_ready.rc == 0
-      retries: 30
-      delay: 2
+        {{ kubectl }} rollout status statefulset/itgraph-postgres
+        --timeout=300s
       changed_when: false
       tags: [data, migrate]
 
@@ -357,7 +377,8 @@
     # restore or those statements fail. NOLOGIN until a password is set.
     - name: Bot role exists before anything references it
       ansible.builtin.command: >-
-        docker exec -i itgraph-postgres psql -U {{ db_user }} -d postgres -tAc
+        {{ kubectl }} exec {{ postgres_pod }} --
+        psql -U {{ db_user }} -d postgres -tAc
         "DO $$ BEGIN
           IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='itgraph_bot')
           THEN CREATE ROLE itgraph_bot NOLOGIN;
@@ -380,7 +401,8 @@
     # reason it gets replaced.
     - name: Is there a channels table
       ansible.builtin.command: >-
-        docker exec -i itgraph-postgres psql -U {{ db_user }} -d {{ db_name }} -tAc
+        {{ kubectl }} exec {{ postgres_pod }} --
+        psql -U {{ db_user }} -d {{ db_name }} -tAc
         "SELECT to_regclass('public.channels') IS NULL"
       register: channels_table
       changed_when: false
@@ -391,7 +413,8 @@
 
     - name: How much is already in this database
       ansible.builtin.command: >-
-        docker exec -i itgraph-postgres psql -U {{ db_user }} -d {{ db_name }} -tAc
+        {{ kubectl }} exec {{ postgres_pod }} --
+        psql -U {{ db_user }} -d {{ db_name }} -tAc
         "SELECT count(*) FROM channels"
       register: existing_channels
       changed_when: false
@@ -410,7 +433,8 @@
     # error here is an error, not a clean bill of health.
     - name: Is what is already here internally consistent
       ansible.builtin.command: >-
-        docker exec -i itgraph-postgres psql -U {{ db_user }} -d {{ db_name }} -tAc
+        {{ kubectl }} exec {{ postgres_pod }} --
+        psql -U {{ db_user }} -d {{ db_name }} -tAc
         "SELECT count(*) FROM pg_attribute a
          JOIN pg_class c ON c.oid = a.attrelid AND c.relkind = 'r'
          JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = 'public'
@@ -463,10 +487,10 @@
           restore here would come from {{ itgraph_dump_src }} on the
           operator's machine, which is older than whatever this host has
           collected since. On a host that has been collecting, restore from
-          its own ~/itgraph-backups instead (src/itgraph/README.md,
-          «Восстановление»). Only on a host that never collected, re-run
-          with -e force_restore=true and the data tasks selected —
-          `--tags migrate` alone never restores.
+          its own dumps in the backups volume instead
+          (src/itgraph/README.md, «Восстановление»). Only on a host that
+          never collected, re-run with -e force_restore=true and the data
+          tasks selected — `--tags migrate` alone never restores.
         quiet: true
       tags: [data, migrate]
 
@@ -491,17 +515,17 @@
       when: restore_needed | bool
       tags: [data]
       block:
-        # `copy_links` is load-bearing: `itgraph_dump_src` points at
-        # `full-LATEST.dump`, which is a symlink, and `synchronize`
-        # defaults to `archive: yes` — rsync `-a`, which includes `-l` and
-        # copies a symlink *as a symlink*. The destination then dangles at
-        # a filename that exists only on the operator's machine, and the
+        # `copy_links` is load-bearing: the operator's dump path often
+        # points through a symlink, and `synchronize` defaults to
+        # `archive: yes` — rsync `-a`, which includes `-l` and copies a
+        # symlink *as a symlink*. The destination then dangles at a
+        # filename that exists only on the operator's machine, and the
         # restore fails with a bare "No such file or directory" that says
         # nothing about why. `-L` sends what the link points at.
         - name: Ship the dump
           ansible.posix.synchronize:
             src: "{{ itgraph_dump_src }}"
-            dest: /tmp/itgraph.dump
+            dest: "{{ transfer_dir }}/itgraph.dump"
             copy_links: true
 
         # Checked before the restore rather than after: `pg_restore`
@@ -509,7 +533,7 @@
         # error, which names neither the dump nor the reason.
         - name: The dump arrived
           ansible.builtin.stat:
-            path: /tmp/itgraph.dump
+            path: "{{ transfer_dir }}/itgraph.dump"
           register: shipped_dump
 
         - name: The dump is a real file with something in it
@@ -519,18 +543,22 @@
               - shipped_dump.stat.isreg
               - shipped_dump.stat.size > 0
             fail_msg: >-
-              /tmp/itgraph.dump did not arrive as a readable file. Check that
-              {{ itgraph_dump_src }} exists on this machine and that
-              `make backup-full` has run since the last schema change.
+              {{ transfer_dir }}/itgraph.dump did not arrive as a readable
+              file. Check that {{ itgraph_dump_src }} exists on this
+              machine — at the cutover, the operator copies it from the
+              previous host into a 0700 directory and points
+              itgraph_dump_src at it.
             quiet: true
 
+        # Through the transfer file, not through Ansible's `stdin`:
+        # a dump is not text.
         - name: Restore
-          ansible.builtin.shell:
+          ansible.builtin.shell: >-
+            {{ kubectl }} exec -i {{ postgres_pod }} --
+            pg_restore -U {{ db_user }} -d {{ db_name }}
+            --no-owner --clean --if-exists < {{ transfer_dir }}/itgraph.dump
+          args:
             executable: /bin/bash
-            cmd: >-
-              docker exec -i itgraph-postgres
-              pg_restore -U {{ db_user }} -d {{ db_name }}
-              --no-owner --clean --if-exists < /tmp/itgraph.dump
           register: restore_result
           changed_when: true
 
@@ -538,10 +566,11 @@
         # one would like, and the damage it leaves is invisible until
         # something queries an affected column. Asked here, where the
         # answer can still stop the deployment, rather than at 03:00 in a
-        # service log.
+        # job log.
         - name: The restored database is coherent
           ansible.builtin.command: >-
-            docker exec -i itgraph-postgres psql -U {{ db_user }} -d {{ db_name }} -tAc
+            {{ kubectl }} exec {{ postgres_pod }} --
+            psql -U {{ db_user }} -d {{ db_name }} -tAc
             "SELECT count(*) FROM pg_attribute a
              JOIN pg_class c ON c.oid = a.attrelid AND c.relkind = 'r'
              JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = 'public'
@@ -557,8 +586,9 @@
               The restore left {{ dangling_after.stdout | trim }} column(s)
               referencing a type that no longer exists, so it did not finish.
               Queries touching them fail with "cache lookup failed for type".
-              Wipe and try again — `docker compose down -v && docker compose
-              up -d` in {{ repo_dir }} — and check the dump restores on the
+              Wipe and try again — `{{ kubectl }} delete statefulset
+              itgraph-postgres; {{ kubectl }} delete pvc itgraph-database`,
+              re-run the playbook — and check the dump restores on the
               machine that made it.
             quiet: true
 
@@ -566,7 +596,7 @@
     # failed between shipping it and getting here.
     - name: Remove the dump from the host
       ansible.builtin.file:
-        path: /tmp/itgraph.dump
+        path: "{{ transfer_dir }}/itgraph.dump"
         state: absent
       tags: [data]
 
@@ -585,7 +615,7 @@
     - name: Give the bot role its password
       ansible.builtin.command:
         cmd: >-
-          docker exec -i itgraph-postgres
+          {{ kubectl }} exec -i {{ postgres_pod }} --
           psql -U {{ db_user }} -d {{ db_name }} -v ON_ERROR_STOP=1 -f -
         stdin: >-
           ALTER ROLE itgraph_bot LOGIN PASSWORD
@@ -597,9 +627,12 @@
     # The dump carries the schema as of the moment it was taken, so a
     # dump older than a migration restores a database that is quietly
     # behind — and a host that has been collecting for weeks is behind
-    # the moment code with a new migration is checked out. Either way the
-    # failure would land on a timer, at night, on a machine nobody is
+    # the moment code with a new migration is deployed. Either way the
+    # failure would land on a schedule, at night, on a machine nobody is
     # watching, so the schema reaches head here, before anything starts.
+    #
+    # In the console, which is already on the new image: the migration
+    # runs the deployed code, not the code of some earlier deploy.
     #
     # Asked before it is done, because `alembic upgrade` is not free on a
     # working database: env.py takes a full dump first and then prunes
@@ -609,12 +642,12 @@
     # dumps on `upgrade` only.
     #
     # The matched text is alembic's own DatabaseNotAtHead. Anything else —
-    # no .env, Postgres unreachable, a traceback — stops here with its own
-    # output, rather than being read as "behind" and tried.
+    # no Secret, Postgres unreachable, a traceback — stops here with its
+    # own output, rather than being read as "behind" and tried.
     - name: Is the schema at head
-      ansible.builtin.command: "{{ uv }} run alembic current --check-heads"
-      args:
-        chdir: "{{ repo_dir }}"
+      ansible.builtin.command: >-
+        {{ kubectl }} exec deploy/itgraph-console -c itgraph --
+        alembic current --check-heads
       register: schema_check
       changed_when: false
       failed_when:
@@ -623,18 +656,18 @@
       tags: [data, migrate]
 
     - name: Where the schema starts
-      ansible.builtin.command: "{{ uv }} run alembic current"
-      args:
-        chdir: "{{ repo_dir }}"
+      ansible.builtin.command: >-
+        {{ kubectl }} exec deploy/itgraph-console -c itgraph --
+        alembic current
       register: schema_before
       changed_when: false
       when: schema_check.rc != 0
       tags: [data, migrate]
 
     - name: Bring the schema to head
-      ansible.builtin.command: "{{ uv }} run alembic upgrade head"
-      args:
-        chdir: "{{ repo_dir }}"
+      ansible.builtin.command: >-
+        {{ kubectl }} exec deploy/itgraph-console -c itgraph --
+        alembic upgrade head
       register: schema_upgrade
       changed_when: true
       when: schema_check.rc != 0
@@ -654,14 +687,12 @@
 
     # Also tagged `services`, and that is what it is for. Tags select tasks
     # but never reorder them, so file order protects a full run only:
-    # `--tags repo` followed by `--tags services` — the manual path minus
-    # its migration — would otherwise enable the YouTube refresh on a
-    # schema without its tables. Sitting here, ahead of session and
-    # services, it runs first under `--tags services` and stops the run.
+    # `--tags services` on a schema that is behind is the manual path
+    # minus its migration, and this gate is what stops it.
     - name: Schema is at head
-      ansible.builtin.command: "{{ uv }} run alembic current --check-heads"
-      args:
-        chdir: "{{ repo_dir }}"
+      ansible.builtin.command: >-
+        {{ kubectl }} exec deploy/itgraph-console -c itgraph --
+        alembic current --check-heads
       register: alembic_current
       changed_when: false
       failed_when: false
@@ -671,8 +702,8 @@
       ansible.builtin.assert:
         that: alembic_current.rc == 0
         fail_msg: >-
-          The schema is not at the head of the code in {{ repo_dir }}, so
-          no unit is installed, started or restarted. Bring it there first
+          The schema is not at the head of the deployed image, so no
+          workload is created, changed or restarted. Bring it there first
           — the full playbook, or --tags migrate — then the services.
           alembic said: {{ (alembic_current.stdout ~ ' ' ~ alembic_current.stderr) | trim | truncate(400) }}
         quiet: true
@@ -700,240 +731,356 @@
     # must not drag it in every time.
     - name: Have baselines ever been computed
       ansible.builtin.command: >-
-        docker exec -i itgraph-postgres psql -U {{ db_user }} -d {{ db_name }} -tAc
+        {{ kubectl }} exec {{ postgres_pod }} --
+        psql -U {{ db_user }} -d {{ db_name }} -tAc
         "SELECT count(*) FROM baseline_runs WHERE completed_at IS NOT NULL"
       register: baseline_runs
       changed_when: false
       tags: [data]
 
     - name: First baseline refresh
-      ansible.builtin.command: "{{ uv }} run itgraph baselines"
-      args:
-        chdir: "{{ repo_dir }}"
+      ansible.builtin.command: >-
+        {{ kubectl }} exec deploy/itgraph-console -c itgraph --
+        itgraph baselines
       when: baseline_runs.stdout | trim | int == 0
       changed_when: true
       tags: [data]
 
     # ------------------------------------------------------------- session
 
-    # Copied, never created. `itgraph login` on a new machine produces a
+    # Copied, never created. `itgraph login` on a fresh volume produces a
     # session with an empty entity cache, and every seed channel is then
     # skipped for want of a cached peer — days of stopped collection,
     # caused by a step that looks like ordinary setup.
     #
-    # And copied only to a host that has none. Once collection runs on
-    # the host, the session lives there and nowhere else — a second copy
-    # on the operator's machine is a second full key to the account. But
-    # `copy` with `force: false`, which leaves the host's file alone,
-    # still insists on reading `src` on the controller first, so a re-run
-    # on a live host failed here for want of a file it had no use for.
-    # The host is asked first; the controller only when the host has
-    # nothing.
-    - name: Is there a session on the host
-      ansible.builtin.stat:
-        path: "{{ session_path }}"
-        get_checksum: false
-      register: host_session
+    # And copied only into a volume that has none. Once collection runs
+    # here, the session lives in the volume and nowhere else — a second
+    # copy on the operator's machine is a second full key to the account.
+    - name: Is there a usable session in the volume
+      ansible.builtin.command: >-
+        {{ kubectl }} exec deploy/itgraph-console -c itgraph --
+        sh -c 'test -f {{ session_volume_path }} && test -s {{ session_volume_path }}'
+      register: volume_session
+      changed_when: false
+      failed_when: false
       tags: [session]
 
-    # Kept only if it can be a session. An empty file, or a directory left
-    # by a bad copy, would be "kept" here and collection would stop on it
-    # — found in a service log, not on this screen.
-    - name: The session on the host is a real file with something in it
+    - name: Is there anything at the session path at all
+      ansible.builtin.command: >-
+        {{ kubectl }} exec deploy/itgraph-console -c itgraph --
+        sh -c 'test -e {{ session_volume_path }} && echo present || echo missing'
+      register: session_presence
+      changed_when: false
+      when: volume_session.rc != 0
+      tags: [session]
+
+    # Kept only if it can be a session. An empty file, or a directory
+    # left by a bad copy, would be "kept" here and collection would stop
+    # on it — found in a pod log, not on this screen.
+    - name: The session in the volume is a real file with something in it
       ansible.builtin.assert:
-        that:
-          - host_session.stat.isreg
-          - host_session.stat.size > 0
+        that: session_presence.stdout | trim != "present"
         fail_msg: >-
-          {{ session_path }} exists but is not a regular file with
-          something in it, and nothing here replaces it on its own. Move it
-          aside on the host and re-run, so the session from
-          {{ itgraph_session_src }} is copied — or put the right one back by
-          hand.
+          {{ session_volume_path }} exists in the session volume but is not
+          a regular file with something in it, and nothing here replaces it
+          on its own. Remove it on the host (kubectl exec into the console)
+          and re-run, so the session from {{ itgraph_session_src }} is
+          copied — or put the right one back by hand.
         quiet: true
-      when: host_session.stat.exists
+      when:
+        - volume_session.rc != 0
+        - session_presence.stdout | default('missing') | trim == 'present'
       tags: [session]
 
-    # `is file` is answered on the controller's filesystem, which is where
-    # `src` has to be.
     - name: There is a session to copy
       ansible.builtin.assert:
         that: itgraph_session_src | expanduser is file
         fail_msg: >-
-          No Telegram session on the host, and none at
+          No Telegram session in the volume, and none at
           {{ itgraph_session_src }} on this machine. Copy the session from
           the machine that has been collecting to that path, or point
           itgraph_session_src at it, and re-run. Do not create one with
           `itgraph login`: a new session has an empty entity cache, and
           every seed channel would be skipped for want of a cached peer.
         quiet: true
-      when: not host_session.stat.exists
+      when:
+        - volume_session.rc != 0
+        - session_presence.stdout | default('missing') | trim != 'present'
       tags: [session]
 
-    - name: Telegram session
-      ansible.builtin.copy:
-        src: "{{ itgraph_session_src }}"
-        dest: "{{ session_path }}"
-        mode: "0600"
-        force: false
-      when: not host_session.stat.exists
+    # The session moves only from a host that has stopped collecting:
+    # two collectors on one session is the one state Telegram punishes
+    # with a ban, and the lease cannot see across hosts. `-e
+    # session_previous_host=none` states there is no such host — a lost
+    # machine — and the report then says the check was skipped on
+    # request.
+    - name: A previous host is named, or explicitly none
+      ansible.builtin.assert:
+        that: session_previous_host | default('') == 'none' or groups['previous'] | default([]) | length > 0
+        fail_msg: >-
+          No session in the volume and no previous host to check. Name
+          the host the session comes from under [previous] in the
+          inventory, or state there is none with -e
+          session_previous_host=none (a machine that is lost). The
+          session is not copied while anything on the old host can still
+          connect with it.
+        quiet: true
+      when:
+        - volume_session.rc != 0
+        - session_previous_host | default('') != 'none'
+      tags: [session]
+
+    - name: The previous host has stopped collecting
+      when:
+        - volume_session.rc != 0
+        - session_previous_host | default('') != 'none'
+      tags: [session]
+      block:
+        - name: The previous host's collector is stopped
+          # `systemd:` has no query mode — it asserts a state, which
+          # would mask exactly the drift this check exists to catch.
+          ansible.builtin.command: systemctl is-active itgraph-watch  # noqa: command-instead-of-module
+          register: previous_watch_active
+          failed_when: false
+          changed_when: false
+          delegate_to: "{{ groups['previous'][0] }}"
+
+        - name: The previous host's bot is stopped
+          # `systemd:` has no query mode — it asserts a state, which
+          # would mask exactly the drift this check exists to catch.
+          ansible.builtin.command: systemctl is-active itgraph-bot  # noqa: command-instead-of-module
+          register: previous_bot_active
+          failed_when: false
+          changed_when: false
+          delegate_to: "{{ groups['previous'][0] }}"
+
+        - name: The previous host's collector will not start on boot
+          ansible.builtin.command: systemctl is-enabled itgraph-watch  # noqa: command-instead-of-module
+          register: previous_watch_enabled
+          failed_when: false
+          changed_when: false
+          delegate_to: "{{ groups['previous'][0] }}"
+
+        - name: The previous host's bot will not start on boot
+          ansible.builtin.command: systemctl is-enabled itgraph-bot  # noqa: command-instead-of-module
+          register: previous_bot_enabled
+          failed_when: false
+          changed_when: false
+          delegate_to: "{{ groups['previous'][0] }}"
+
+        - name: The previous host is out of the collection business
+          ansible.builtin.assert:
+            that:
+              - previous_watch_active.stdout | trim != 'active'
+              - previous_bot_active.stdout | trim != 'active'
+              - previous_watch_enabled.stdout | trim in ['disabled', 'masked', 'not-found']
+              - previous_bot_enabled.stdout | trim in ['disabled', 'masked', 'not-found']
+            fail_msg: >-
+              {{ groups['previous'][0] }}: itgraph-watch is
+              {{ previous_watch_active.stdout | trim }} and
+              {{ previous_watch_enabled.stdout | trim }},
+              itgraph-bot is {{ previous_bot_active.stdout | trim }} and
+              {{ previous_bot_enabled.stdout | trim }}. Two collectors
+              on one session is the one state Telegram answers with a
+              ban; stop and disable both on that host, and re-run.
+            quiet: true
+
+    - name: Copy the session
+      when:
+        - volume_session.rc != 0
+        - session_presence.stdout | default('missing') | trim != 'present'
+      tags: [session]
+      block:
+        - name: Ship the session
+          ansible.posix.synchronize:
+            src: "{{ itgraph_session_src }}"
+            dest: "{{ transfer_dir }}/itgraph.session"
+            copy_links: true
+
+        # Into the volume through the transfer file — bytes, not text,
+        # so not through Ansible's `stdin` — and readable by the
+        # workloads' user only.
+        - name: The session lands in the volume
+          ansible.builtin.shell: >-
+            {{ kubectl }} exec -i deploy/itgraph-console -c itgraph --
+            sh -c 'cat > {{ session_volume_path }} &&
+            chmod 600 {{ session_volume_path }}'
+            < {{ transfer_dir }}/itgraph.session
+          args:
+            executable: /bin/bash
+          changed_when: true
+
+        - name: The session's checksum on the host
+          ansible.builtin.command: sha256sum {{ transfer_dir }}/itgraph.session
+          register: shipped_session_sum
+          changed_when: false
+
+        - name: The session's checksum in the volume
+          ansible.builtin.command: >-
+            {{ kubectl }} exec deploy/itgraph-console -c itgraph --
+            sha256sum {{ session_volume_path }}
+          register: volume_session_sum
+          changed_when: false
+
+        # The copy crossed a shell and a kubelet; a truncated session
+        # fails exactly like a missing one, but later and further away.
+        - name: The session arrived whole
+          ansible.builtin.assert:
+            that: >-
+              shipped_session_sum.stdout.split()[0]
+              == volume_session_sum.stdout.split()[0]
+            fail_msg: >-
+              The session in the volume does not checksum to what was
+              sent: {{ shipped_session_sum.stdout.split()[0] }} became
+              {{ volume_session_sum.stdout.split()[0] }}. Nothing here
+              retries on its own — re-run after clearing
+              {{ session_volume_path }} in the volume.
+            quiet: true
+
+    # Unconditional: also clears a session left behind by an earlier run
+    # that failed between shipping it and getting here. It is a full key
+    # to the account, and the volume has the only copy that should
+    # remain.
+    - name: Remove the session from the host
+      ansible.builtin.file:
+        path: "{{ transfer_dir }}/itgraph.session"
+        state: absent
+      tags: [session]
+
+    - name: What happened to the session
+      ansible.builtin.set_fact:
+        session_report: >-
+          {{ 'copied'
+               if shipped_session_sum is defined
+                  and shipped_session_sum is not skipped
+             else 'kept (the volume has one)'
+               if volume_session.rc | default(1) == 0
+             else 'previous-host check skipped on request'
+                  if session_previous_host | default('') == 'none'
+             else 'not run' }}
       tags: [session]
 
     # ------------------------------------------------------------ services
 
-    - name: Unit files
-      become: true
+    - name: Render the services
       ansible.builtin.template:
-        src: "{{ item }}.j2"
-        dest: "/etc/systemd/system/{{ item }}"
-        mode: "0644"
-        backup: true
+        src: "k8s/{{ item }}.yml.j2"
+        dest: "{{ transfer_dir }}/{{ item }}.yml"
+        mode: "0600"
       loop:
-        - itgraph-watch.service
-        - itgraph-bot.service
-        - itgraph-alerts.service
-        - itgraph-alerts.timer
-        - itgraph-score.service
-        - itgraph-score.timer
-        - itgraph-baselines.service
-        - itgraph-baselines.timer
-        - itgraph-backup.service
-        - itgraph-backup.timer
-        - itgraph-yt-refresh.service
-        - itgraph-yt-refresh.timer
-        - itgraph-yt-watch.service
-        - itgraph-yt-watch.timer
-      register: unit_files
-      notify: Reload systemd
+        - watch
+        - bot
+        - cronjobs
       tags: [services]
 
-    - name: Flush unit changes before starting anything
-      ansible.builtin.meta: flush_handlers
-      tags: [services]
-
-    - name: Long-running services
-      become: true
-      ansible.builtin.systemd_service:
-        name: "{{ item }}"
-        enabled: true
-        state: started
+    # `configured` on a Deployment or CronJob means the template changed
+    # — a new digest, or a changed checksum annotation — and for the
+    # long-running Deployments the controller replaces the pod. A re-run
+    # of an identical deploy prints `unchanged` and restarts nothing.
+    - name: Apply the services
+      ansible.builtin.command: >-
+        {{ kubectl }} apply --server-side --field-manager=itgraph
+        -f {{ transfer_dir }}/{{ item }}.yml
+      register: services_applied
+      changed_when: "'configured' in services_applied.stdout or 'created' in services_applied.stdout"
       loop:
-        - itgraph-watch
-        - itgraph-bot
-      register: long_running
+        - watch
+        - bot
+        - cronjobs
       tags: [services]
 
-    # `started` above leaves a running unit alone, so without this a deploy
-    # updates the code on disk and the collector keeps running the code
-    # from before it. Restarted whenever this run fetched the code, and
-    # otherwise when it changed `.env` or the unit's own file.
-    #
-    # Whenever the code was fetched, not only when the fetch changed
-    # something. A run that pulls new code and then fails before this
-    # point leaves the services on the old code, and the next run's
-    # checkout reports nothing new — so "changed in this run" would lose
-    # exactly the restart that run owes. The first re-run on the live host
-    # did that. A few seconds of polling per full run is the price.
-    #
-    # A task and not a handler. Handlers ignore tags and run at the end of
-    # the play, so under `--tags repo` a restart notified by the checkout
-    # would land after the play — on a schema not yet migrated, the state
-    # the gate in the data tasks exists to prevent. Not unconditional
-    # either: `--tags services` is how a unit tweak is applied, and
-    # bouncing `watch` for it costs a poll for nothing.
-    #
-    # Every registered result is read through `default` or `is defined`,
-    # so a run that neither fetched code nor wrote anything — `--tags
-    # services` alone — restarts nothing. A unit the task above just
-    # started is skipped, or a fresh host would start the bot and bounce
-    # it a second later. Timers need none of this: their services are
-    # oneshots and start on the deployed code at their next firing.
-    - name: Restart what is running old code
-      become: true
-      ansible.builtin.systemd_service:
-        name: "{{ item }}"
-        state: restarted
+    - name: Remove the rendered services from the host
+      ansible.builtin.file:
+        path: "{{ transfer_dir }}/{{ item }}.yml"
+        state: absent
       loop:
-        - itgraph-watch
-        - itgraph-bot
-      when:
-        - runs_old_code | bool
-        - not just_started | bool
-      vars:
-        just_started: >-
-          {{ long_running.results | default([])
-             | selectattr('item', 'equalto', item)
-             | selectattr('changed') | list | length > 0 }}
-        runs_old_code: >-
-          {{ repo_checkout is defined
-             or env_file | default({}) is changed
-             or unit_files.results | default([])
-                | selectattr('item', 'equalto', item ~ '.service')
-                | selectattr('changed') | list | length > 0 }}
-      register: restarted_units
+        - watch
+        - bot
+        - cronjobs
       tags: [services]
 
-    # The backup timer is the one thing whose absence looks exactly like
-    # everything working: `scripts/backup-agent.sh` is launchd, so on Linux
-    # nothing takes a dump until this exists.
-    - name: Timers
-      become: true
-      ansible.builtin.systemd_service:
-        name: "{{ item }}"
-        enabled: true
-        state: started
-      loop:
-        - itgraph-alerts.timer
-        - itgraph-score.timer
-        - itgraph-baselines.timer
-        - itgraph-backup.timer
+    # An object that left the templates is deleted explicitly, never by
+    # pruning — pruning is one label mistake away from deleting a volume
+    # claim. `--ignore-not-found`, because a host that never had a key
+    # has nothing to delete.
+    - name: Delete the YouTube jobs when there is no key
+      ansible.builtin.command: >-
+        {{ kubectl }} delete cronjob itgraph-yt-watch itgraph-yt-refresh
+        --ignore-not-found
+      register: youtube_deleted
+      changed_when: "'deleted' in youtube_deleted.stdout"
+      when: youtube_api_key | default('') | length == 0
       tags: [services]
 
-    # Only where there is a key to refresh and poll with. Without one both
-    # would fail every time, and a unit that always fails is one nobody
-    # reads the failures of. Disabled again if the key is taken away, so
-    # the timers always say whether YouTube data is being kept current
-    # and new videos read.
-    - name: YouTube timers
-      become: true
-      ansible.builtin.systemd_service:
-        name: "{{ item }}"
-        enabled: "{{ youtube_api_key | default('') | length > 0 }}"
-        state: "{{ 'started' if youtube_api_key | default('') | length > 0 else 'stopped' }}"
-      loop:
-        - itgraph-yt-refresh.timer
-        - itgraph-yt-watch.timer
+    - name: The collector is rolled out
+      ansible.builtin.command: >-
+        {{ kubectl }} rollout status deploy/itgraph-watch --timeout=180s
+      changed_when: false
       tags: [services]
 
-    # -------------------------------------------------------------- verify
+    - name: The bot is rolled out
+      ansible.builtin.command: >-
+        {{ kubectl }} rollout status deploy/itgraph-bot --timeout=180s
+      changed_when: false
+      tags: [services]
 
-    # Checked rather than assumed, for the same reason the proxy route is:
-    # a laptop that still suspends looks exactly like one that does not
-    # until a night has passed and the snapshots are already lost.
-    # `systemd:` has no query mode — it can only assert a state, which
-    # would mask exactly the drift this check exists to catch.
-    - name: Sleep really is masked
-      ansible.builtin.command: systemctl is-enabled sleep.target  # noqa: command-instead-of-module
-      register: sleep_state
+    # A rollout reported complete only means a pod exists. Crash-looping
+    # counts as available to the Deployment controller, so the pods are
+    # watched for a settling period and any restart fails the deploy —
+    # here, where the name and the exit are still on the screen.
+    - name: Let them settle
+      ansible.builtin.pause:
+        seconds: 60
+      tags: [services]
+
+    - name: Did either restart while settling
+      ansible.builtin.command: >-
+        {{ kubectl }} get pods -l app={{ item }}
+        -o jsonpath='{.items[*].status.containerStatuses[0].restartCount}'
+      register: restart_counts
       changed_when: false
       failed_when: false
-      when: host_is_laptop | default(false) | bool
-      tags: [verify]
+      loop:
+        - itgraph-watch
+        - itgraph-bot
+      tags: [services]
 
-    - name: A laptop cannot suspend
+    - name: How it last exited
+      ansible.builtin.command: >-
+        {{ kubectl }} get pods -l app={{ item }}
+        -o jsonpath='{.items[*].status.containerStatuses[0].lastState.terminated.exitCode}
+        {.items[*].status.containerStatuses[0].lastState.terminated.reason}'
+      register: last_exits
+      changed_when: false
+      failed_when: false
+      loop:
+        - itgraph-watch
+        - itgraph-bot
+      tags: [services]
+
+    - name: Neither service kept restarting
       ansible.builtin.assert:
-        that: sleep_state.stdout | trim == "masked"
+        that: restart_counts.results[index].stdout | replace(' ', '') in ['', '0']
         fail_msg: >-
-          sleep.target is "{{ sleep_state.stdout | trim }}", not masked. A
-          closed lid will stop collection, and missed metric snapshots
-          cannot be taken later.
+          {{ item }} restarted {{ restart_counts.results[index].stdout | replace(' ', '') }}
+          time(s) within a minute of rollout and last exited
+          {{ last_exits.results[index].stdout | default('?', true) }}.
+          A rollout reported complete is not proof that it runs — see
+          `{{ kubectl }} describe pod -l app={{ item }}` and its logs.
         quiet: true
-      when: host_is_laptop | default(false) | bool
-      tags: [verify]
+      loop:
+        - itgraph-watch
+        - itgraph-bot
+      loop_control:
+        index_var: index
+      tags: [services]
+
+    # --------------------------------------------------------------- verify
 
     - name: The inventory came across
       ansible.builtin.command: >-
-        docker exec -i itgraph-postgres psql -U {{ db_user }} -d {{ db_name }} -tAc
+        {{ kubectl }} exec {{ postgres_pod }} --
+        psql -U {{ db_user }} -d {{ db_name }} -tAc
         "SELECT count(*) FROM channels WHERE status='seed'"
       register: seed_count
       changed_when: false
@@ -947,45 +1094,36 @@
       tags: [verify]
 
     # Reads the line `build_client` logs at connect time. A deployment
-    # whose `.env` did not arrive works, logs nothing unusual, and reaches
-    # Telegram from the address the proxy exists to hide — this is the only
-    # thing that catches it.
+    # whose Secret did not arrive works, logs nothing unusual, and
+    # reaches Telegram from the address the proxy exists to hide — this
+    # is the only thing that catches it.
     #
-    # From the running `watch`, which logs that line once per start. It
-    # used to come from a one-request probe, which spent a real `backfill`
-    # on every verify and was removed; the loop connects anyway, so its
-    # own journal answers the same question for nothing.
-    #
-    # The current start only, by its InvocationID: a line from an earlier
-    # start would answer for a `.env` that has changed since. Retried,
-    # because a `watch` restarted a moment ago may not have connected yet.
-    # As root, because whether the deploy user may read a system unit's
-    # journal depends on group membership this playbook does not manage.
+    # From the running `watch`'s current container, which logs that line
+    # once per start. Retried, because a collector started a moment ago
+    # may not have connected yet; a `direct` line and no line at all
+    # fail below with different messages, because they mean different
+    # things.
     - name: The route the running collector took
-      become: true
-      ansible.builtin.shell: >-
-        journalctl --no-pager -o cat --grep 'Telegram route:'
-        _SYSTEMD_INVOCATION_ID="$(systemctl show -p InvocationID --value itgraph-watch)"
+      ansible.builtin.command: >-
+        {{ kubectl }} logs deploy/itgraph-watch -c itgraph
       register: watch_route
-      until: watch_route.rc == 0
+      until: "'Telegram route:' in watch_route.stdout"
       retries: 15
       delay: 2
       changed_when: false
       failed_when: false
-      when: proxy_host is defined and proxy_host | length > 0
       tags: [verify]
 
     - name: The collector says which route it took
       ansible.builtin.assert:
-        that: watch_route.rc == 0
+        that: "'Telegram route:' in watch_route.stdout"
         fail_msg: >-
-          itgraph-watch has logged no "Telegram route:" line since it last
-          started, so which way it reaches Telegram is unknown. It is likely
-          not starting at all — refused the session lease, or failing
-          before it connects. See `journalctl -u itgraph-watch -e` on the
-          host.
+          itgraph-watch has logged no "Telegram route:" line since it
+          started, so which way it reaches Telegram is unknown. It is
+          likely not starting at all — refused the session lease, or
+          failing before it connects. See `{{ kubectl }} logs
+          deploy/itgraph-watch -c itgraph`.
         quiet: true
-      when: proxy_host is defined and proxy_host | length > 0
       tags: [verify]
 
     - name: The proxy is actually in use
@@ -993,29 +1131,36 @@
         that: "'Telegram route: direct' not in watch_route.stdout"
         fail_msg: >-
           Connected directly. PROXY_* did not reach the process — check
-          .env and the unit's WorkingDirectory.
+          the itgraph-env Secret and the Deployment's envFrom.
         quiet: true
-      when: proxy_host is defined and proxy_host | length > 0
       tags: [verify]
 
+    # The address check runs again here under its own tags, after the
+    # collector is up: the two readings and their comparison are the
+    # tasks above, tagged [prepare, verify].
+
     - name: What the collector says about itself
-      ansible.builtin.command: "{{ uv }} run itgraph watch-status"
-      args:
-        chdir: "{{ repo_dir }}"
+      ansible.builtin.command: >-
+        {{ kubectl }} exec deploy/itgraph-console -c itgraph --
+        itgraph watch-status
       register: watch_status
       changed_when: false
       tags: [verify]
 
     # What this run did, beside what the host says about itself. Every
     # field reads its source through `default`: a part that was not
-    # selected in this run registered nothing, and "not run" is the honest
-    # answer for it — a skipped restore reported as done is exactly the
-    # mistake a re-run that skips instead of stopping makes easy.
+    # selected in this run registered nothing, and "not run" is the
+    # honest answer for it — a skipped restore reported as done is
+    # exactly the mistake a re-run that skips instead of stopping makes
+    # easy.
     - name: Report
       ansible.builtin.debug:
         msg: >-
-          {{ seed_count.stdout | trim }} seed channels ·
+          {{ itgraph_commit | default('commit not resolved') }} ·
+          {{ itgraph_image | default('image not resolved') }} ·
+          {{ seed_count.stdout | trim | default('0', true) }} seed channels ·
           restore: {{ restore_report }} ·
+          session: {{ session_report | default('not run') }} ·
           migration: {{ migration_report }} ·
           {{ alembic_current.stdout_lines | default(['schema not checked']) | last }} ·
           restarted: {{ restart_report }} ·
@@ -1038,23 +1183,20 @@
              else 'none needed' if schema_check is defined
              else 'not run' }}
         restart_report: >-
-          {{ (restarted_units.results | selectattr('changed')
-               | map(attribute='item') | join(', ')) or 'none'
-               if restarted_units is defined
+          {{ (services_applied.results | default([])
+               | selectattr('item', 'in', ['watch', 'bot'])
+               | selectattr('changed')
+               | map(attribute='item') | map('regex_replace', '^', 'itgraph-')
+               | join(', ')) or 'none'
+               if services_applied is defined
              else 'not run' }}
       tags: [verify]
 
-  handlers:
-    # Handler names are matched literally and case-sensitively, and a
-    # notify with no matching handler is a hard error rather than a
-    # warning — so these have to read exactly as the `notify:` lines do.
-    - name: Reload systemd
-      become: true
-      ansible.builtin.systemd_service:
-        daemon_reload: true
-
-    - name: Reload logind
-      become: true
-      ansible.builtin.systemd_service:
-        name: systemd-logind
-        state: restarted
+    # Last, and on every tag selection: what is left in the transfer
+    # directory is a dump, a session or a rendered Secret from a run
+    # that stopped between writing a file and removing it.
+    - name: Remove the transfer directory
+      ansible.builtin.file:
+        path: "{{ transfer_dir }}"
+        state: absent
+      tags: [always]

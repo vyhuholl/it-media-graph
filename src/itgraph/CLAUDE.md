@@ -75,13 +75,14 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `db/yt_watch.py` | The poll loop's own records: listings owed, made and failed, one row per pass, and the lock — an advisory `bigint` key that never meets Telegram's session lease |
 | `db/yt_quota.py` | The YouTube quota ledger: booking before sending, in a transaction that commits first; the pool a command spends from, by table — the poll loop its reserve, everything else the general pool, no borrowing; the journal; exhaustion; the day's report. Units are never returned |
 | `db/backfill.py` | Which channels to walk, how far each got, and why one stopped |
-| `db/backup.py` | Dumps, the schedule that picks which, and the pruning |
+| `db/backup.py` | Dumps, the schedule that picks which, and the pruning; the PostgreSQL clients run through `docker exec` into the Compose container or, without one, from the image against `DATABASE_URL` |
+| `db/offsite.py` | The off-site pass: every verified dump, `age`-encrypted on the host, uploaded to B2's native API under a name that is never reused; a copy counts only once the store confirms the checksum. Logs names, never keys |
 | `db/session_lease.py` | The exclusive claim on the session file, as a Postgres advisory lock |
 | `db/guard.py` | Refuses a destructive migration against a non-scratch database |
 | `db/migrations/` | Alembic revisions (async template) |
 
 ## Conventions
-- Read settings via `from itgraph.config import settings`. Nothing else touches `os.environ`.
+- Read settings via `from itgraph.config import settings`. Nothing else reads `os.environ` as configuration — building a child process's environment, as `db/backup.py` does for the PostgreSQL clients it spawns, is plumbing, not settings.
 - New CLI command: argument parsing in `cli.py`, logic in its own module. Keep command bodies short enough to read at a glance.
 - DB sessions come from the factory in `db/`; no module-level engine, no globals.
 - Anything that parses, derives or aggregates lives outside `tg/`.

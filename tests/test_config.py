@@ -376,3 +376,94 @@ def test_the_default_caps_leave_six_thousand(env: pytest.MonkeyPatch) -> None:
         )
         == 6000
     )
+
+
+# --- where the PostgreSQL tools run ----------------------------------
+
+
+def test_the_container_is_named_by_default(env: pytest.MonkeyPatch) -> None:
+    """The Mac: Postgres in Compose, the tools through `docker exec`."""
+    assert build().postgres_container == "itgraph-postgres"
+
+
+def test_an_empty_container_is_no_container(env: pytest.MonkeyPatch) -> None:
+    """The line the deploy template leaves blank on the collection host.
+
+    There the tools run from the application image as local processes;
+    an empty value read literally would be a container name on a host
+    that runs no Docker.
+    """
+    env.setenv("POSTGRES_CONTAINER", "")
+    assert build().postgres_container is None
+
+
+# --- off-site copies --------------------------------------------------
+#
+# Spelled out in words for the same reason as the api hash: a real B2
+# application key is a long opaque string, and a fake that looked like
+# one would cost gitleaks and a reviewer the ability to tell them
+# apart. The recipient is not a secret at all, so any obviously not-real
+# value will do.
+B2_ENV = {
+    "B2_KEY_ID": "test-b2-key-id",
+    "B2_APPLICATION_KEY": "test-b2-app-key",
+    "B2_BUCKET_NAME": "test-b2-bucket",
+    "BACKUP_AGE_RECIPIENT": "test-age-recipient",
+}
+
+
+def test_no_offsite_configuration_is_the_default(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """The operator's machine: no off-site pass, none of it set."""
+    settings = build()
+    assert settings.b2_key_id is None
+    assert settings.b2_application_key is None
+    assert settings.b2_bucket_name is None
+    assert settings.backup_age_recipient is None
+
+
+def test_a_complete_offsite_configuration_is_accepted(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """The collection host: every verified dump leaves, encrypted."""
+    for key, value in B2_ENV.items():
+        env.setenv(key, value)
+    settings = build()
+
+    assert settings.b2_key_id == "test-b2-key-id"
+    assert settings.b2_bucket_name == "test-b2-bucket"
+    assert settings.backup_age_recipient == "test-age-recipient"
+    assert settings.b2_application_key is not None
+    assert settings.b2_application_key.get_secret_value() == "test-b2-app-key"
+
+
+def test_the_offsite_key_is_not_printed(env: pytest.MonkeyPatch) -> None:
+    """On the same footing as the api hash."""
+    for key, value in B2_ENV.items():
+        env.setenv(key, value)
+
+    assert "test-b2-app-key" not in repr(build())
+
+
+@pytest.mark.parametrize("only", sorted(B2_ENV))
+def test_a_partial_offsite_configuration_is_refused(
+    env: pytest.MonkeyPatch, only: str
+) -> None:
+    """The symptom of one value left out is not an error.
+
+    It is a backup run that skips its off-site pass and reports
+    success, for as long as nobody looks at the bucket — so everything
+    in between "all set" and "none set" is a typo, refused at load.
+    """
+    env.setenv(only, B2_ENV[only])
+
+    with pytest.raises(ValidationError) as caught:
+        build()
+
+    # The message names what is missing — never the value that is set.
+    message = str(caught.value)
+    for name in B2_ENV:
+        if name != only:
+            assert name.lower() in message
+    assert B2_ENV[only] not in message

@@ -1,0 +1,92 @@
+# The database, with the flags Compose ran it under and its data on
+# the claim created in prepare, so a redeploy never touches it.
+#
+# PGDATA is a subdirectory of the mount: the official entrypoint
+# refuses to initialize in a non-empty directory, and a mounted
+# filesystem is never empty — lost+found is already there.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: itgraph-postgres
+  namespace: itgraph
+spec:
+  serviceName: itgraph-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: itgraph-postgres
+  template:
+    metadata:
+      labels:
+        app: itgraph-postgres
+    spec:
+      automountServiceAccountToken: false
+      # The official image handles its own user — root to chown PGDATA,
+      # then the postgres user — so it is left alone here. Seccomp is
+      # asked of it like of everything else.
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          # The tag's index digest, 2026-10-26.
+          image: postgres:16@sha256:9e2cf6287f25c3151f4c9421ccce2b17f3e60061c111a29165e0d2cdd9ff0a97
+          env:
+            - name: TZ
+              value: Europe/Moscow
+          envFrom:
+            - secretRef:
+                name: itgraph-postgres
+          args:
+            - postgres
+            - -c
+            - shared_buffers=512MB
+            - -c
+            - work_mem=64MB
+            - -c
+            - maintenance_work_mem=512MB
+            - -c
+            - max_wal_size=4GB
+          # Over the local socket, like the Compose healthcheck before
+          # it: the network policy and the readiness of this very pod
+          # are not part of the probe's job.
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "{{ db_user }}", "-d", "{{ db_name }}"]
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 1Gi
+            limits:
+              memory: 2Gi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            # Memory-backed, as in Compose: the shared memory the flags
+            # below expect Postgres to have.
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: itgraph-database
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: itgraph-postgres
+  namespace: itgraph
+spec:
+  type: ClusterIP
+  selector:
+    app: itgraph-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432

@@ -1095,6 +1095,7 @@ def backup(
         inventory_kind,
         run_backup,
     )
+    from itgraph.db.offsite import OffsiteError, copy_new_dumps, is_configured
 
     if full and inventory:
         raise typer.BadParameter("give at most one of --full, --inventory")
@@ -1118,6 +1119,18 @@ def backup(
             f"{item.kind:<10} {item.path} "
             f"({item.size:,} bytes, {item.entries} entries)"
         )
+
+    # After the local dumps and their pruning: a failed upload must not
+    # cost a local backup, and the next run catches up what this one
+    # could not send.
+    if is_configured():
+        try:
+            copied = copy_new_dumps()
+        except OffsiteError as exc:
+            typer.secho(str(exc), fg=typer.colors.RED, err=True)
+            raise typer.Exit(1) from exc
+        for path in copied:
+            typer.echo(f"{'off-site':<10} {path.name}")
 
 
 def _side(username: str | None, title: str | None, tg_id: int) -> str:

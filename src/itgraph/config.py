@@ -630,9 +630,13 @@ class Settings(BaseSettings):
 
     backup_dir: Path = DEFAULT_BACKUP_DIR
 
-    # There is no pg_dump on the host — it runs inside the Postgres
-    # container, addressed by the fixed name docker-compose.yaml gives it.
-    postgres_container: str = "itgraph-postgres"
+    # Where the PostgreSQL tools run. The Mac keeps Postgres in a
+    # Compose container, addressed by the fixed name docker-compose.yaml
+    # gives it, and `pg_dump` runs inside through `docker exec`. The
+    # collection host runs Postgres as a workload of its own and the
+    # tools come from the application image, where they run as local
+    # processes — which is what the empty value means.
+    postgres_container: str | None = "itgraph-postgres"
     # An absolute path, because launchd starts jobs with a bare PATH that
     # does not include /usr/local/bin — a bare `docker` works from a
     # shell and fails from the backup agent.
@@ -656,6 +660,25 @@ class Settings(BaseSettings):
     # slips past midnight and skips a day.
     backup_inventory_interval_hours: int = 20
     backup_full_interval_days: int = 7
+
+    # --- off-site copies ----------------------------------------------
+    #
+    # None of these set — the operator's machine — means no off-site
+    # pass at all. All four set — the collection host — means every
+    # verified dump is encrypted with `age` to `backup_age_recipient`
+    # and copied to the Backblaze B2 bucket the other three name, on a
+    # key that can add and list but never delete or read back.
+    #
+    # The application key is a `SecretStr` on the api hash's footing:
+    # whoever holds it can fill the store the account pays for.
+
+    b2_key_id: str | None = None
+    b2_application_key: SecretStr | None = None
+    b2_bucket_name: str | None = None
+    # An `age` public key (starts `age1`): safe to commit, unlike the
+    # identity it pairs with, which lives only in the operator's
+    # password manager and nowhere on the collection host.
+    backup_age_recipient: str | None = None
 
     @model_validator(mode="after")
     def _pause_ranges_are_ordered(self) -> Self:
@@ -725,6 +748,36 @@ class Settings(BaseSettings):
                 f"proxy_host is set without {' and '.join(missing)}: a proxy "
                 "needs a type and a port before anything can connect through "
                 "it"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _offsite_is_complete_or_absent(self) -> Self:
+        """Refuse a half-configured off-site pass at import.
+
+        The reasoning is the proxy's, with a quieter failure at stake: a
+        setting that is wrong is otherwise discovered on the machine
+        nobody is watching, and here the symptom of a key or a recipient
+        left out is not an error — it is a backup run that skips its
+        off-site pass and reports success, for as long as nobody looks
+        at the bucket.
+        """
+        parts = (
+            ("b2_key_id", self.b2_key_id),
+            ("b2_application_key", self.b2_application_key),
+            ("b2_bucket_name", self.b2_bucket_name),
+            ("backup_age_recipient", self.backup_age_recipient),
+        )
+        present = [name for name, value in parts if value is not None]
+        if not present:
+            return self
+        missing = [name for name, value in parts if value is None]
+        if missing:
+            raise ValueError(
+                f"{', '.join(missing)} not set with {', '.join(present)}: "
+                "the off-site pass needs b2_key_id, b2_application_key, "
+                "b2_bucket_name and backup_age_recipient all set — or all "
+                "unset, meaning no off-site pass"
             )
         return self
 
@@ -885,6 +938,23 @@ class Settings(BaseSettings):
         the setting, before anything was spent.
         """
         if value is not None and not value.get_secret_value().strip():
+            return None
+        return value
+
+    @field_validator("postgres_container", mode="after")
+    @classmethod
+    def _an_empty_container_is_no_container(
+        cls, value: str | None
+    ) -> str | None:
+        """Read ``POSTGRES_CONTAINER=`` as unset rather than as a name.
+
+        The deploy template writes the line with nothing after it on the
+        collection host, where the tools come from the image instead.
+        Taken literally that is a container name, and the first anyone
+        would hear of it is a backup failing on `docker exec` into a
+        container that does not exist on a host that runs no Docker.
+        """
+        if value is not None and not value.strip():
             return None
         return value
 

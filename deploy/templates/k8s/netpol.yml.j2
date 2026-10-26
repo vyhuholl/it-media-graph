@@ -1,0 +1,55 @@
+# Ingress is denied by default and opened by the two policies below,
+# each allowing exactly one pairing. Egress stays open: Telegram,
+# YouTube, B2 and ghcr have no fixed addresses.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-all-ingress
+  namespace: itgraph
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# Postgres, from the namespace's own pods only: a `podSelector` in an
+# ingress `from` with no `namespaceSelector` means this namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: itgraph-postgres
+  namespace: itgraph
+spec:
+  podSelector:
+    matchLabels:
+      app: itgraph-postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+# The proxy, only from the pods that speak to Telegram: the collector
+# and the console. The bot never carries the label, so the bot's pod
+# cannot be made to leave through the VPN exit.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: itgraph-proxy
+  namespace: itgraph
+spec:
+  podSelector:
+    matchLabels:
+      app: itgraph-proxy
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              itgraph/telegram: "true"
+      ports:
+        - protocol: TCP
+          port: 1080

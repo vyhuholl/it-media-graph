@@ -1,2 +1,21 @@
+# Copy to deploy/inventory.ini — which .gitignore keeps out of the
+# repository, because it names the server and the laptop, and nothing
+# committed may name either. The example addresses are RFC 5737
+# documentation addresses; never real ones.
+#
+# [collector] is the k3s host. Everything the playbook does there goes
+# over SSH as root, through `k3s kubectl`: the deploy installs nothing
+# and changes nothing outside the itgraph namespace. itgraph_storage_class
+# is the host's own storage class for the three volume claims — on a
+# plain k3s, `local-path`.
+#
+# [previous] is the host the Telegram session comes from — the laptop,
+# until it is retired. It is consulted only during a cutover, only when
+# the session volume is empty, and only to confirm it has stopped
+# collecting. Its user needs to read systemd, not to be root.
+
 [collector]
-itgraph ansible_host=1.2.3.4 ansible_user=itgraph
+itgraph ansible_host=192.0.2.10 ansible_user=root itgraph_storage_class=local-path
+
+[previous]
+laptop ansible_host=192.0.2.20 ansible_user=itgraph

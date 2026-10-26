@@ -1,0 +1,71 @@
+# The operator's door into the cluster: the same image, configuration
+# and exit as the collector, running nothing. Every command the
+# playbook and scripts/on-host.sh run goes through this pod, so it
+# carries the Telegram label — a session command leaves through the
+# same VPN exit the collector uses — and both volumes, the session to
+# probe and copy, the backups to read and to dump into.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: itgraph-console
+  namespace: itgraph
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: itgraph-console
+  template:
+    metadata:
+      labels:
+        app: itgraph-console
+        itgraph/telegram: "true"
+      annotations:
+        itgraph/commit: {{ itgraph_commit | tojson }}
+        itgraph/config-checksum: {{ itgraph_env_checksum | tojson }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 3000
+        runAsGroup: 3000
+        fsGroup: 3000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: itgraph
+          image: {{ itgraph_image | tojson }}
+          command: ["sleep", "infinity"]
+          envFrom:
+            - secretRef:
+                name: itgraph-env
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            # The migration runs here, and env.py's pre-migration dump
+            # is the heaviest thing this pod ever holds.
+            limits:
+              memory: 1Gi
+          volumeMounts:
+            - name: session
+              mountPath: /session
+            - name: backups
+              mountPath: /backups
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: session
+          persistentVolumeClaim:
+            claimName: itgraph-session
+        - name: backups
+          persistentVolumeClaim:
+            claimName: itgraph-backups
+        - name: tmp
+          emptyDir: {}

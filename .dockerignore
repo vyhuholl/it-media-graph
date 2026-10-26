@@ -1,0 +1,12 @@
+# An allowlist, not a blacklist: everything is excluded unless it is
+# named below, so a build from a working tree holding .env, a session
+# file or the vault password cannot pick them up either — the image
+# contains nothing the repository does not track.
+*
+!pyproject.toml
+!uv.lock
+!.python-version
+!README.md
+!alembic.ini
+!src
+!src/**

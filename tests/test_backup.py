@@ -58,13 +58,22 @@ def test_a_stray_file_does_not_stop_the_backup(tmp_path: Path) -> None:
     assert stray.exists()
 
 
+class Recorded(list["list[str]"]):
+    """The commands that ran, and the environment each was given."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.environments: list[dict[str, str] | None] = []
+
+
 @pytest.fixture
-def fake_run(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+def fake_run(monkeypatch: pytest.MonkeyPatch) -> Recorded:
     """Record commands; write a plausible archive, list a plausible one."""
-    calls: list[list[str]] = []
+    calls = Recorded()
 
     def run(command: list[str], **kwargs: Any) -> Any:
         calls.append(command)
+        calls.environments.append(kwargs.get("env"))
         if "pg_restore" in command:
             return subprocess.CompletedProcess(command, 0, LISTING, "")
         kwargs["stdout"].write(b"PGDMP-pretend")
@@ -442,6 +451,115 @@ def test_an_unwritable_pointer_does_not_lose_the_backup(
 
     assert second.path.exists()
     assert not latest_link(tmp_path / "weekly", full_kind()).exists()
+
+
+# --- the tools without a container -----------------------------------
+
+# A URL of this file's own, so the password is a value chosen here: the
+# developer's real URL is none of this test's business, and there
+# username and password may even be the same string, which would make
+# `password not in command` trip on `--username`.
+DIRECT_URL = "postgresql+asyncpg://itgraph:test-db-password@postgres.invalid:5432/itgraph"
+
+
+@pytest.fixture
+def direct_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The collection host: no container, the clients from the image."""
+    monkeypatch.setattr(settings, "postgres_container", None)
+    monkeypatch.setattr(settings, "database_url", DIRECT_URL)
+
+
+def test_the_container_commands_are_unchanged(
+    tmp_path: Path, fake_run: Recorded
+) -> None:
+    """The Mac's path, byte for byte: `docker exec -i`, as before."""
+    take_backup(full_kind(), tmp_path, now=NOW)
+
+    url = make_url(str(settings.database_url))
+    assert fake_run[0] == [
+        str(settings.docker_binary),
+        "exec",
+        "-i",
+        "itgraph-postgres",
+        "pg_dump",
+        "--username",
+        url.username or "postgres",
+        "--dbname",
+        url.database or "postgres",
+        "--format=custom",
+        "--exclude-table-data",
+        "yt_raw_*",
+    ]
+    # Inside the container the client needs no password; the child
+    # inherits the parent's environment as it always did.
+    assert fake_run.environments[0] is None
+
+
+def test_without_a_container_the_tools_run_from_the_image(
+    tmp_path: Path, fake_run: Recorded, direct_tools: None
+) -> None:
+    """Local processes against the address `DATABASE_URL` names."""
+    take_backup(full_kind(), tmp_path, now=NOW)
+
+    url = make_url(DIRECT_URL)
+    dump, verify = fake_run[0], fake_run[1]
+    assert dump[0] == "pg_dump"
+    assert verify[0] == "pg_restore"
+    for command in (dump, verify):
+        host = command.index("--host")
+        assert command[host + 1] == url.host
+        port = command.index("--port")
+        assert command[port + 1] == str(url.port or 5432)
+
+
+def run_of_three_tools(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> tuple[list[list[str]], list[dict[str, str] | None]]:
+    """One pg_dump, one pg_restore and one psql, commands and envs recorded."""
+
+    seen: list[list[str]] = []
+    envs: list[dict[str, str] | None] = []
+
+    def run(command: list[str], **kwargs: Any) -> Any:
+        seen.append(command)
+        envs.append(kwargs.get("env"))
+        if "pg_dump" in command:
+            kwargs["stdout"].write(b"PGDMP-pretend")
+            return subprocess.CompletedProcess(command, 0, b"", b"")
+        if "pg_restore" in command:
+            return subprocess.CompletedProcess(command, 0, LISTING, "")
+        return subprocess.CompletedProcess(command, 0, "0\n", "")
+
+    monkeypatch.setattr(backup_module.subprocess, "run", run)
+    take_backup(full_kind(), tmp_path, now=NOW)
+    is_empty_database()
+    return seen, envs
+
+
+def test_the_password_is_never_an_argument(
+    tmp_path: Path, direct_tools: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A process listing shows arguments to every user of a shared host."""
+    url = make_url(DIRECT_URL)
+    assert url.password, "a URL without a password would test nothing"
+
+    seen, _ = run_of_three_tools(monkeypatch, tmp_path)
+    for command in seen:
+        assert url.password not in command
+
+
+def test_the_direct_environment_carries_the_password(
+    tmp_path: Path, direct_tools: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PGPASSWORD, the one place the clients look and no listing shows."""
+    url = make_url(DIRECT_URL)
+    assert url.password, "a URL without a password would test nothing"
+
+    _, envs = run_of_three_tools(monkeypatch, tmp_path)
+    assert len(envs) == 3
+    for env in envs:
+        assert env is not None
+        assert env["PGPASSWORD"] == url.password
 
 
 # --- a database with nothing in it yet --------------------------------

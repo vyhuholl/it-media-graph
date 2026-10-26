@@ -115,9 +115,49 @@ def _docker(*args: str) -> list[str]:
 
 
 def _exec_in_postgres(*args: str) -> list[str]:
-    # -i so the container's stdin is connected; pg_restore reads the
-    # archive from it when verifying.
-    return _docker("exec", "-i", settings.postgres_container, *args)
+    """One PostgreSQL client, wherever this machine keeps it.
+
+    A container is named — the operator's Mac, where Postgres is
+    Compose's — and the client runs inside it through ``docker exec``,
+    over the local socket as the postgres user; ``-i`` so the archive
+    reaches ``pg_restore``'s standard input when verifying. No container
+    is named — the collection host, where Postgres is a workload and the
+    clients come from the application image — and the client runs as a
+    local process against the host and port ``DATABASE_URL`` names,
+    which is the database's Service.
+    """
+    tool, *rest = args
+    if settings.postgres_container is not None:
+        return _docker("exec", "-i", settings.postgres_container, tool, *rest)
+    url = make_url(str(settings.database_url))
+    return [
+        tool,
+        "--host",
+        url.host or "localhost",
+        "--port",
+        str(url.port or 5432),
+        *rest,
+    ]
+
+
+def _client_environment() -> dict[str, str] | None:
+    """The child's environment when a client runs as a local process.
+
+    ``None`` means inherit: inside the container the client authenticates
+    to the local socket without a password. As a local process it needs
+    the one from ``DATABASE_URL``, and ``PGPASSWORD`` is the only place
+    it can go — an argument would show it to a process listing, and a
+    file is one more secret to protect.
+
+    The parent's environment is passed through, not read as
+    configuration: without its ``PATH`` the client would not be found,
+    and a child that saw a different world than its parent is a quiet
+    difference on the machine nobody is watching.
+    """
+    if settings.postgres_container is not None:
+        return None
+    url = make_url(str(settings.database_url))
+    return {**os.environ, "PGPASSWORD": url.password or ""}
 
 
 def existing(directory: Path, kind: BackupKind) -> list[Path]:
@@ -254,6 +294,7 @@ def is_empty_database() -> bool:
         capture_output=True,
         text=True,
         check=False,
+        env=_client_environment(),
     )
     if result.returncode != 0:
         logger.debug(
@@ -272,6 +313,7 @@ def _verify(path: Path) -> int:
             capture_output=True,
             text=True,
             check=False,
+            env=_client_environment(),
         )
     if result.returncode != 0:
         raise BackupError(
@@ -328,6 +370,7 @@ def take_backup(
                 stderr=subprocess.PIPE,
                 text=False,
                 check=False,
+                env=_client_environment(),
             )
         if result.returncode != 0:
             detail = result.stderr.decode("utf-8", "replace").strip()

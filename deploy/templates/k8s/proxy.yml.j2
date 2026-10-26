@@ -1,0 +1,78 @@
+# The VPN exit, as a workload of the namespace. Runs as nobody on a
+# read-only filesystem — xray writes nothing: the configuration is
+# mounted read-only and logs go to standard output.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: itgraph-proxy
+  namespace: itgraph
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: itgraph-proxy
+  template:
+    metadata:
+      labels:
+        app: itgraph-proxy
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: xray
+          # The tag's index digest, 2026-10-26.
+          image: ghcr.io/xtls/xray-core:26.10.21@sha256:d5c3729dfeed7c412af17a63b941c48c76ba68afee5b6184fe4078f8fa8bedcc
+          command: ["xray", "run", "-config", "/etc/xray/config.json"]
+          ports:
+            - containerPort: 1080
+          # TCP, not HTTP: the port speaks SOCKS, and the probe's job
+          # is only to say the inbound is up.
+          readinessProbe:
+            tcpSocket:
+              port: 1080
+          env:
+            - name: TZ
+              value: Europe/Moscow
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/xray
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          secret:
+            secretName: itgraph-proxy
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: itgraph-proxy
+  namespace: itgraph
+spec:
+  type: ClusterIP
+  selector:
+    app: itgraph-proxy
+  ports:
+    - port: 1080
+      targetPort: 1080

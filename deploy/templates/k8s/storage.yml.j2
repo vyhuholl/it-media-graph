@@ -1,0 +1,44 @@
+# Three claims, created before anything that uses them and never
+# deleted by the deploy: deleting a workload does not touch its claim,
+# and nothing here prunes. The class is the host's, named in the
+# inventory — not itgraph's to choose. Sizes per the change's design
+# (database 20 Gi, dumps 20 Gi, session 1 Gi); a claim can be grown by
+# editing it, never shrunk.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: itgraph-database
+  namespace: itgraph
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ itgraph_storage_class }}
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: itgraph-backups
+  namespace: itgraph
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ itgraph_storage_class }}
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: itgraph-session
+  namespace: itgraph
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ itgraph_storage_class }}
+  resources:
+    requests:
+      storage: 1Gi

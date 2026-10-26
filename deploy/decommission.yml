@@ -1,0 +1,167 @@
+---
+# Retire the previous collection host (design decision 16,
+# move-to-k3s-host). One direction: everything itgraph leaves with it —
+# the units, the database volume, the session file, the checkout. What
+# the machine owns of its own stays: Docker, ufw, uv, the swap file, and
+# `~/itgraph-backups`, whose dumps may still be wanted.
+#
+# It runs after the new host has collected for a day — well inside the
+# 30 days the `yt_raw_*` rows may live, so dropping the old database
+# volume is a deletion, not an obligation. Until it runs, the old host
+# can be started again by hand; after it, the only way back is the
+# rollback in the change's migration plan.
+#
+# It refuses to guess: this removes an entire checkout and a database
+# volume, so it runs only with `-e retire_host=<the [previous] inventory
+# name>`, exactly spelled.
+
+- name: Retire the previous collection host
+  hosts: previous
+  become: true
+  gather_facts: false
+
+  vars:
+    # The paths the old deploy wrote, under the account it ran as.
+    repo_dir: "/home/{{ ansible_user }}/itgraph"
+    session_path: "{{ repo_dir }}/itgraph.session"
+    unit_dir: /etc/systemd/system
+    logind_drop_in: /etc/systemd/logind.conf.d/10-itgraph-no-sleep.conf
+    sleep_targets:
+      - sleep.target
+      - suspend.target
+      - hibernate.target
+      - hybrid-sleep.target
+
+  tasks:
+    # First task, and an assert: it runs on the controller, so a refusal
+    # costs no connection to a host that might not even be the one meant.
+    - name: An explicit retire_host names this host
+      ansible.builtin.assert:
+        that: retire_host | default("") == inventory_hostname
+        fail_msg: >-
+          This playbook stops collection on
+          {{ inventory_hostname | default('<the [previous] host>') }},
+          deletes the checkout, the database volume and the session
+          file, and un-sleep-masks the machine. It runs only against a
+          name spelled out by hand:
+          -e retire_host={{ inventory_hostname | default('<name>') }}
+
+    - name: The itgraph unit files on disk
+      ansible.builtin.find:
+        paths: "{{ unit_dir }}"
+        patterns: "itgraph-*"
+      register: unit_files
+
+    # Stopping by what is on disk, not by a list carried here: a unit
+    # renamed out from under this playbook would otherwise survive by
+    # being forgotten.
+    - name: Every itgraph unit stopped and disabled
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop: "{{ unit_files.files | map(attribute='path') | map('basename') | list }}"
+
+    - name: The unit files removed
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ unit_files.files }}"
+
+    - name: Systemd forgets the units
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    # While the checkout is still whole, so compose finds its file. The
+    # volume holds yt_raw_* rows, which may not outlive 30 days — the
+    # one step here where waiting is not free.
+    - name: The compose file still in the checkout
+      ansible.builtin.stat:
+        path: "{{ repo_dir }}/docker-compose.yaml"
+      register: compose_file
+
+    - name: The database volume removed
+      ansible.builtin.command:
+        cmd: docker compose down -v
+        chdir: "{{ repo_dir }}"
+      # It runs only when the compose file exists, and a checkout that
+      # still has one has something to tear down; a second run finds
+      # nothing and prints nothing.
+      changed_when: compose_file.stat.exists
+      when: compose_file.stat.exists
+
+    # The session is full access to the Telegram account; it goes first
+    # of the files, named, so a later reader of this playbook sees it
+    # was no accident. `.env` follows: it holds the api hash.
+    - name: The session and its journal deleted
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ session_path }}"
+        - "{{ session_path }}-journal"
+
+    - name: The environment file deleted
+      ansible.builtin.file:
+        path: "{{ repo_dir }}/.env"
+        state: absent
+
+    - name: The checkout removed
+      ansible.builtin.file:
+        path: "{{ repo_dir }}"
+        state: absent
+
+    # The old deploy masked sleep so a closed lid could not stop
+    # collection; retired, the machine gets its lid back. Unmasking what
+    # is not masked is a no-op, so this needs no guard.
+    - name: Sleep unmasked
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        masked: false
+      loop: "{{ sleep_targets }}"
+
+    - name: The logind drop-in removed
+      ansible.builtin.file:
+        path: "{{ logind_drop_in }}"
+        state: absent
+
+    - name: Logind rereads its configuration
+      ansible.builtin.systemd_service:
+        name: systemd-logind
+        state: restarted
+
+    # `systemd:` has no query mode — it asserts a state, which would
+    # mask exactly the leftovers this check exists to catch.
+    - name: No itgraph unit remains installed
+      ansible.builtin.command:
+        cmd: systemctl list-unit-files itgraph-*.service itgraph-*.timer --no-legend
+      register: installed_units
+      changed_when: false # noqa: command-instead-of-module
+
+    - name: Nothing itgraph is loaded
+      ansible.builtin.command:
+        cmd: systemctl list-units --all 'itgraph-*' --no-legend
+      register: loaded_units
+      changed_when: false # noqa: command-instead-of-module
+
+    - name: The session file is gone
+      ansible.builtin.stat:
+        path: "{{ session_path }}"
+      register: session_stat
+
+    - name: Retirement is complete
+      ansible.builtin.assert:
+        that:
+          - installed_units.stdout_lines | length == 0
+          - loaded_units.stdout_lines | length == 0
+          - not session_stat.stat.exists
+        fail_msg: >-
+          Something itgraph survived: {{ installed_units.stdout_lines
+          + loaded_units.stdout_lines
+          + ([session_path] if session_stat.stat.exists else []) }}.
+
+    - name: What stayed behind
+      ansible.builtin.debug:
+        msg: >-
+          Kept, as the machine's own: Docker, ufw, uv, the swap file,
+          and /home/{{ ansible_user }}/itgraph-backups with its dumps.

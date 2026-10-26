@@ -10,47 +10,44 @@
 # `group_vars/all/` directory the filenames mean nothing and everything
 # is loaded for the `all` group, which is what was wanted.
 
-itgraph_repo_url: https://github.com/vyhuholl/it-media-graph.git
-itgraph_repo_version: master
+# The image CI pushes, by tag; the playbook resolves the tag to a
+# digest and deploys the digest.
+itgraph_image_repository: ghcr.io/vyhuholl/it-media-graph
 
 # Files only the operator has. Paths on the machine running Ansible.
 #
-# The session file is copied and never re-created: `itgraph login` on a
-# new host makes a session with an empty entity cache, and every seed
-# channel is then skipped for want of a cached peer — days of stopped
-# collection from a step that looks like ordinary setup.
-itgraph_session_src: ~/Documents/it-media-graph/itgraph.session
-itgraph_dump_src: ~/itgraph-backups/weekly/full-LATEST.dump
+# Both are cutover inputs: the operator copies them from the previous
+# host into a 0700 directory and points these at them, and deletes the
+# copies once the cutover is verified. The session is copied and never
+# re-created — `itgraph login` on a new host makes a session with an
+# empty entity cache, and every seed channel is then skipped for want
+# of a cached peer.
+itgraph_session_src: ~/itgraph-cutover/itgraph.session
+itgraph_dump_src: ~/itgraph-cutover/full-LATEST.dump
 
 db_user: itgraph
 db_name: itgraph
-db_port: 5433
 
-telegram_session: itgraph.session
 watch_timezone: Europe/Moscow
 
-# The proxy endpoint lives in secrets.vault.yml, not here. It is not
-# merely a credential: it is the address the collector's traffic is
-# known to come from, which is what the proxy exists to keep private —
-# and this file is committed in the clear. Host, port, username and
-# password travel together so that configuring the proxy is one edit in
-# one encrypted file, rather than a split that invites the host into the
-# wrong half. Leave them empty there for a direct connection.
+# The public half of the off-site encryption: safe to commit. The
+# identity that decrypts lives only in the operator's password manager.
+# Empty means no off-site pass — but on the collection host all four
+# off-site secrets (b2_key_id, b2_application_key, b2_bucket_name,
+# backup_age_recipient) are set; anything in between is refused by the
+# settings loader.
+backup_age_recipient: ""
 
-# A laptop suspends when the lid closes, and a suspended collector loses
-# the snapshots it misses for good — history can be re-fetched, a reading
-# of a post's counters at age thirty minutes cannot. Set true and the
-# playbook masks the sleep targets and tells logind to ignore the lid.
-host_is_laptop: true
-
-swap_size: 2G
-alerts_interval: 15min
-score_interval: 15min
-# Daily. A channel is measured against its own newest posts, and the
-# reference is only as fresh as the last refresh: daily against weekly
-# narrows the per-channel bias from 0.19 to 0.15 z for a minute of
-# database time — see the virality section of src/itgraph/README.md.
-baselines_schedule: "*-*-* 04:30:00"
+# The schedules, in Europe/Moscow. Minutes staggered as the boot
+# offsets once staggered the timers; tests hold them to the change's
+# design, so a hand edit here fails `make validate` until the design
+# table in tests/test_deploy_manifests.py is changed with it.
+itgraph_alerts_schedule: "2-59/15 * * * *"
+itgraph_score_schedule: "8-59/15 * * * *"
+itgraph_yt_watch_schedule: "*/15 * * * *"
+itgraph_backup_schedule: "40 */4 * * *"
+itgraph_baselines_schedule: "30 4 * * *"
+itgraph_yt_refresh_schedule: "0 5 * * *"
 
 # The z a post's best metric must pass to raise an alert. Measured: 3.7
 # gives about eight a day after folding, the volume 3.3 gave before
@@ -59,4 +56,3 @@ baselines_schedule: "*-*-* 04:30:00"
 # --threshold N` says what the move would have cost — which is how this
 # number was arrived at.
 alert_spike_z: 3.7
-backup_interval: 4h

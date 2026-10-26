@@ -1,0 +1,67 @@
+# The collector. Recreate, so the old pod is gone before the new one
+# starts — one poller per session, and the lease lives in this
+# namespace now. The 90 s grace matches the old TimeoutStopSec: the
+# poll in flight finishes and the lease is released on SIGTERM.
+#
+# The annotations make the template change when the image or the
+# configuration does, and only then — a re-run of an identical deploy
+# restarts nothing.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: itgraph-watch
+  namespace: itgraph
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: itgraph-watch
+  template:
+    metadata:
+      labels:
+        app: itgraph-watch
+        itgraph/telegram: "true"
+      annotations:
+        itgraph/commit: {{ itgraph_commit | tojson }}
+        itgraph/config-checksum: {{ itgraph_env_checksum | tojson }}
+    spec:
+      terminationGracePeriodSeconds: 90
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 3000
+        runAsGroup: 3000
+        fsGroup: 3000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: itgraph
+          image: {{ itgraph_image | tojson }}
+          args: ["watch"]
+          envFrom:
+            - secretRef:
+                name: itgraph-env
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: session
+              mountPath: /session
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: session
+          persistentVolumeClaim:
+            claimName: itgraph-session
+        - name: tmp
+          emptyDir: {}

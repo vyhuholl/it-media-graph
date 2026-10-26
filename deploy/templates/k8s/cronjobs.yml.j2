@@ -1,0 +1,375 @@
+# The scheduled passes, minutes staggered as the boot offsets once
+# staggered the timers. Every job: Europe/Moscow, Forbid, no retry —
+# a failed run is retried by the next firing, as a failed oneshot
+# was — and an activeDeadlineSeconds that ends a stuck run, so Forbid
+# cannot block every later one. The daily deadlines are the
+# counterpart of `Persistent=true`: a run missed while the node was
+# down starts when it is back, the same day.
+#
+# No config-checksum annotation here: a job's pods are new every run,
+# so each one reads the Secret as it is, and there is nothing long
+# running to restart.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: itgraph-alerts
+  namespace: itgraph
+spec:
+  schedule: {{ itgraph_alerts_schedule | tojson }}
+  timeZone: Europe/Moscow
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 3000
+      template:
+        metadata:
+          labels:
+            app: itgraph-alerts
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 3000
+            runAsGroup: 3000
+            fsGroup: 3000
+            seccompProfile:
+              type: RuntimeDefault
+          # Derive first, as an init container: `alerts` never runs on
+          # edges a failed `derive` would have left stale — the reason
+          # they shared a systemd unit.
+          initContainers:
+            - name: derive
+              image: {{ itgraph_image | tojson }}
+              args: ["derive"]
+              envFrom:
+                - secretRef:
+                    name: itgraph-env
+              securityContext:
+                readOnlyRootFilesystem: true
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 1Gi
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          containers:
+            - name: itgraph
+              image: {{ itgraph_image | tojson }}
+              args: ["alerts"]
+              envFrom:
+                - secretRef:
+                    name: itgraph-env
+              securityContext:
+                readOnlyRootFilesystem: true
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 1Gi
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: itgraph-score
+  namespace: itgraph
+spec:
+  schedule: {{ itgraph_score_schedule | tojson }}
+  timeZone: Europe/Moscow
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 3000
+      template:
+        metadata:
+          labels:
+            app: itgraph-score
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 3000
+            runAsGroup: 3000
+            fsGroup: 3000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: itgraph
+              image: {{ itgraph_image | tojson }}
+              args: ["score"]
+              envFrom:
+                - secretRef:
+                    name: itgraph-env
+              securityContext:
+                readOnlyRootFilesystem: true
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 1Gi
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: itgraph-backup
+  namespace: itgraph
+spec:
+  schedule: {{ itgraph_backup_schedule | tojson }}
+  timeZone: Europe/Moscow
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 10800
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 7200
+      template:
+        metadata:
+          labels:
+            app: itgraph-backup
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 3000
+            runAsGroup: 3000
+            fsGroup: 3000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: itgraph
+              image: {{ itgraph_image | tojson }}
+              args: ["backup"]
+              envFrom:
+                - secretRef:
+                    name: itgraph-env
+              securityContext:
+                readOnlyRootFilesystem: true
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 1Gi
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: itgraph-backups
+            - name: tmp
+              emptyDir: {}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: itgraph-baselines
+  namespace: itgraph
+spec:
+  schedule: {{ itgraph_baselines_schedule | tojson }}
+  timeZone: Europe/Moscow
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 82800
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 10800
+      template:
+        metadata:
+          labels:
+            app: itgraph-baselines
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 3000
+            runAsGroup: 3000
+            fsGroup: 3000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: itgraph
+              image: {{ itgraph_image | tojson }}
+              args: ["baselines"]
+              envFrom:
+                - secretRef:
+                    name: itgraph-env
+              securityContext:
+                readOnlyRootFilesystem: true
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              # The heaviest pass: the fit holds every channel's
+              # history at once.
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 2Gi
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}
+{% if youtube_api_key | default("") | length > 0 %}
+---
+# The YouTube pair exists only where there is a key to run it with;
+# the playbook deletes both when the key is taken away.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: itgraph-yt-watch
+  namespace: itgraph
+spec:
+  schedule: {{ itgraph_yt_watch_schedule | tojson }}
+  timeZone: Europe/Moscow
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 3000
+      template:
+        metadata:
+          labels:
+            app: itgraph-yt-watch
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 3000
+            runAsGroup: 3000
+            fsGroup: 3000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: itgraph
+              image: {{ itgraph_image | tojson }}
+              args: ["yt", "watch"]
+              envFrom:
+                - secretRef:
+                    name: itgraph-env
+              securityContext:
+                readOnlyRootFilesystem: true
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 1Gi
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: itgraph-yt-refresh
+  namespace: itgraph
+spec:
+  schedule: {{ itgraph_yt_refresh_schedule | tojson }}
+  timeZone: Europe/Moscow
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 82800
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 10800
+      template:
+        metadata:
+          labels:
+            app: itgraph-yt-refresh
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 3000
+            runAsGroup: 3000
+            fsGroup: 3000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: itgraph
+              image: {{ itgraph_image | tojson }}
+              args: ["yt", "refresh"]
+              envFrom:
+                - secretRef:
+                    name: itgraph-env
+              securityContext:
+                readOnlyRootFilesystem: true
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 1Gi
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}
+{% endif %}
