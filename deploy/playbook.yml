@@ -25,9 +25,8 @@
 - name: Deploy itgraph collection
   hosts: collector
   become: false
-  # Nothing here reads a fact: `ansible_user` comes from the inventory,
-  # and the probe's date is taken on the controller. Gathering would be
-  # a round trip per run, on every tag, for nothing.
+  # Nothing here reads a fact: `ansible_user` comes from the inventory.
+  # Gathering would be a round trip per run, on every tag, for nothing.
   gather_facts: false
 
   vars:
@@ -951,9 +950,47 @@
     # whose `.env` did not arrive works, logs nothing unusual, and reaches
     # Telegram from the address the proxy exists to hide — this is the only
     # thing that catches it.
+    #
+    # From the running `watch`, which logs that line once per start. It
+    # used to come from a one-request probe, which spent a real `backfill`
+    # on every verify and was removed; the loop connects anyway, so its
+    # own journal answers the same question for nothing.
+    #
+    # The current start only, by its InvocationID: a line from an earlier
+    # start would answer for a `.env` that has changed since. Retried,
+    # because a `watch` restarted a moment ago may not have connected yet.
+    # As root, because whether the deploy user may read a system unit's
+    # journal depends on group membership this playbook does not manage.
+    - name: The route the running collector took
+      become: true
+      ansible.builtin.shell: >-
+        journalctl --no-pager -o cat --grep 'Telegram route:'
+        _SYSTEMD_INVOCATION_ID="$(systemctl show -p InvocationID --value itgraph-watch)"
+      register: watch_route
+      until: watch_route.rc == 0
+      retries: 15
+      delay: 2
+      changed_when: false
+      failed_when: false
+      when: proxy_host is defined and proxy_host | length > 0
+      tags: [verify]
+
+    - name: The collector says which route it took
+      ansible.builtin.assert:
+        that: watch_route.rc == 0
+        fail_msg: >-
+          itgraph-watch has logged no "Telegram route:" line since it last
+          started, so which way it reaches Telegram is unknown. It is likely
+          not starting at all — refused the session lease, or failing
+          before it connects. See `journalctl -u itgraph-watch -e` on the
+          host.
+        quiet: true
+      when: proxy_host is defined and proxy_host | length > 0
+      tags: [verify]
+
     - name: The proxy is actually in use
       ansible.builtin.assert:
-        that: "'Telegram route: direct' not in probe.stderr"
+        that: "'Telegram route: direct' not in watch_route.stdout"
         fail_msg: >-
           Connected directly. PROXY_* did not reach the process — check
           .env and the unit's WorkingDirectory.
