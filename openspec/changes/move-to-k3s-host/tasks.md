@@ -1,0 +1,89 @@
+# Tasks
+
+Local listing commands below use the example inventory and the fake vault password, and reach no host:
+
+```bash
+L() { ANSIBLE_VAULT_PASSWORD_FILE=deploy/.ansible-lint-vault-pass uv run ansible-playbook -i deploy/inventory.ini.example deploy/playbook.yml "$@"; }
+```
+
+`L --tags X --list-tasks` below means that function. Tasks marked **(operator)** reach the server, the laptop, Telegram, B2 or the Google console, and are the operator's to run; nothing else here does. Nothing written in this change names the server, its address, its provider or anything else running on it.
+
+## 1. PostgreSQL tools without Docker
+
+- [ ] 1.1 `config.py`: `postgres_container` becomes `str | None`, still defaulting to `itgraph-postgres`; an empty `POSTGRES_CONTAINER` reads as `None`. Comment: the Mac keeps Postgres in Compose, the collection host runs it as a workload and the tools come from the image (design decision 11). Verify a `test_config.py` case for both readings and `make validate`.
+- [ ] 1.2 `db/backup.py`: with no container, `pg_dump`, `pg_restore --list` and `psql` run as local processes with `-h` and `-p` from `DATABASE_URL`, and the password goes in `PGPASSWORD` in the child's environment only. With a container the commands are byte-for-byte what they are today. Verify `test_backup.py` cases: no argument of the direct commands contains the password, the child environment carries it, and the container commands are unchanged; `make validate`.
+- [ ] 1.3 Docs: `src/itgraph/README.md`, "Резервные копии": where dumps live on the collection host (the backups volume, `BACKUP_DIR`), that the tools run from the image there and through `docker exec` on the Mac. The root `CLAUDE.md` invariant naming `~/itgraph-backups` says the same. Verify by reading against the spec requirement "Dumps Outlive The Workloads".
+
+## 2. Off-site copies
+
+- [ ] 2.1 Settings: `b2_key_id`, `b2_application_key` (secret), `b2_bucket_name`, `backup_age_recipient`. All four set, or none — anything in between fails at settings load, naming what is missing, the way a half-configured proxy does. None set means no off-site pass (the Mac). Verify `test_config.py` cases for all, none and each partial set; `make validate`.
+- [ ] 2.2 A new module `db/offsite.py`: authorize with the restricted key over B2's native API through `httpx`; list the names under `inventory/` and `full/`; for each local verified dump younger than seven days with no copy, encrypt it with the `age` CLI to a temporary file beside it, upload with `X-Bz-Content-Sha1`, compare the answer's `contentSha1`, and remove the temporary file whatever happened. Names are `<tier>/<dump name>.age`. Log names, never keys. Verify tests over `httpx.MockTransport` and a mocked `age`: a missing copy is uploaded; a present one is not; a dump older than the window is not; a checksum the store does not confirm, a `cap_exceeded` and a 5xx each fail with the dump's name; the temporary file is gone after every one of them. `make validate`.
+- [ ] 2.3 One test runs the real `age` when it is installed (skipped otherwise, as the database tests are without Postgres): encrypt a small dump to a generated recipient, decrypt with its identity, and compare bytes. Verify it runs on the Mac (`age` is installed there) and passes.
+- [ ] 2.4 `itgraph backup` runs the off-site pass after `run_backup` when it is configured, and exits non-zero naming every dump not copied, after the local dumps and their pruning are done. Verify a `test_cli.py` case each for success, a failed upload, and no configuration (no request made); `make validate`.
+- [ ] 2.5 `src/itgraph/CLAUDE.md` gets the `db/offsite.py` row. The root `CLAUDE.md` "Never commit" list gains the B2 application key and the age identity, on the same footing as the api hash. Verify `make validate` (gitleaks over the edit) and by reading.
+- [ ] 2.6 Docs: `src/itgraph/README.md`, a "Копии вне хоста" section — what is copied and when, encryption and who holds the identity, the key's rights, the lifecycle rules, the $0 caps, and a restore from an off-site copy: download, `age -d -i`, `pg_restore` into a database whose name ends in `_test`. Verify the restore steps against the spec scenario "A copy decrypts to the dump".
+
+## 3. The image
+
+- [ ] 3.1 `Dockerfile`: builder on uv's image with `uv sync --locked --no-dev --no-editable`, `UV_COMPILE_BYTECODE=1`, `UV_PYTHON_DOWNLOADS=0`; runtime `python:<.python-version>-slim-trixie` with the environment copied in, PostgreSQL 16 client from PGDG, `age`, `curl`, `tzdata`, a fixed non-root UID, `PYTHONUNBUFFERED=1`, working directory with `alembic.ini`, `PATH` leading to the environment. Both base images pinned by digest, their Python version equal to `.python-version`. The build ends with the checks from design decision 2. Verify `docker buildx build --platform linux/amd64 --load .` on the Mac passes them.
+- [ ] 3.2 `.dockerignore` as an allowlist: everything excluded, then the files the build needs. Verify a build from a working tree holding `.env`, a `*.session` and `deploy/.vault_pass` produces an image with none of them (`docker run --rm --entrypoint find <image> / -name '*.session' -o -name .env -o -name .vault_pass` prints nothing).
+- [ ] 3.3 `.github/workflows/image.yml`: on push to `master`, build for `linux/amd64` and push `ghcr.io/vyhuholl/it-media-graph:<full sha>`; actions pinned by commit SHA; permissions `contents: read` and `packages: write` only. Verify `make validate` (pre-commit lints YAML) and, after the push, the run's log showing the digest.
+- [ ] 3.4 (operator) Make the ghcr package public. Verify `docker pull ghcr.io/vyhuholl/it-media-graph:<sha>` from a logged-out Docker succeeds.
+- [ ] 3.5 Root `CLAUDE.md`: "There is no CI" becomes CI that builds the image and gates nothing, pre-commit still the whole gate; hard rule 1 says how the image runs the entry point (design decision 2, pending the operator's confirmation). Verify by reading.
+
+## 4. Manifests
+
+- [ ] 4.1 Templates under `deploy/templates/k8s/`: the namespace; NetworkPolicies (deny ingress; the namespace's pods to Postgres on 5432; pods labelled `itgraph/telegram: "true"` to the proxy on 1080); PVCs for the database, the dumps and the session on `itgraph_storage_class`; Secrets `itgraph-env`, `itgraph-postgres`, `itgraph-proxy`. `itgraph-env` carries today's `env.j2` keys with `DATABASE_URL` and `BOT_DATABASE_URL` at the Service, `POSTGRES_CONTAINER` empty, `BACKUP_DIR`, `TZ=Europe/Moscow`, `PROXY_*` at the proxy, and the off-site settings. Verify with 4.6.
+- [ ] 4.2 Postgres: a StatefulSet of the pinned `postgres:16` with the Compose flags, `PGDATA` in a subdirectory, a 256 Mi memory-backed `/dev/shm`, a readiness probe on `pg_isready`, the resources from design decision 15; a ClusterIP Service. Verify with 4.6.
+- [ ] 4.3 The proxy: a Deployment of the pinned xray-core image, its configuration from `itgraph-proxy` (one SOCKS inbound with a password and UDP off, exactly the one outbound from `proxy_outbound`, no `freedom`, no routing), a TCP readiness probe, a ClusterIP Service. Verify with 4.6, including that the rendered configuration has one outbound.
+- [ ] 4.4 Deployments `itgraph-watch`, `itgraph-bot` (both `Recreate`, the watch with 90 s grace) and `itgraph-console` (`sleep infinity`, backups and session volumes); watch and console labelled for the proxy; a config checksum annotation on each pod template; the pod security settings and resources from design decision 15; `TZ` on every container. Verify with 4.6.
+- [ ] 4.5 CronJobs per design decision 14: schedules, `timeZone: Europe/Moscow`, deadlines, `Forbid`, `backoffLimit: 0`, history limits, `activeDeadlineSeconds`; `derive` as the init container of `itgraph-alerts`; the YouTube two only when `youtube_api_key` is set. Verify with 4.6.
+- [ ] 4.6 `tests/test_deploy_manifests.py` renders every template with the example variables and parses them, then asserts: every itgraph container references the same digest; watch and bot use `Recreate`; every CronJob has `timeZone: Europe/Moscow` and `concurrencyPolicy: Forbid`; every container has `TZ`; no Service is NodePort or LoadBalancer and there is no Ingress; the proxy configuration has one outbound and no `freedom`; every itgraph pod runs as non-root on a read-only root filesystem with no service-account token; the YouTube CronJobs disappear without a key; no object is outside the namespace. No network. Verify `make validate`.
+
+## 5. The playbook
+
+- [ ] 5.1 `deploy/inventory.ini.example`: `[collector]` with `ansible_user=root` and `itgraph_storage_class`, `[previous]` for the host the session comes from, RFC 5737 addresses, comments saying which values never go into a committed file. `deploy/group_vars/all/main.yml`: the image repository, the age recipient, the schedules and thresholds; `host_is_laptop`, `swap_size` and the repository URL removed. `secrets.vault.yml.example`: `proxy_outbound`, `proxy_socks_password`, the B2 values; the old `proxy_*` endpoint keys removed. Verify `make ansible-lint`.
+- [ ] 5.2 The image resolution, tagged `always`: the commit from `itgraph_commit` or `git ls-remote` on the controller, a bounded poll of ghcr, the digest. A missing image fails before anything in the namespace changes. Verify `L --list-tasks` shows it first under every tag, and `make ansible-lint`.
+- [ ] 5.3 `prepare`: assert `k3s kubectl` answers; apply the namespace, NetworkPolicies, PVCs, Secrets, the proxy and the console; wait for both; the address check (design decision 9, second reading), whose message prints both readings. Verify `L --tags prepare --list-tasks` lists no Postgres, session, watch, bot or CronJob task.
+- [ ] 5.4 `data`: the Postgres StatefulSet and its readiness; the existing probes, decision, restore block, coherence check and bot-role password, each through `kubectl exec` into the Postgres pod, with the restore reading a root-only transfer file removed unconditionally; the schema check, migration and dump path through the console; the first baselines through the console. Conditions, messages and the `migrate` tag carry over unchanged. Verify `L --tags data --list-tasks` and `L --tags migrate --list-tasks` keep today's order and membership, and read each message against the modified requirements "An Incoherent Database Stops The Deploy", "Unknown Database State Stops The Deploy" and "Migration Runnable On Its Own".
+- [ ] 5.5 `session`: probe the volume through the console; when it holds a session, keep it; when empty, run the previous-host check delegated to `[previous]` (or accept `-e session_previous_host=none`), then copy through a transfer file into the volume at 0600 and compare SHA-256. Verify `make ansible-lint`, `L --tags session --list-tasks`, and read the failure messages against "Re-run Keeps The Host's Session" and "The Session Moves Only From A Stopped Host".
+- [ ] 5.6 `services`: the schema gate; apply watch, bot and the CronJobs (deleting the YouTube ones without a key); `rollout status`; the 60-second settle and restart check. Verify `L --tags services --list-tasks` shows the gate first, and read the restart check's message against "The Deploy Fails On A Workload That Keeps Restarting".
+- [ ] 5.7 `verify`: seed count; the route line from `kubectl logs` with a 30-second retry and distinct failures for `direct` and for no line; the address check again; `itgraph watch-status`; the report with the commit, digest, restore, migration, dump path and restarted services, each through `default`. Verify `L --tags verify --list-tasks` and read the report against "The Deploy Reports What It Did".
+- [ ] 5.8 Remove the systemd unit templates, `env.j2` and `10-itgraph-no-sleep.conf.j2`, and the base, repo and laptop sections. Verify `make ansible-lint` and `git grep -n 'ufw\|host_is_laptop\|get.docker.com\|swapfile' deploy/` prints nothing.
+- [ ] 5.9 Docs: rewrite `deploy/README.md` — what runs where, the tags, `prepare` and the cutover, what the deploy deliberately does not do, the checks, the secrets, what stays manual (the VPN outbound, B2, the age identity). Verify every command in it against `L --tags … --list-tasks`.
+
+## 6. Remote operation
+
+- [ ] 6.1 `scripts/on-host.sh`: `ssh -T root@host k3s kubectl -n itgraph exec -i deploy/itgraph-console -c itgraph -- itgraph <quoted args>`; `--loop stop` scales `itgraph-watch` to 0 and waits for its pod to be gone, `--loop start` scales it to 1 and waits for the rollout. The header comment updated. Verify `tests/test_on_host.py` with the fake `ssh` on `PATH`: the remote command line for an ordinary command, for arguments with spaces and quotes, for both `--loop` forms; the exit status passed through; the inventory error unchanged. `make validate`.
+- [ ] 6.2 Docs: `src/itgraph/README.md` and the `yt` review instructions use the script unchanged in form; a paragraph on stopping the loop for `resolve`, `backfill` and `metadata`. Verify by reading against the modified requirement "Remote Operation".
+
+## 7. Retiring the laptop
+
+- [ ] 7.1 `deploy/decommission.yml` per design decision 16: targets `[previous]`; refuses without a matching `-e retire_host`; stops, disables and removes every `itgraph-*` unit and timer; deletes the session, its journal and `.env`; `docker compose down -v`; removes the checkout; unmasks sleep and removes the logind drop-in; keeps `~/itgraph-backups`; ends by asserting no `itgraph-*` unit is loaded and no session remains. Verify `make ansible-lint`, and that `ansible-playbook -i deploy/inventory.ini.example deploy/decommission.yml` without `retire_host` fails at its first task without connecting.
+- [ ] 7.2 Docs: `deploy/README.md` gains "Вывод старого хоста": when to run it (after a day of checks, well inside 30 days), what it removes and what it keeps. Verify by reading against "A Retired Host Keeps No Collection State".
+
+## 8. Plan and public pages
+
+- [ ] 8.1 `docs/PLAN.md`: the Collection bullet on the shared exit records how it is met on the server (a proxy in the namespace to the same VPN server the laptop used); the YouTube line on "the laptop's always-on VPN" says YouTube goes direct from the server. No name of the host, its provider or its location. Verify by reading.
+- [ ] 8.2 (operator) The wording for `docs/privacy.html` replacing "a private computer reachable only by the developer". Then the page edited to it. Verify the page renders and says nothing about the host beyond that sentence.
+
+## 9. Operator setup
+
+- [ ] 9.1 (operator) B2: a private bucket; lifecycle rules for `inventory/` (hide after 30 days) and `full/` (hide after 28), both deleting a day after hiding; a key restricted to the bucket with `listFiles` and `writeFiles` only; every data cap at $0. Verify by trying a delete with that key: refused.
+- [ ] 9.2 (operator) An age identity generated on the Mac and stored in the password manager; its recipient in `main.yml`. Verify a test file encrypted to the recipient decrypts with the stored identity.
+- [ ] 9.3 (operator) The vault: `proxy_outbound` from the client configuration of the server the laptop uses, a random `proxy_socks_password`, `b2_key_id`, `b2_application_key`, `b2_bucket_name`; the old proxy endpoint keys removed. Verify `ansible-vault view` shows the keys and `scripts/assert-vault-encrypted.sh` passes on commit.
+- [ ] 9.4 (operator) `deploy/inventory.ini`: the server under `[collector]`, the laptop under `[previous]`. Verify `ansible collector -m ping` and `ansible previous -m ping`.
+
+## 10. On the server
+
+- [ ] 10.1 (operator) `ansible-playbook deploy/playbook.yml --tags prepare`. Verify it passes, and both addresses it prints differ — the one through the proxy belonging to the VPN.
+- [ ] 10.2 (operator) A review round trip through `scripts/on-host.sh` against the still-empty database: `yt review-export` to a file, then `yt review-apply -` from it. Verify the apply sees end of input and exits, and the export's standard output holds no diagnostics.
+- [ ] 10.3 (operator) The cutover, design "Migration Plan" steps 7–10: stop and disable every `itgraph-*` unit on the laptop, `uv run itgraph backup --full` there, copy the dump and the session to a 0700 directory on the Mac, the full playbook, then delete both copies from the Mac. Verify the report says `restored`, the migration, the previous-host check passed, the session copied, and the route and address checks passed.
+- [ ] 10.4 (operator) A day later: new snapshots and alerts, a bot reply, `itgraph backup` having copied off-site (names visible in the bucket), `scripts/on-host.sh watch-status`. Verify each, and that log timestamps and the 04:30 and 05:00 runs are in Moscow time.
+- [ ] 10.5 (operator) The YouTube key restricted to the server's IPv4 address, the one the direct reading printed. Verify the next `itgraph-yt-watch` run succeeds.
+- [ ] 10.6 (operator) `ansible-playbook deploy/decommission.yml -e retire_host=<name>`, then `[previous]` removed from the inventory. Verify the playbook's final assertions pass.
+- [ ] 10.7 (operator) A restore rehearsal on the Mac from an off-site copy, per `src/itgraph/README.md`. Verify `pg_restore --list` reads it and the restored scratch database's seed channels match the server's count.
+
+## Workflow follow-up
+
+- `/opsx:verify`, then archive after 8.2 is done; the archive syncs `collection-deploy`, `youtube-inventory` and the new `database-backups` into `openspec/specs/`.
