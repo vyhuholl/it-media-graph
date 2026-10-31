@@ -49,10 +49,11 @@ spec:
             requests:
               cpu: 10m
               memory: 64Mi
-            # The migration runs here, and env.py's pre-migration dump
-            # is the heaviest thing this pod ever holds.
+            # The migration runs here, with env.py's pre-migration dump,
+            # and so does a fresh host's first baseline refresh — the
+            # heaviest pass there is, which its own CronJob gives 2 Gi.
             limits:
-              memory: 1Gi
+              memory: 2Gi
           volumeMounts:
             - name: session
               mountPath: /session

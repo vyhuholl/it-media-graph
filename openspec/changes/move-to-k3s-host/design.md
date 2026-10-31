@@ -50,7 +50,7 @@ A multi-stage `Dockerfile`: a builder stage on uv's image runs `uv sync --locked
 
 - **Client 16, not Debian's own.** The server is `postgres:16`; a `pg_dump` older than the server refuses, and a newer one writes archives the matching `pg_restore` is not guaranteed to read. Matching majors removes the question.
 - **`.dockerignore` is an allowlist** — `pyproject.toml`, `uv.lock`, `.python-version`, `alembic.ini`, `src/` and whatever the build backend needs — so a build from a working tree with `.env`, a session or `deploy/.vault_pass` in it cannot pick them up either.
-- **The process runs the environment's `itgraph` entry point**, not `uv run`: the runtime image has no uv, and the filesystem is read-only. Dependencies still come only from `uv.lock` through `uv sync`, which is what the "always `uv run`, never pip" rule protects. *Not covered by the requirements* — the rule is written for the development environment, and this reading needs the operator's confirmation.
+- **The process runs the environment's `itgraph` entry point**, declared as the image's `ENTRYPOINT` so that a manifest's `args: ["watch"]` means `itgraph watch` — not `uv run`: the runtime image has no uv, and the filesystem is read-only. Dependencies still come only from `uv.lock` through `uv sync`, which is what the "always `uv run`, never pip" rule protects. *Not covered by the requirements* — the rule is written for the development environment, and this reading needs the operator's confirmation.
 - **The build checks itself** before pushing: `itgraph --help` runs, `pg_dump --version` says 16, `TZ=Europe/Moscow date +%Z` says MSK, `age` and `curl` exist.
 - **Non-root** (a fixed UID with no shell login), `PYTHONUNBUFFERED=1`, working directory holding `alembic.ini` so `alembic` finds its scripts.
 
@@ -80,13 +80,13 @@ services  gate: schema at head ─ watch, bot, CronJobs (new image) ─ rollout 
 verify    seeds ─ route line ─ exit check ─ watch-status ─ report
 ```
 
-Probes, the restore and the bot role run in the Postgres pod through `kubectl exec … psql` over its local socket, as they did through `docker exec`: the same SQL, the same failure handling, the same conditions as today's tasks. The migration and the schema checks run in the console (Decision 7), which is rolled to the new image in `prepare` precisely so that it can: it is a tool, not a collector, and nothing it does unattended touches collection state.
+Probes, the restore and the bot role run in the Postgres pod through `kubectl exec … psql` over its local socket, as they did through `docker exec`: the same SQL, the same failure handling, the same conditions as today's tasks. The migration and the schema checks run in the console (Decision 7), which is rolled to the new image under every tag that changes something through it — `prepare`, `data`, `migrate`, `session`, and `services`, whose schema gate must ask the deployed image's head and not the previous one's — but not under `verify`, which must not move it: it is a tool, not a collector, and nothing it does unattended touches collection state.
 
 **The collector, the bot and the CronJobs get the new image only in `services`, after the gate.** Under systemd, timers fired new code on an old schema between the checkout and the migration (the accepted window in `deploy/README.md`). Here a CronJob keeps its old template until it is re-applied after the migration, so the window is gone, and the spec says so ("Scheduled jobs wait for the schema").
 
 Tags keep their meaning: `prepare` (new), `data`, `migrate`, `session`, `services`, `config` (the Secrets and the proxy), `verify`; `repo` and `base` go away, `laptop` with them. `--tags prepare` is the part `collection-deploy` asks for to set up a host without collecting.
 
-The dump and the session travel through root-only temporary files on the host (`/root/.itgraph-transfer`, 0700), removed in the same run whatever happened — not through Ansible's `stdin`, which carries text and would corrupt either.
+The dump and the session travel through root-only temporary files on the host (`/root/.itgraph-transfer`, 0700) — not through Ansible's `stdin`, which carries text and would corrupt either. They are sent with `copy` over the SSH connection, not `synchronize`: rsync would have to be on the host, and the deploy installs nothing there. The directory is created under every tag and removed by the last task of every run; the dump, the session and the rendered Secrets are removed in `always` sections, so a run that fails midway does not leave them in `/root`.
 
 ### 6. Restarts follow from the pod template
 
@@ -97,7 +97,7 @@ The collector's and the bot's pod templates carry the image digest and an annota
 `itgraph-console` is a Deployment of the same image running `sleep infinity`, with the full configuration, the backups volume and the session volume mounted, and the label that lets it reach the proxy. Everything the operator runs goes through it:
 
 - `scripts/on-host.sh <args>` becomes `ssh -T root@host k3s kubectl -n itgraph exec -i deploy/itgraph-console -c itgraph -- itgraph <args>`. `kubectl exec` keeps standard output and error apart and returns the remote exit status; arguments are quoted one by one as today.
-- `scripts/on-host.sh --loop stop|start` scales `itgraph-watch` to 0 and waits until its pod is gone, or back to 1 and waits for the rollout. A command needing the session then runs in the console, through the proxy, and the lease still refuses it while the loop holds the session.
+- `scripts/on-host.sh --loop stop|start` scales `itgraph-watch` to 0 (`--replicas=0`) and waits until its pod is gone, or back to 1 and waits for the rollout. A command needing the session then runs in the console, through the proxy, and the lease still refuses it while the loop holds the session. A deploy refuses while the collector or the bot is scaled to zero by hand, and says why: starting the collector behind a running session command would only crash-loop it on the lease, and the server-side apply of `replicas: 1` over a `kubectl scale` would otherwise stop on a field conflict that names neither.
 - The playbook runs `alembic`, `itgraph baselines`, `itgraph watch-status`, the session probe and copy, and the exit check in it.
 
 Alternatives: one-off pods per command (`kubectl run --rm -i`) start slower, print their own messages into the output stream, and need the whole pod spec passed as JSON; a Job cannot take standard input.
@@ -112,7 +112,7 @@ Why not a sidecar in the collector: the console needs the same exit for session 
 
 ### 9. Two checks for the exit
 
-1. **The route line.** `kubectl logs deploy/itgraph-watch -c itgraph` covers the current container since it started — the counterpart of reading the unit's current invocation in the journal. Retried for up to 30 seconds; it must contain `Telegram route: socks5 proxy at itgraph-proxy:1080`. A `direct` line and no line at all fail with different messages.
+1. **The route line.** `kubectl logs deploy/itgraph-watch -c itgraph` covers the current container since it started — the counterpart of reading the unit's current invocation in the journal. Retried for up to 30 seconds; it must contain `Telegram route: socks5 proxy at itgraph-proxy:1080`. A `direct` line and no line at all fail with different messages. The kubelet rotates container logs, so a collector that has run for months may no longer have the line; only then — no line, and a container started over an hour ago — the route is read from the running container's `PROXY_*` environment instead, where the line's values come from, and the playbook says so.
 2. **The address.** From the console, `curl` to `https://api.ipify.org` once directly and once through the proxy (credentials from the environment, never on a command line). Both must answer, and the answers must differ. This is what catches a proxy that accepts connections and sends them out from the host's own address — a state in which the route line is correct and the exit is not. `api.ipify.org` answers over IPv4 only, so both readings are comparable.
 
 `--tags prepare` runs only the second; the first needs a collector.
@@ -131,7 +131,7 @@ The copy goes into the volume through the console with mode 0600, and its SHA-25
 
 1. Authorize with the bucket-restricted key over B2's native API, through the `httpx` the project already uses.
 2. List the names under `inventory/` and `full/`.
-3. For every local, verified dump younger than seven days with no copy yet: encrypt with `age -r <recipient>` to a temporary file on the backups volume, take its SHA-1, get an upload URL, upload with `X-Bz-Content-Sha1`, and check the response's `contentSha1`. Remove the temporary file whatever happened.
+3. For every local, verified dump younger than seven days with no copy yet: encrypt with `age -r <recipient>` to a temporary file on the backups volume, take its SHA-1 a chunk at a time, get an upload URL, upload streamed from the file with its `Content-Length` stated and `X-Bz-Content-Sha1`, and check the response's `contentSha1`. Nothing reads the dump or its ciphertext whole. Remove the temporary file whatever happened.
 4. Any failure fails the command, naming the dump; the local dumps and their pruning are untouched.
 
 The seven-day window is what stops a loop: a local dump older than the store's retention would otherwise look missing and be uploaded again for as long as it is kept locally. The dump taken before a migration is in `weekly/` like any other full dump, so the next scheduled run copies it.
@@ -144,7 +144,7 @@ Alternatives: `b2sdk` (a large dependency for three calls), B2's S3 API through 
 
 ### 12. A rollout is not proof
 
-`kubectl rollout status` reports a Deployment available whenever its pod happens to be up, crash-looping or not. After the rollout the playbook waits 60 seconds and reads each pod's `restartCount` and last terminated state; any restart of the collector or the bot fails the deploy with its exit code and reason.
+`kubectl rollout status` reports a Deployment available whenever its pod happens to be up, crash-looping or not. After the rollout the playbook reads each pod's `restartCount` before and after a 60-second settle, and fails the deploy — with the counts, readiness and the last exit code and reason — if a count moved during the settle, if a pod is not ready at its end (one in CrashLoopBackOff can sit out the minute between restarts), or if a pod this run created has restarted at all. A restart from before the deploy is not a failure: the collector exits on purpose when it stops making progress, and one such restart last week must not fail every deploy after it.
 
 ### 13. Moscow time without touching the host
 
@@ -163,7 +163,7 @@ Alternatives: `b2sdk` (a large dependency for three calls), B2's S3 API through 
 | `itgraph-baselines` | `30 4 * * *` | 04:30 | 82800 |
 | `itgraph-yt-refresh` | `0 5 * * *` | 05:00 | 82800 |
 
-All have `concurrencyPolicy: Forbid`, `backoffLimit: 0` and `restartPolicy: Never` — a failed run is retried by the next firing, as a failed oneshot was. History is three successful and three failed Jobs, which is how long their logs stay readable. `activeDeadlineSeconds` bounds a stuck run, so that `Forbid` cannot block every later one: 50 minutes for the 15-minute jobs, 2 hours for backup, 3 hours for the daily ones. The minutes are staggered, as the boot offsets staggered the timers. The daily deadlines are the counterpart of `Persistent=true`: a run missed while the node was down starts when it is back, the same day. `itgraph-alerts` runs `derive` as an init container and `alerts` as the container, so `alerts` never runs on edges that failed to derive — the reason it shared a unit with `derive` in the first place. The two YouTube CronJobs exist only when `youtube_api_key` is set, and are deleted when it is not.
+All have `concurrencyPolicy: Forbid`, `backoffLimit: 0` and `restartPolicy: Never` — a failed run is retried by the next firing, as a failed oneshot was. History is three successful and three failed Jobs, which is how long their logs stay readable. `activeDeadlineSeconds` bounds a stuck run, so that `Forbid` cannot block every later one: 10 minutes for `yt-watch`, as its systemd unit's `TimeoutStartSec` had it, 50 minutes for `alerts` and `score`, 2 hours for backup, 3 hours for the daily ones. The minutes are staggered, as the boot offsets staggered the timers. The daily deadlines are the counterpart of `Persistent=true`: a run missed while the node was down starts when it is back, the same day. `itgraph-alerts` runs `derive` as an init container and `alerts` as the container, so `alerts` never runs on edges that failed to derive — the reason it shared a unit with `derive` in the first place. The two YouTube CronJobs exist only when `youtube_api_key` is set, and are deleted when it is not.
 
 ### 15. Containment
 
@@ -176,7 +176,7 @@ All have `concurrencyPolicy: Forbid`, `backoffLimit: 0` and `restartPolicy: Neve
 | postgres | 100m, 1 Gi | 2 Gi |
 | watch | 50m, 256 Mi | 512 Mi |
 | bot | 20m, 256 Mi | 512 Mi |
-| console | 10m, 64 Mi | 1 Gi |
+| console | 10m, 64 Mi | 2 Gi — it runs a fresh host's first baselines |
 | jobs | 100m, 256 Mi | 1 Gi; baselines 2 Gi |
 | proxy | 10m, 32 Mi | 128 Mi |
 
@@ -184,7 +184,7 @@ Postgres keeps the Compose flags (`shared_buffers=512MB`, `work_mem=64MB`, `main
 
 ### 16. Retiring the laptop
 
-`deploy/decommission.yml` targets `[previous]` and refuses unless `-e retire_host=<that inventory name>` matches. It stops and disables every `itgraph-*` unit and timer, removes their unit files and reloads systemd, deletes the session and its journal, deletes `.env`, runs `docker compose down -v` in the checkout (the database volume holds `yt_raw_*` rows, which may not outlive 30 days), removes the checkout, unmasks the sleep targets and removes the logind drop-in. It keeps `~/itgraph-backups`. Docker, ufw, uv and the swap file stay: they are the laptop's now, not itgraph's. It ends by asserting that no `itgraph-*` unit is loaded and no session file remains.
+`deploy/decommission.yml` targets `[previous]` and refuses unless `-e retire_host=<that inventory name>` matches. It stops and disables every `itgraph-*` unit and timer, removes their unit files and reloads systemd, deletes the session and its journal, deletes `.env`, runs `docker compose down -v` in the checkout (the database volume holds `yt_raw_*` rows, which may not outlive 30 days), removes the checkout, unmasks the sleep targets and removes the logind drop-in. It keeps `~/itgraph-backups`. Docker, ufw, uv and the swap file stay: they are the laptop's now, not itgraph's. logind is not restarted — on a machine with a graphical session that can end the session — and reads its defaults at the next boot. It ends by asserting that no `itgraph-*` unit is loaded, no session file remains, and Docker holds no volume of the `itgraph` Compose project; it runs with `-K`, since sudo on the laptop asks for a password.
 
 ## Risks / Trade-offs
 
@@ -221,7 +221,7 @@ Postgres keeps the Compose flags (`shared_buffers=512MB`, `work_mem=64MB`, `main
 1. The operator makes the ghcr package public after the first CI build.
 2. The operator creates the B2 bucket with both lifecycle rules, a key restricted to it with `listFiles` and `writeFiles`, and sets the account's data caps to $0.
 3. The operator generates the age identity on the Mac and stores it in the password manager; the recipient goes into `main.yml`.
-4. The operator extracts the VPN outbound from the client configuration for the server the laptop uses, and adds to the vault: `proxy_outbound`, a random `proxy_socks_password`, `b2_key_id`, `b2_application_key`, `b2_bucket_name`. The old `proxy_*` endpoint keys are removed.
+4. The operator extracts the VPN outbound from the client configuration for the server the laptop uses, and adds to the vault: `proxy_outbound`, a random `proxy_socks_password` of 20 or more letters and digits (the exit check puts it in a proxy URL), `b2_key_id`, `b2_application_key`, `b2_bucket_name`. The old `proxy_*` endpoint keys are removed.
 5. The inventory: the k3s host under `[collector]` as root with `itgraph_storage_class`; the laptop under `[previous]`.
 6. `ansible-playbook deploy/playbook.yml --tags prepare`. Then a review round trip through `scripts/on-host.sh` against the empty database.
 
@@ -236,7 +236,7 @@ Postgres keeps the Compose flags (`shared_buffers=512MB`, `work_mem=64MB`, `main
 
 11. A day of watching: snapshots, alerts and the bot, a backup and its off-site copies, `watch-status`.
 12. The YouTube key restricted to the server's IPv4 address.
-13. `ansible-playbook deploy/decommission.yml -e retire_host=<name>`, within days, not weeks; then remove `[previous]` from the inventory.
+13. `ansible-playbook deploy/decommission.yml -K -e retire_host=<name>`, within days, not weeks; then remove `[previous]` from the inventory.
 14. A restore rehearsal from an off-site copy on the Mac: download, `age -d`, `pg_restore` into a scratch database whose name ends in `_test`.
 
 **Rollback.** Before step 9 starts the collector, the laptop's session has not been used anywhere else: re-enable its units. After it, scale `itgraph-watch` and `itgraph-bot` to 0 first, copy the session from the volume back to the laptop (it has the newer entity cache), then re-enable the laptop's units. Data collected on the server in between is in its dumps.

@@ -78,6 +78,20 @@
         quiet: true
       tags: [always]
 
+    # The exit check puts it in a proxy URL, and a `@`, `:` or `/` there
+    # breaks the URL rather than the password — a check that fails for
+    # a reason it cannot name. A generator's letters and digits lose
+    # nothing at twenty characters and more.
+    - name: The SOCKS password is random and URL-safe
+      ansible.builtin.assert:
+        that: proxy_socks_password is match('^[A-Za-z0-9]{20,}$')
+        fail_msg: >-
+          proxy_socks_password in the vault must be 20 or more letters
+          and digits, from a generator — nothing else, so that it fits a
+          proxy URL unescaped.
+        quiet: true
+      tags: [always]
+
     # ------------------------------------------------- the image (always)
 
     # The controller's checkout knows the URL; the registry answers
@@ -115,7 +129,10 @@
           | sed -n 's/.*"token": *"\([^"]*\)".*/\1/p') || exit 0;
           test -n "$token" || exit 0;
           curl -fsSI -H "Authorization: Bearer $token"
-          -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json"
+          -H "Accept: application/vnd.oci.image.index.v1+json,
+          application/vnd.docker.distribution.manifest.list.v2+json,
+          application/vnd.oci.image.manifest.v1+json,
+          application/vnd.docker.distribution.manifest.v2+json"
           "https://ghcr.io/v2/{{ itgraph_image_repository | replace('ghcr.io/', '') }}/manifests/{{ itgraph_commit }}"
           | tr -d '\r'
           | sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest: *//p' || exit 0
@@ -174,12 +191,16 @@
       changed_when: false
       tags: [prepare]
 
+    # `always`, like its removal at the end: every part renders into it
+    # — the console under `migrate`, the services under `services`, the
+    # secrets under `config` — and the last task of every run, whatever
+    # was selected, takes it away again.
     - name: The transfer directory
       ansible.builtin.file:
         path: "{{ transfer_dir }}"
         state: directory
         mode: "0700"
-      tags: [prepare, data, session]
+      tags: [always]
 
     - name: Render the namespace's objects
       ansible.builtin.template:
@@ -216,45 +237,49 @@
 
     # ------------------------------------------------------------ config
 
-    # no_log here and not on the apply: a template failure shows the
-    # line it failed on, and these lines are the secrets; kubectl apply
-    # prints object names, never content.
-    - name: Render the secrets and the proxy
-      ansible.builtin.template:
-        src: "k8s/{{ item }}.yml.j2"
-        dest: "{{ transfer_dir }}/{{ item }}.yml"
-        mode: "0600"
-      no_log: true
-      loop:
-        - secret-env
-        - secret-postgres
-        - secret-proxy
-        - proxy
+    # A block with `always`, so the rendered Secrets leave the host even
+    # when the apply fails: they are the bot token, the api hash and the
+    # VPN credentials in plain text.
+    - name: The secrets and the proxy
       tags: [prepare, config]
+      block:
+        # no_log here and not on the apply: a template failure shows the
+        # line it failed on, and these lines are the secrets; kubectl
+        # apply prints object names, never content.
+        - name: Render the secrets and the proxy
+          ansible.builtin.template:
+            src: "k8s/{{ item }}.yml.j2"
+            dest: "{{ transfer_dir }}/{{ item }}.yml"
+            mode: "0600"
+          no_log: true
+          loop:
+            - secret-env
+            - secret-postgres
+            - secret-proxy
+            - proxy
 
-    - name: Apply the secrets and the proxy
-      ansible.builtin.command: >-
-        {{ kubectl }} apply --server-side --field-manager=itgraph
-        -f {{ transfer_dir }}/{{ item }}.yml
-      register: config_applied
-      changed_when: "'configured' in config_applied.stdout or 'created' in config_applied.stdout"
-      loop:
-        - secret-env
-        - secret-postgres
-        - secret-proxy
-        - proxy
-      tags: [prepare, config]
+        - name: Apply the secrets and the proxy
+          ansible.builtin.command: >-
+            {{ kubectl }} apply --server-side --field-manager=itgraph
+            -f {{ transfer_dir }}/{{ item }}.yml
+          register: config_applied
+          changed_when: "'configured' in config_applied.stdout or 'created' in config_applied.stdout"
+          loop:
+            - secret-env
+            - secret-postgres
+            - secret-proxy
+            - proxy
 
-    - name: Remove the rendered secrets from the host
-      ansible.builtin.file:
-        path: "{{ transfer_dir }}/{{ item }}.yml"
-        state: absent
-      loop:
-        - secret-env
-        - secret-postgres
-        - secret-proxy
-        - proxy
-      tags: [prepare, config]
+      always:
+        - name: Remove the rendered secrets from the host
+          ansible.builtin.file:
+            path: "{{ transfer_dir }}/{{ item }}.yml"
+            state: absent
+          loop:
+            - secret-env
+            - secret-postgres
+            - secret-proxy
+            - proxy
 
     - name: The proxy is up
       ansible.builtin.command: >-
@@ -262,18 +287,22 @@
       changed_when: false
       tags: [prepare, config]
 
-    # The console is applied under every tag that runs a command
-    # through it — the migration, the session probe, the checks. It is
-    # a tool, not a collector: rolling it to the new image before the
-    # schema gate is safe, and it is what makes the migration run the
-    # deployed code instead of the code of some earlier deploy.
+    # The console is applied under every tag that changes something
+    # through it — the migration, the session copy, and the schema gate
+    # in front of the services. It is a tool, not a collector: rolling
+    # it to the new image before the gate is safe, and it is what makes
+    # the migration run the deployed code, and the gate ask the deployed
+    # code's head, instead of the code of some earlier deploy.
+    #
+    # Not under `verify`: a check alone must not move the console to
+    # whatever master is now. The checks use the console as it stands.
     - name: Render the console
       ansible.builtin.template:
         src: k8s/console.yml.j2
         dest: "{{ transfer_dir }}/console.yml"
         mode: "0600"
       register: console_rendered
-      tags: [prepare, data, migrate, session, verify]
+      tags: [prepare, data, migrate, session, services]
 
     - name: Apply the console
       ansible.builtin.command: >-
@@ -281,19 +310,19 @@
         -f {{ transfer_dir }}/console.yml
       register: console_applied
       changed_when: "'configured' in console_applied.stdout or 'created' in console_applied.stdout"
-      tags: [prepare, data, migrate, session, verify]
+      tags: [prepare, data, migrate, session, services]
 
     - name: The console is up
       ansible.builtin.command: >-
         {{ kubectl }} rollout status deploy/itgraph-console --timeout=180s
       changed_when: false
-      tags: [prepare, data, migrate, session, verify]
+      tags: [prepare, data, migrate, session, services]
 
     - name: Remove the rendered console from the host
       ansible.builtin.file:
         path: "{{ transfer_dir }}/console.yml"
         state: absent
-      tags: [prepare, data, migrate, session, verify]
+      tags: [prepare, data, migrate, session, services]
 
     # The exit check, run wherever the proxy is deployed or checked.
     # `api.ipify.org` answers over IPv4 only, so both readings are
@@ -515,18 +544,19 @@
       when: restore_needed | bool
       tags: [data]
       block:
-        # `copy_links` is load-bearing: the operator's dump path often
-        # points through a symlink, and `synchronize` defaults to
-        # `archive: yes` — rsync `-a`, which includes `-l` and copies a
-        # symlink *as a symlink*. The destination then dangles at a
-        # filename that exists only on the operator's machine, and the
-        # restore fails with a bare "No such file or directory" that says
-        # nothing about why. `-L` sends what the link points at.
+        # `copy`, not `synchronize`: rsync would have to be on the host,
+        # and the deploy installs nothing there — a missing rsync would
+        # surface here, mid-cutover, with the old host already stopped.
+        # `copy` goes over the SSH connection itself, as a file transfer
+        # rather than as module arguments, and follows a symlink on this
+        # side (`local_follow`), so a dump path through `…-LATEST.dump`
+        # sends the dump and not a link dangling at a name that exists
+        # only here.
         - name: Ship the dump
-          ansible.posix.synchronize:
+          ansible.builtin.copy:
             src: "{{ itgraph_dump_src }}"
             dest: "{{ transfer_dir }}/itgraph.dump"
-            copy_links: true
+            mode: "0600"
 
         # Checked before the restore rather than after: `pg_restore`
         # reading a missing or empty file reports it as a shell redirect
@@ -592,8 +622,17 @@
               machine that made it.
             quiet: true
 
-    # Unconditional: also clears a dump left behind by an earlier run that
-    # failed between shipping it and getting here.
+      # Whatever happened above: the dump is the operator's whole
+      # inventory, subscriptions included, and the volume is where it
+      # belongs now — not a file left in /root by a run that failed.
+      always:
+        - name: Remove the dump from the host after the restore
+          ansible.builtin.file:
+            path: "{{ transfer_dir }}/itgraph.dump"
+            state: absent
+
+    # Unconditional: also clears a dump left behind by an earlier run
+    # that was killed outright, where not even `always` ran.
     - name: Remove the dump from the host
       ansible.builtin.file:
         path: "{{ transfer_dir }}/itgraph.dump"
@@ -891,11 +930,13 @@
         - session_presence.stdout | default('missing') | trim != 'present'
       tags: [session]
       block:
+        # `copy` for the dump's reason: nothing on the host to rely on
+        # but the SSH connection.
         - name: Ship the session
-          ansible.posix.synchronize:
+          ansible.builtin.copy:
             src: "{{ itgraph_session_src }}"
             dest: "{{ transfer_dir }}/itgraph.session"
-            copy_links: true
+            mode: "0600"
 
         # Into the volume through the transfer file — bytes, not text,
         # so not through Ansible's `stdin` — and readable by the
@@ -937,30 +978,67 @@
               {{ session_volume_path }} in the volume.
             quiet: true
 
+      # Whatever happened above: the session is a full key to the
+      # account, and a failed copy must not leave a second one in /root.
+      always:
+        - name: Remove the session from the host after the copy
+          ansible.builtin.file:
+            path: "{{ transfer_dir }}/itgraph.session"
+            state: absent
+
     # Unconditional: also clears a session left behind by an earlier run
-    # that failed between shipping it and getting here. It is a full key
-    # to the account, and the volume has the only copy that should
-    # remain.
+    # that was killed outright, where not even `always` ran. The volume
+    # has the only copy that should remain.
     - name: Remove the session from the host
       ansible.builtin.file:
         path: "{{ transfer_dir }}/itgraph.session"
         state: absent
       tags: [session]
 
+    # A copy made without consulting the previous host says so in the
+    # same breath: that is the one copy the operator vouched for by hand.
     - name: What happened to the session
       ansible.builtin.set_fact:
         session_report: >-
-          {{ 'copied'
+          {{ ('copied' ~ (', previous-host check skipped on request'
+                          if session_previous_host | default('') == 'none'
+                          else ', previous host checked and stopped'))
                if shipped_session_sum is defined
                   and shipped_session_sum is not skipped
              else 'kept (the volume has one)'
                if volume_session.rc | default(1) == 0
-             else 'previous-host check skipped on request'
-                  if session_previous_host | default('') == 'none'
              else 'not run' }}
       tags: [session]
 
     # ------------------------------------------------------------ services
+
+    # `scripts/on-host.sh --loop stop` scales the collector to zero for a
+    # command that needs the session. A deploy then must not start it
+    # behind the operator's back — the command holds the lease, and the
+    # new collector would only crash-loop on it — and it could not
+    # quietly anyway: the templates own `replicas: 1` through server-side
+    # apply, `kubectl scale` set it to 0, and the apply would stop on a
+    # field conflict that names neither. So the question is asked first,
+    # and answered in words. Nothing found means a fresh host.
+    - name: What the collector and the bot are scaled to
+      ansible.builtin.command: >-
+        {{ kubectl }} get deploy itgraph-watch itgraph-bot --ignore-not-found
+        -o jsonpath='{range .items[*]}{.metadata.name}={.spec.replicas}{" "}{end}'
+      register: current_replicas
+      changed_when: false
+      tags: [services]
+
+    - name: Neither is stopped by hand
+      ansible.builtin.assert:
+        that: "'=0' not in current_replicas.stdout"
+        fail_msg: >-
+          Scaled to zero by hand: {{ current_replicas.stdout | trim }}. The
+          collector is stopped with `scripts/on-host.sh --loop stop` for a
+          command that needs the session; let that command finish, then
+          `scripts/on-host.sh --loop start` (and `k3s kubectl -n itgraph
+          scale deploy/itgraph-bot --replicas=1` for the bot), and re-run.
+        quiet: true
+      tags: [services]
 
     - name: Render the services
       ansible.builtin.template:
@@ -1026,20 +1104,50 @@
 
     # A rollout reported complete only means a pod exists. Crash-looping
     # counts as available to the Deployment controller, so the pods are
-    # watched for a settling period and any restart fails the deploy —
+    # watched for a settling period and a restart fails the deploy —
     # here, where the name and the exit are still on the screen.
+    #
+    # A restart *during this deploy*, that is. The collector exits on
+    # purpose when it stops making progress, and the cluster restarts
+    # it; one such restart last week must not fail every deploy after
+    # it. So the counts are read per pod before the settling minute and
+    # after it, and must not move; a pod this run created must have none
+    # at all; and every pod must be ready at the end — one in
+    # CrashLoopBackOff can sit out the whole minute between restarts
+    # with its count unchanged.
+    - name: Restarts before settling
+      ansible.builtin.command: >-
+        {{ kubectl }} get pods -l app={{ item }}
+        -o jsonpath='{range .items[*]}{.metadata.name}={.status.containerStatuses[0].restartCount}{" "}{end}'
+      register: restarts_before
+      changed_when: false
+      loop:
+        - itgraph-watch
+        - itgraph-bot
+      tags: [services]
+
     - name: Let them settle
       ansible.builtin.pause:
         seconds: 60
       tags: [services]
 
-    - name: Did either restart while settling
+    - name: Restarts after settling
       ansible.builtin.command: >-
         {{ kubectl }} get pods -l app={{ item }}
-        -o jsonpath='{.items[*].status.containerStatuses[0].restartCount}'
-      register: restart_counts
+        -o jsonpath='{range .items[*]}{.metadata.name}={.status.containerStatuses[0].restartCount}{" "}{end}'
+      register: restarts_after
       changed_when: false
-      failed_when: false
+      loop:
+        - itgraph-watch
+        - itgraph-bot
+      tags: [services]
+
+    - name: Readiness after settling
+      ansible.builtin.command: >-
+        {{ kubectl }} get pods -l app={{ item }}
+        -o jsonpath='{range .items[*]}{.status.containerStatuses[0].ready}{" "}{end}'
+      register: readiness
+      changed_when: false
       loop:
         - itgraph-watch
         - itgraph-bot
@@ -1058,16 +1166,30 @@
         - itgraph-bot
       tags: [services]
 
-    - name: Neither service kept restarting
+    - name: Neither service restarted during the deploy
       ansible.builtin.assert:
-        that: restart_counts.results[index].stdout | replace(' ', '') in ['', '0']
+        # The last condition: a pod this run created — its template was
+        # `configured` in the apply — must not have restarted at all.
+        that:
+          - after == before
+          - ready == 'true'
+          - >-
+            (item | replace('itgraph-', '')) not in rolled_here
+            or after | regex_findall('=([0-9]+)') | map('int') | sum == 0
         fail_msg: >-
-          {{ item }} restarted {{ restart_counts.results[index].stdout | replace(' ', '') }}
-          time(s) within a minute of rollout and last exited
-          {{ last_exits.results[index].stdout | default('?', true) }}.
+          {{ item }} is not running cleanly: restarts {{ before or 'none' }}
+          before settling and {{ after or 'none' }} after, ready
+          "{{ ready }}", rolled out by this run:
+          {{ 'yes' if (item | replace('itgraph-', '')) in rolled_here else 'no' }};
+          last exited {{ last_exits.results[index].stdout | default('?', true) }}.
           A rollout reported complete is not proof that it runs — see
           `{{ kubectl }} describe pod -l app={{ item }}` and its logs.
         quiet: true
+      vars:
+        before: "{{ restarts_before.results[index].stdout | trim }}"
+        after: "{{ restarts_after.results[index].stdout | trim }}"
+        ready: "{{ readiness.results[index].stdout | trim }}"
+        rolled_here: "{{ services_applied.results | default([]) | selectattr('changed') | map(attribute='item') | list }}"
       loop:
         - itgraph-watch
         - itgraph-bot
@@ -1114,9 +1236,55 @@
       failed_when: false
       tags: [verify]
 
+    # The line is logged once per start, and the kubelet rotates
+    # container logs: a collector that has run for months may no longer
+    # have it in the file `kubectl logs` reads. Only then — no line, and
+    # a container that started over an hour ago — is the route read from
+    # the running container's environment instead, which is where the
+    # line's values come from. A collector without the line that started
+    # recently has not got as far as connecting, and that fails below.
+    - name: How long the collector has been running
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          started=$({{ kubectl }} get pods -l app=itgraph-watch
+          -o jsonpath='{.items[0].status.containerStatuses[0].state.running.startedAt}');
+          test -n "$started" && echo $(( $(date +%s) - $(date -d "$started" +%s) ))
+        executable: /bin/bash
+      register: watch_uptime
+      changed_when: false
+      failed_when: false
+      when: "'Telegram route:' not in watch_route.stdout"
+      tags: [verify]
+
+    - name: The route, from the environment of a long-running collector
+      ansible.builtin.command: >-
+        {{ kubectl }} exec deploy/itgraph-watch -c itgraph --
+        printenv PROXY_TYPE PROXY_HOST PROXY_PORT
+      register: watch_proxy_env
+      changed_when: false
+      failed_when: false
+      when:
+        - "'Telegram route:' not in watch_route.stdout"
+        - watch_uptime.stdout | default('') | trim | int > 3600
+      tags: [verify]
+
+    - name: Say so when the route came from the environment
+      ansible.builtin.debug:
+        msg: >-
+          itgraph-watch has run for {{ watch_uptime.stdout | trim }} s and
+          its "Telegram route:" line has rotated out of the log; the
+          route was read from its environment instead:
+          {{ watch_proxy_env.stdout_lines | join(' ') }}.
+      when: watch_proxy_env is defined and watch_proxy_env is not skipped
+      tags: [verify]
+
     - name: The collector says which route it took
       ansible.builtin.assert:
-        that: "'Telegram route:' in watch_route.stdout"
+        that: >-
+          'Telegram route:' in watch_route.stdout
+          or (watch_proxy_env is defined and watch_proxy_env is not skipped
+              and watch_proxy_env.rc == 0)
         fail_msg: >-
           itgraph-watch has logged no "Telegram route:" line since it
           started, so which way it reaches Telegram is unknown. It is
@@ -1132,6 +1300,22 @@
         fail_msg: >-
           Connected directly. PROXY_* did not reach the process — check
           the itgraph-env Secret and the Deployment's envFrom.
+        quiet: true
+      tags: [verify]
+
+    # Not direct is not yet enough: the route must be the namespace's
+    # own proxy, the one whose exit was just checked.
+    - name: The route is the namespace's proxy
+      ansible.builtin.assert:
+        that: >-
+          ('Telegram route: socks5 proxy at itgraph-proxy:1080' in watch_route.stdout)
+          if 'Telegram route:' in watch_route.stdout
+          else (watch_proxy_env.stdout_lines | default([])
+                == ['socks5', 'itgraph-proxy', '1080'])
+        fail_msg: >-
+          The collector reaches Telegram through something other than
+          itgraph-proxy:1080 — not the proxy whose exit this deploy
+          checked. Check PROXY_* in the itgraph-env Secret.
         quiet: true
       tags: [verify]
 

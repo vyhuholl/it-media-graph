@@ -15,11 +15,14 @@ SCRIPT = Path(__file__).parent.parent / "scripts" / "on-host.sh"
 
 # Marks the start of each invocation, so the two kubectl calls of a
 # `--loop` form stay two calls. An `exec` reads standard input, which is
-# what `-i` passes through.
+# what `-i` passes through. `wait` and `get` can be told how to answer,
+# for the loop that is already stopped and the one that will not stop.
 FAKE_K3S = """#!/usr/bin/env bash
 echo '---' >> "$HOME/k3s-args.txt"
 for arg in "$@"; do printf '[%s]\\n' "$arg"; done >> "$HOME/k3s-args.txt"
 case " $* " in *" exec "*) cat > "$HOME/stdin.txt" ;; esac
+case " $* " in *" wait "*) exit "${FAKE_WAIT_EXIT:-${FAKE_EXIT:-0}}" ;; esac
+case " $* " in *" get "*) printf '%s' "${FAKE_PODS:-}" ;; esac
 exit "${FAKE_EXIT:-0}"
 """
 
@@ -145,7 +148,7 @@ def test_loop_stop_scales_to_zero_and_waits_for_the_pod(
         "itgraph",
         "scale",
         "deploy/itgraph-watch",
-        "--to=0",
+        "--replicas=0",
     ]
     assert calls[1][:2] == ["kubectl", "-n"]
     assert calls[1][3:8] == [
@@ -155,6 +158,27 @@ def test_loop_stop_scales_to_zero_and_waits_for_the_pod(
         "-l",
         "app=itgraph-watch",
     ]
+    # The wait answered; nothing more is asked.
+    assert len(calls) == 2
+
+
+def test_loop_stop_on_a_stopped_loop_succeeds(env: dict[str, str]) -> None:
+    # `wait` by label fails when nothing matches — and nothing matching
+    # is exactly a loop that is already stopped.
+    result = _run({**env, "FAKE_WAIT_EXIT": "1"}, "--loop", "stop")
+
+    assert result.returncode == 0, result.stderr
+    assert _calls(env)[2][3:7] == ["get", "pods", "-l", "app=itgraph-watch"]
+
+
+def test_loop_stop_fails_while_the_pod_remains(env: dict[str, str]) -> None:
+    result = _run(
+        {**env, "FAKE_WAIT_EXIT": "1", "FAKE_PODS": "pod/itgraph-watch-x"},
+        "--loop",
+        "stop",
+    )
+
+    assert result.returncode != 0
 
 
 def test_loop_start_scales_to_one_and_waits_for_the_rollout(
@@ -170,7 +194,7 @@ def test_loop_start_scales_to_one_and_waits_for_the_rollout(
         "itgraph",
         "scale",
         "deploy/itgraph-watch",
-        "--to=1",
+        "--replicas=1",
     ]
     assert calls[1][3:6] == ["rollout", "status", "deploy/itgraph-watch"]
 

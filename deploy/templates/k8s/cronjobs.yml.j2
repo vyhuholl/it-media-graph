@@ -278,7 +278,10 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 0
-      activeDeadlineSeconds: 3000
+      # Ten minutes, as the systemd unit's TimeoutStartSec had it: a
+      # pass is minutes of work at most, and under Forbid a stuck one
+      # left for fifty would cost the three passes after it.
+      activeDeadlineSeconds: 600
       template:
         metadata:
           labels:

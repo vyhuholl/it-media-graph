@@ -34,6 +34,12 @@ spec:
           env:
             - name: TZ
               value: Europe/Moscow
+            # Below the mount, never the mount itself (see the top of
+            # this file). Fixed from the first start: moved later, it
+            # would leave the existing cluster behind at the old path
+            # and initialize an empty one beside it.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
           envFrom:
             - secretRef:
                 name: itgraph-postgres

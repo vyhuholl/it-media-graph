@@ -120,15 +120,14 @@
         masked: false
       loop: "{{ sleep_targets }}"
 
+    # Removed, and logind deliberately not restarted: on a machine with a
+    # graphical session a restart can end that session. Without the
+    # drop-in logind reads its defaults at the next boot; until then a
+    # closed lid merely does not suspend, which is what it did all along.
     - name: The logind drop-in removed
       ansible.builtin.file:
         path: "{{ logind_drop_in }}"
         state: absent
-
-    - name: Logind rereads its configuration
-      ansible.builtin.systemd_service:
-        name: systemd-logind
-        state: restarted
 
     # `systemd:` has no query mode — it asserts a state, which would
     # mask exactly the leftovers this check exists to catch.
@@ -149,16 +148,33 @@
         path: "{{ session_path }}"
       register: session_stat
 
+    # Asked of Docker, not inferred from the compose step having run: a
+    # checkout already gone skips that step, and the volume — with the
+    # yt_raw_* rows that may not outlive 30 days — would survive it in
+    # silence. Compose labels every volume with its project, which is
+    # the checkout's directory name.
+    - name: No volume of the itgraph Compose project remains
+      ansible.builtin.command:
+        cmd: >-
+          docker volume ls --quiet
+          --filter label=com.docker.compose.project={{ repo_dir | basename }}
+      register: compose_volumes
+      changed_when: false
+
     - name: Retirement is complete
       ansible.builtin.assert:
         that:
           - installed_units.stdout_lines | length == 0
           - loaded_units.stdout_lines | length == 0
           - not session_stat.stat.exists
+          - compose_volumes.stdout_lines | length == 0
         fail_msg: >-
           Something itgraph survived: {{ installed_units.stdout_lines
           + loaded_units.stdout_lines
-          + ([session_path] if session_stat.stat.exists else []) }}.
+          + ([session_path] if session_stat.stat.exists else [])
+          + compose_volumes.stdout_lines }}. A volume left here is
+          removed with `docker volume rm` — it holds the old database,
+          YouTube's rows included.
 
     - name: What stayed behind
       ansible.builtin.debug:

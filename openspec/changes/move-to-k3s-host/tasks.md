@@ -71,7 +71,7 @@ L() { ANSIBLE_VAULT_PASSWORD_FILE=deploy/.ansible-lint-vault-pass uv run ansible
 
 - [x] 9.1 (operator) B2: a private bucket; lifecycle rules for `inventory/` (hide after 30 days) and `full/` (hide after 28), both deleting a day after hiding; a key restricted to the bucket with `listFiles` and `writeFiles` only; every data cap at $0. Verify by trying a delete with that key: refused.
 - [x] 9.2 (operator) An age identity generated on the Mac and stored in the password manager; its recipient in `main.yml`. Verify a test file encrypted to the recipient decrypts with the stored identity.
-- [ ] 9.3 (operator) The vault: `proxy_outbound` from the client configuration of the server the laptop uses, a random `proxy_socks_password`, `b2_key_id`, `b2_application_key`, `b2_bucket_name`; the old proxy endpoint keys removed. Verify `ansible-vault view` shows the keys and `scripts/assert-vault-encrypted.sh` passes on commit.
+- [ ] 9.3 (operator) The vault: `proxy_outbound` from the client configuration of the server the laptop uses, a random `proxy_socks_password` of 20 or more letters and digits, `b2_key_id`, `b2_application_key`, `b2_bucket_name`; the old proxy endpoint keys removed. Verify `ansible-vault view` shows the keys and `scripts/assert-vault-encrypted.sh` passes on commit.
 - [ ] 9.4 (operator) `deploy/inventory.ini`: the server under `[collector]`, the laptop under `[previous]`. Verify `ansible collector -m ping` and `ansible previous -m ping`.
 
 ## 10. On the server
@@ -81,7 +81,7 @@ L() { ANSIBLE_VAULT_PASSWORD_FILE=deploy/.ansible-lint-vault-pass uv run ansible
 - [ ] 10.3 (operator) The cutover, design "Migration Plan" steps 7–10: stop and disable every `itgraph-*` unit on the laptop, `uv run itgraph backup --full` there, copy the dump and the session to a 0700 directory on the Mac, the full playbook, then delete both copies from the Mac. Verify the report says `restored`, the migration, the previous-host check passed, the session copied, and the route and address checks passed.
 - [ ] 10.4 (operator) A day later: new snapshots and alerts, a bot reply, `itgraph backup` having copied off-site (names visible in the bucket), `scripts/on-host.sh watch-status`. Verify each, and that log timestamps and the 04:30 and 05:00 runs are in Moscow time.
 - [ ] 10.5 (operator) The YouTube key restricted to the server's IPv4 address, the one the direct reading printed. Verify the next `itgraph-yt-watch` run succeeds.
-- [ ] 10.6 (operator) `ansible-playbook deploy/decommission.yml -e retire_host=<name>`, then `[previous]` removed from the inventory. Verify the playbook's final assertions pass.
+- [ ] 10.6 (operator) `ansible-playbook deploy/decommission.yml -K -e retire_host=<name>`, then `[previous]` removed from the inventory. Verify the playbook's final assertions pass.
 - [ ] 10.7 (operator) A restore rehearsal on the Mac from an off-site copy, per `src/itgraph/README.md`. Verify `pg_restore --list` reads it and the restored scratch database's seed channels match the server's count.
 
 ## Workflow follow-up

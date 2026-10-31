@@ -79,6 +79,8 @@ class FakeB2:
         self.confirm_checksum = confirm_checksum
         # (name, body, checksum sent) per upload.
         self.uploads: list[tuple[str, bytes, str]] = []
+        # (Content-Length, Transfer-Encoding) per upload, as sent.
+        self.framing: list[tuple[str | None, str | None]] = []
         self.listings: list[str] = []
         self.transport = httpx.MockTransport(self._handle)
 
@@ -128,7 +130,13 @@ class FakeB2:
             )
         if request.url.path == "/b2api/v2/b2_upload_file":
             assert request.headers["Authorization"] == "test-upload-token"
-            body_bytes = request.content
+            body_bytes = request.read()
+            self.framing.append(
+                (
+                    request.headers.get("Content-Length"),
+                    request.headers.get("Transfer-Encoding"),
+                )
+            )
             self.uploads.append(
                 (
                     request.headers["X-Bz-File-Name"],
@@ -172,6 +180,19 @@ def test_a_missing_copy_is_uploaded(
     assert checksum == hashlib.sha1(body).hexdigest()
     # And the ciphertext is not lying beside the dump it came from.
     assert [p.name for p in (tmp_path / "daily").iterdir()] == [dump.name]
+
+
+def test_the_upload_is_streamed_with_its_length_stated(
+    tmp_path: Path, configured: None, fake_age: None
+) -> None:
+    """B2 wants a length; the body is never read whole to get one."""
+    dump_at(tmp_path, "full", "weekly", NOW - timedelta(hours=2))
+    b2 = FakeB2()
+
+    copy_new_dumps(tmp_path, now=NOW, transport=b2.transport)
+
+    [(_, body, _)] = b2.uploads
+    assert b2.framing == [(str(len(body)), None)]
 
 
 def test_a_present_copy_is_not_uploaded_again(
@@ -310,6 +331,27 @@ def test_a_failing_age_fails_naming_the_dump(
         copy_new_dumps(tmp_path, now=NOW, transport=b2.transport)
 
     assert dump.name in str(caught.value)
+    assert b2.uploads == []
+    assert [p.name for p in (tmp_path / "daily").iterdir()] == [dump.name]
+
+
+def test_a_missing_age_fails_naming_the_dump(
+    tmp_path: Path, configured: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An image without `age` says so, rather than a traceback."""
+    dump = dump_at(tmp_path, "inventory", "daily", NOW - timedelta(hours=2))
+    b2 = FakeB2()
+
+    def missing(command: list[str], **kwargs: Any) -> Any:
+        raise FileNotFoundError(2, "No such file or directory", "age")
+
+    monkeypatch.setattr(offsite_module.subprocess, "run", missing)
+
+    with pytest.raises(OffsiteError) as caught:
+        copy_new_dumps(tmp_path, now=NOW, transport=b2.transport)
+
+    assert dump.name in str(caught.value)
+    assert "age could not run" in str(caught.value)
     assert b2.uploads == []
     assert [p.name for p in (tmp_path / "daily").iterdir()] == [dump.name]
 

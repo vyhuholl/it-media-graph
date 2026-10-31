@@ -68,3 +68,9 @@ RUN set -eux; \
     command -v curl
 
 USER itgraph
+# What the manifests' `args` are handed to: `args: ["watch"]` runs
+# `itgraph watch`. Without it the base image's `python3` is the command,
+# `args` replace it, and the kubelet looks for a binary called `watch`.
+# The console's `command: sleep` and every `kubectl exec` name their own
+# executable and are unaffected.
+ENTRYPOINT ["itgraph"]

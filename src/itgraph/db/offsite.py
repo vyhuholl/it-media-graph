@@ -25,6 +25,7 @@ import logging
 import os
 import subprocess
 import tempfile
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -61,6 +62,9 @@ AUTH_URL = "https://api.backblazeb2.com/b2api/v2/b2_authorize_account"
 CATCH_UP_WINDOW = timedelta(days=7)
 
 TIMEOUT = httpx.Timeout(60.0)
+
+# How much of a file is held at once, hashing or sending.
+CHUNK = 1024 * 1024
 
 
 class OffsiteError(RuntimeError):
@@ -209,11 +213,25 @@ def _remote_names(
         start = str(start)
 
 
+def _chunks(path: Path) -> Iterator[bytes]:
+    """The file, a chunk at a time, for hashing and for the request body."""
+    with path.open("rb") as handle:
+        while chunk := handle.read(CHUNK):
+            yield chunk
+
+
+def _sha1_of(path: Path) -> str:
+    digest = hashlib.sha1()
+    for chunk in _chunks(path):
+        digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _upload(
     client: httpx.Client,
     session: _Session,
     name: str,
-    data: bytes,
+    ciphertext: Path,
     checksum: str,
 ) -> None:
     """Upload the ciphertext and count it only once the store agrees.
@@ -221,6 +239,12 @@ def _upload(
     The SHA-1 travels with the upload and the answer carries the one
     the store computed; a copy that the store has not confirmed against
     a checksum computed here is not a copy.
+
+    The body is streamed from the file with its length stated, never
+    read whole: a full dump is hundreds of megabytes in a job with a
+    memory limit, which is the reason `age` runs as a CLI in the first
+    place. B2 wants a `Content-Length`, and httpx sends the stated one
+    rather than chunking.
     """
     try:
         granted = _payload(
@@ -239,11 +263,12 @@ def _upload(
             )
         response = client.post(
             str(upload_url),
-            content=data,
+            content=_chunks(ciphertext),
             headers={
                 "Authorization": str(upload_token),
                 "X-Bz-File-Name": quote(name, safe="/"),
                 "Content-Type": "b2/x-auto",
+                "Content-Length": str(ciphertext.stat().st_size),
                 "X-Bz-Content-Sha1": checksum,
             },
         )
@@ -278,21 +303,27 @@ def _copy_one(
     scratch = Path(scratch_name)
     try:
         with path.open("rb") as source, os.fdopen(handle, "wb") as sink:
-            result = subprocess.run(
-                ["age", "-r", recipient],
-                stdin=source,
-                stdout=sink,
-                stderr=subprocess.PIPE,
-                text=False,
-                check=False,
-            )
+            try:
+                result = subprocess.run(
+                    ["age", "-r", recipient],
+                    stdin=source,
+                    stdout=sink,
+                    stderr=subprocess.PIPE,
+                    text=False,
+                    check=False,
+                )
+            except OSError as exc:
+                # Missing, or not executable: the image ships `age`, so
+                # this is a broken image or a host it was never meant
+                # for — said as such, not as a traceback.
+                raise OffsiteError(
+                    f"age could not run for {path.name}: {exc}"
+                ) from exc
         if result.returncode != 0:
             detail = result.stderr.decode("utf-8", "replace").strip()
             raise OffsiteError(f"age failed on {path.name}: {detail}")
-        data = scratch.read_bytes()
-        checksum = hashlib.sha1(data).hexdigest()
         name = remote_name(kind, path)
-        _upload(client, session, name, data, checksum)
+        _upload(client, session, name, scratch, _sha1_of(scratch))
         return name
     finally:
         scratch.unlink(missing_ok=True)

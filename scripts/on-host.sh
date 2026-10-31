@@ -78,18 +78,24 @@ if [ "$1" = "--loop" ]; then
 	# a pod that is gone, a started one a rollout that finished. Without
 	# the wait, the session-needing command right after `--loop stop`
 	# races the collector's shutdown — and loses its lease.
+	#
+	# `wait --for=delete` by label fails when nothing matches, which is
+	# also what a loop already stopped looks like; so a failed wait is
+	# asked once more, plainly: is any collector pod still there?
 	case "${2-}" in
 	stop)
 		exec ssh -T "$user@$host" \
-			"k3s kubectl -n itgraph scale deploy/itgraph-watch --to=0 \
-			&& k3s kubectl -n itgraph wait --for=delete pod \
-			-l app=itgraph-watch --timeout=180s"
+			"k3s kubectl -n itgraph scale deploy/itgraph-watch --replicas=0 \
+			&& { k3s kubectl -n itgraph wait --for=delete pod \
+			-l app=itgraph-watch --timeout=180s \
+			|| [ -z \"\$(k3s kubectl -n itgraph get pods \
+			-l app=itgraph-watch -o name)\" ]; }"
 		;;
 	start)
 		exec ssh -T "$user@$host" \
-			"k3s kubectl -n itgraph scale deploy/itgraph-watch --to=1 \
+			"k3s kubectl -n itgraph scale deploy/itgraph-watch --replicas=1 \
 			&& k3s kubectl -n itgraph rollout status \
-			deploy/itgraph-watch -n itgraph --timeout=180s"
+			deploy/itgraph-watch --timeout=180s"
 		;;
 	*)
 		usage

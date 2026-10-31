@@ -95,7 +95,41 @@ docker compose exec -T postgres psql -U itgraph -d itgraph_restore_test \
 
 Восстанавливать поверх рабочей базы имеет смысл только когда уже понятно, что именно потеряно: `pg_restore --data-only --table=channels` дольёт строки, не трогая схему.
 
-После восстановления YouTube-каналы на месте вместе с разметкой, а названий и handle у них нет: `yt_raw_channels` пустая. Их возвращает `itgraph yt refresh`. Таймер на хосте запустит его сам в течение суток, а руками это одна команда.
+##### На хосте сбора
+
+Там копии лежат в томе `itgraph-backups`, примонтированном в консоль (`/backups`), а `pg_restore` есть в поде Postgres. Дамп идёт из одного в другой потоком, на самом хосте файлов не остаётся. Каждая удалённая команда целиком в одинарных кавычках: ssh склеивает аргументы в строку, и удалённый shell разобрал бы их заново.
+
+Репетиция — в одноразовую базу, имя которой кончается на `_test`:
+
+```bash
+ssh -T root@ХОСТ 'k3s kubectl -n itgraph exec itgraph-postgres-0 -- \
+  psql -U itgraph -d postgres -c "CREATE DATABASE itgraph_restore_test"'
+ssh -T root@ХОСТ 'k3s kubectl -n itgraph exec deploy/itgraph-console -c itgraph -- \
+  cat /backups/weekly/full-LATEST.dump \
+  | k3s kubectl -n itgraph exec -i itgraph-postgres-0 -- \
+  pg_restore -U itgraph -d itgraph_restore_test --no-owner'
+ssh -T root@ХОСТ 'k3s kubectl -n itgraph exec itgraph-postgres-0 -- \
+  psql -U itgraph -d itgraph_restore_test -c "SELECT status, count(*) FROM channels GROUP BY status"'
+ssh -T root@ХОСТ 'k3s kubectl -n itgraph exec itgraph-postgres-0 -- \
+  psql -U itgraph -d postgres -c "DROP DATABASE itgraph_restore_test"'
+```
+
+Поверх рабочей базы — это путь, на который указывает плейбук, остановившийся на базе с колонками без типов. Сначала остановить всех, кто пишет: коллектор, бота и все CronJob'ы. CronJob'ы удаляются, а не приостанавливаются: следующий полный прогон создаст их заново, тогда как `suspend`, выставленный руками, плейбук не снимает — это поле не его.
+
+```bash
+ssh -T root@ХОСТ 'k3s kubectl -n itgraph scale deploy/itgraph-watch deploy/itgraph-bot --replicas=0 \
+  && k3s kubectl -n itgraph delete cronjob --all'
+ssh -T root@ХОСТ 'k3s kubectl -n itgraph exec deploy/itgraph-console -c itgraph -- \
+  cat /backups/weekly/full-LATEST.dump \
+  | k3s kubectl -n itgraph exec -i itgraph-postgres-0 -- \
+  pg_restore -U itgraph -d itgraph --no-owner --clean --if-exists'
+ssh -T root@ХОСТ 'k3s kubectl -n itgraph scale deploy/itgraph-watch deploy/itgraph-bot --replicas=1'
+ansible-playbook deploy/playbook.yml
+```
+
+Полный прогон после восстановления проверит согласованность базы, домигрирует схему, если дамп старше кода, вернёт CronJob'ы и проверит, что всё работает. `full-LATEST.dump` — последний **проверенный** полный дамп, а не последний вообще. Если нужен другой, список лежащих в томе: `ssh -T root@ХОСТ 'k3s kubectl -n itgraph exec deploy/itgraph-console -c itgraph -- ls -l /backups/weekly'`.
+
+После восстановления YouTube-каналы на месте вместе с разметкой, а названий и handle у них нет: `yt_raw_channels` пустая. Их возвращает `itgraph yt refresh`. На хосте сбора его сам запустит CronJob `itgraph-yt-refresh` в течение суток, а руками это одна команда.
 
 Видео и снимки их счётчиков после восстановления не возвращаются никак: `yt_raw_videos` и `yt_raw_video_stats` пустые. Ближайший проход `yt watch` впервые перечислит загрузки каждого канала и снова возьмёт под наблюдение видео моложе горизонта, но снимки, снятые до восстановления, потеряны. Они и так прожили бы не больше 30 дней.
 
@@ -1057,7 +1091,7 @@ scripts/on-host.sh yt channels --status seed
 
 ### Цикл опроса: `yt watch`
 
-Один проход цикла: найти новые загрузки сидов и снять счётчики видео, у которых подошёл срок. На хосте проход запускает CronJob `itgraph-yt-watch` каждые 15 минут, если в vault задан ключ; частоту меняет переменная `itgraph_yt_watch_schedule` (формат cron), расписание — московское. Демона нет: каждый запуск — отдельный под, который делает свою работу и выходит; `Forbid` не даёт двум проходам идти одновременно. Зависший проход срубается по `activeDeadlineSeconds` — 50 минут, иначе он молча заблокировал бы все следующие.
+Один проход цикла: найти новые загрузки сидов и снять счётчики видео, у которых подошёл срок. На хосте проход запускает CronJob `itgraph-yt-watch` каждые 15 минут, если в vault задан ключ; частоту меняет переменная `itgraph_yt_watch_schedule` (формат cron), расписание — московское. Демона нет: каждый запуск — отдельный под, который делает свою работу и выходит; `Forbid` не даёт двум проходам идти одновременно. Зависший проход срубается по `activeDeadlineSeconds` — 10 минут, как было в `TimeoutStartSec` юнита systemd, — иначе он молча заблокировал бы все следующие.
 
 ```bash
 uv run itgraph yt watch

@@ -147,6 +147,42 @@ def test_one_image_everywhere() -> None:
     assert len(images) >= 10
 
 
+DOCKERFILE = Path(__file__).parents[1] / "Dockerfile"
+
+
+def test_args_reach_the_entry_point() -> None:
+    # A container that gives only `args` runs them through the image's
+    # ENTRYPOINT; without one, `args: ["watch"]` asks the kubelet for a
+    # binary called `watch`. So the final stage must name `itgraph`,
+    # and every itgraph container must either use it or name its own
+    # command — the console's `sleep`.
+    final_stage = DOCKERFILE.read_text().rsplit("\nFROM ", 1)[1]
+    entrypoints = [
+        line.strip()
+        for line in final_stage.splitlines()
+        if line.startswith("ENTRYPOINT")
+    ]
+    assert entrypoints == ['ENTRYPOINT ["itgraph"]']
+
+    for name, pod_spec in pod_specs(render_all()):
+        for container in containers(pod_spec):
+            if not container["image"].startswith(IMAGE.split("@")[0]):
+                continue
+            if "command" in container:
+                assert name == "itgraph-console", name
+                continue
+            assert container["args"], name
+            assert container["args"][0] != "itgraph", name
+
+
+def test_postgres_data_lives_below_its_mount() -> None:
+    postgres = named(render_all(), "StatefulSet", "itgraph-postgres")
+    [container] = postgres["spec"]["template"]["spec"]["containers"]
+    env = {entry["name"]: entry.get("value") for entry in container["env"]}
+    [mount] = [m for m in container["volumeMounts"] if m["name"] == "data"]
+    assert env["PGDATA"].startswith(mount["mountPath"] + "/")
+
+
 def test_watch_and_bot_run_one_at_a_time() -> None:
     objects = render_all()
     for name in ("itgraph-watch", "itgraph-bot"):
@@ -165,7 +201,9 @@ def test_watch_and_bot_run_one_at_a_time() -> None:
 SCHEDULES = {
     "itgraph-alerts": ("2-59/15 * * * *", 600, 3000),
     "itgraph-score": ("8-59/15 * * * *", 600, 3000),
-    "itgraph-yt-watch": ("*/15 * * * *", 600, 3000),
+    # Ten minutes, the old unit's TimeoutStartSec: under Forbid a stuck
+    # pass blocks the passes after it.
+    "itgraph-yt-watch": ("*/15 * * * *", 600, 600),
     "itgraph-backup": ("40 */4 * * *", 10800, 7200),
     "itgraph-baselines": ("30 4 * * *", 82800, 10800),
     "itgraph-yt-refresh": ("0 5 * * *", 82800, 10800),
