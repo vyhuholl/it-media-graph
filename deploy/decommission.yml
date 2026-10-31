@@ -150,6 +150,13 @@
         cmd: systemctl list-unit-files itgraph-*.service itgraph-*.timer --no-legend
       register: installed_units
       changed_when: false # noqa: command-instead-of-module
+      # When nothing matches, list-unit-files exits 1 and prints nothing:
+      # the outcome this check is after, and judged by the assertion
+      # below. `list-units` exits 0 either way. Any other failure says
+      # why on standard error.
+      failed_when: >-
+        installed_units.rc not in [0, 1]
+        or installed_units.stderr | length > 0
 
     - name: Nothing itgraph is loaded
       ansible.builtin.command:
