@@ -76,6 +76,21 @@
       ansible.builtin.systemd_service:
         daemon_reload: true
 
+    # A unit that ended `failed` stays loaded with its file gone: systemd
+    # keeps it so the failure can still be read (CollectMode=, in
+    # systemd.unit(5)), and only `reset-failed` lets it go.
+    - name: The failed itgraph units
+      ansible.builtin.command:
+        cmd: systemctl list-units --state=failed itgraph-* --no-legend --plain
+      register: failed_units
+      changed_when: false # noqa: command-instead-of-module
+
+    - name: Systemd lets go of the failed units
+      ansible.builtin.command:
+        cmd: systemctl reset-failed itgraph-*
+      changed_when: true # noqa: command-instead-of-module
+      when: failed_units.stdout_lines | length > 0
+
     # While the checkout is still whole, so compose finds its file. The
     # volume holds yt_raw_* rows, which may not outlive 30 days — the
     # one step here where waiting is not free.
