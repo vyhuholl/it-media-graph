@@ -5,9 +5,17 @@
 #
 # [collector] is the k3s host. Everything the playbook does there goes
 # over SSH as root, through `k3s kubectl`: the deploy installs nothing
-# and changes nothing outside the itgraph namespace. itgraph_storage_class
-# is the host's own storage class for the three volume claims — on a
-# plain k3s, `local-path`.
+# and changes nothing outside the itgraph namespace.
+#
+# itgraph_storage_class is the host's storage class for the three volume
+# claims — the database with its snapshots, the Telegram session, the
+# dumps — and none of them can be rebuilt. So the class must keep a
+# volume's data when its claim is deleted (`reclaimPolicy: Retain`), and
+# `--tags prepare` refuses one that does not. k3s's own `local-path`
+# deletes it: on a plain k3s, add a class of the same provisioner with
+# `reclaimPolicy: Retain`. A claim keeps the class it was made with;
+# claims already made on the wrong one are deleted — while they are
+# still empty — and made again.
 #
 # [previous] is the host the Telegram session comes from — the laptop,
 # until it is retired. It is consulted only during a cutover, only when
@@ -15,7 +23,7 @@
 # collecting. Its user needs to read systemd, not to be root.
 
 [collector]
-itgraph ansible_host=192.0.2.10 ansible_user=root itgraph_storage_class=local-path
+itgraph ansible_host=192.0.2.10 ansible_user=root itgraph_storage_class=example-retaining-class
 
 [previous]
 laptop ansible_host=192.0.2.20 ansible_user=itgraph

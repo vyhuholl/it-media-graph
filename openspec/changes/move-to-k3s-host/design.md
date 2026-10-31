@@ -42,7 +42,7 @@ See [proposal.md](proposal.md), "Why". The requirements are in [specs/collection
  .env ──────────────────────────────▶  Secret itgraph-env (+ itgraph-proxy, itgraph-postgres)
 ```
 
-The namespace is `itgraph`. The storage class for the three volumes is `itgraph_storage_class`, set in the git-ignored inventory, because its name is part of the host's configuration rather than of this project. All three volumes need a class that retains data: the database and the session cannot be rebuilt, and the dumps are what rebuilds the database.
+The namespace is `itgraph`. The storage class for the three volumes is `itgraph_storage_class`, set in the git-ignored inventory, because its name is part of the host's configuration rather than of this project. All three volumes need a class that retains data: the database and the session cannot be rebuilt, and the dumps are what rebuilds the database. `prepare` asks the cluster for the class's `reclaimPolicy` before making any claim and refuses anything but `Retain` — the first deploy was nearly made on k3s's own `local-path`, which deletes a released volume, and nothing else would have said so.
 
 ### 2. The image, built by GitHub Actions
 

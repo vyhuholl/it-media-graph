@@ -202,6 +202,42 @@
         mode: "0700"
       tags: [always]
 
+    # The claims hold what cannot be rebuilt — the database with its
+    # snapshots, the session, the dumps — and on a class that deletes a
+    # released volume, one deleted claim is lost data with no message.
+    # k3s's own `local-path` is such a class, and nothing else would say
+    # so; so the class is asked here, before any claim is made on it. A
+    # claim keeps the class it was made with, which is why the message
+    # says how to remake claims already made on the wrong one.
+    - name: What the storage class does with a released volume
+      ansible.builtin.command: >-
+        k3s kubectl get storageclass {{ itgraph_storage_class }}
+        -o jsonpath={.reclaimPolicy}
+      register: storage_reclaim
+      changed_when: false
+      failed_when: false
+      tags: [prepare]
+
+    - name: The storage class keeps a volume's data
+      ansible.builtin.assert:
+        that:
+          - storage_reclaim.rc == 0
+          - storage_reclaim.stdout | trim == 'Retain'
+        fail_msg: >-
+          Storage class "{{ itgraph_storage_class }}"
+          {{ ('has reclaimPolicy ' ~ (storage_reclaim.stdout | trim | default('?', true)))
+             if storage_reclaim.rc == 0
+             else 'could not be read: ' ~ (storage_reclaim.stderr | trim) }}:
+          the database, the session and the dumps need Retain, so that a
+          deleted claim does not take its data with it. Name a class with
+          reclaimPolicy Retain as itgraph_storage_class in the inventory.
+          Claims already made on another class keep it: while they are
+          still empty, `k3s kubectl -n itgraph delete deploy itgraph-console`,
+          then `k3s kubectl -n itgraph delete pvc itgraph-database
+          itgraph-session itgraph-backups`, and re-run --tags prepare.
+        quiet: true
+      tags: [prepare]
+
     - name: Render the namespace's objects
       ansible.builtin.template:
         src: "k8s/{{ item }}.yml.j2"
