@@ -36,7 +36,7 @@ watch_timezone: Europe/Moscow
 # off-site secrets (b2_key_id, b2_application_key, b2_bucket_name,
 # backup_age_recipient) are set; anything in between is refused by the
 # settings loader.
-backup_age_recipient: ""
+backup_age_recipient: "age1xz2vthm0t8527lcgngsm0n76m3tscp07eqk903yd9qtjgtp6v36q50k594"
 
 # The schedules, in Europe/Moscow. Minutes staggered as the boot
 # offsets once staggered the timers; tests hold them to the change's

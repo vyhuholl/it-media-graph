@@ -28,7 +28,7 @@ L() { ANSIBLE_VAULT_PASSWORD_FILE=deploy/.ansible-lint-vault-pass uv run ansible
 - [x] 3.1 `Dockerfile`: builder on uv's image with `uv sync --locked --no-dev --no-editable`, `UV_COMPILE_BYTECODE=1`, `UV_PYTHON_DOWNLOADS=0`; runtime `python:<.python-version>-slim-trixie` with the environment copied in, PostgreSQL 16 client from PGDG, `age`, `curl`, `tzdata`, a fixed non-root UID, `PYTHONUNBUFFERED=1`, working directory with `alembic.ini`, `PATH` leading to the environment. Both base images pinned by digest, their Python version equal to `.python-version`. The build ends with the checks from design decision 2. Verify `docker buildx build --platform linux/amd64 --load .` on the Mac passes them.
 - [x] 3.2 `.dockerignore` as an allowlist: everything excluded, then the files the build needs. Verify a build from a working tree holding `.env`, a `*.session` and `deploy/.vault_pass` produces an image with none of them (`docker run --rm --entrypoint find <image> / -name '*.session' -o -name .env -o -name .vault_pass` prints nothing).
 - [x] 3.3 `.github/workflows/image.yml`: on push to `master`, build for `linux/amd64` and push `ghcr.io/vyhuholl/it-media-graph:<full sha>`; actions pinned by commit SHA; permissions `contents: read` and `packages: write` only. Verify `make validate` (pre-commit lints YAML) and, after the push, the run's log showing the digest.
-- [ ] 3.4 (operator) Make the ghcr package public. Verify `docker pull ghcr.io/vyhuholl/it-media-graph:<sha>` from a logged-out Docker succeeds.
+- [x] 3.4 (operator) Make the ghcr package public. Verify `docker pull ghcr.io/vyhuholl/it-media-graph:<sha>` from a logged-out Docker succeeds.
 - [x] 3.5 Root `CLAUDE.md`: "There is no CI" becomes CI that builds the image and gates nothing, pre-commit still the whole gate; hard rule 1 says how the image runs the entry point (design decision 2, pending the operator's confirmation). Verify by reading.
 
 ## 4. Manifests
@@ -65,12 +65,12 @@ L() { ANSIBLE_VAULT_PASSWORD_FILE=deploy/.ansible-lint-vault-pass uv run ansible
 ## 8. Plan and public pages
 
 - [x] 8.1 `docs/PLAN.md`: the Collection bullet on the shared exit records how it is met on the server (a proxy in the namespace to the same VPN server the laptop used); the YouTube line on "the laptop's always-on VPN" says YouTube goes direct from the server. No name of the host, its provider or its location. Verify by reading.
-- [ ] 8.2 (operator) The wording for `docs/privacy.html` replacing "a private computer reachable only by the developer". Then the page edited to it. Verify the page renders and says nothing about the host beyond that sentence.
+- [x] 8.2 (operator) The wording for `docs/privacy.html` replacing "a private computer reachable only by the developer". Then the page edited to it. Verify the page renders and says nothing about the host beyond that sentence.
 
 ## 9. Operator setup
 
-- [ ] 9.1 (operator) B2: a private bucket; lifecycle rules for `inventory/` (hide after 30 days) and `full/` (hide after 28), both deleting a day after hiding; a key restricted to the bucket with `listFiles` and `writeFiles` only; every data cap at $0. Verify by trying a delete with that key: refused.
-- [ ] 9.2 (operator) An age identity generated on the Mac and stored in the password manager; its recipient in `main.yml`. Verify a test file encrypted to the recipient decrypts with the stored identity.
+- [x] 9.1 (operator) B2: a private bucket; lifecycle rules for `inventory/` (hide after 30 days) and `full/` (hide after 28), both deleting a day after hiding; a key restricted to the bucket with `listFiles` and `writeFiles` only; every data cap at $0. Verify by trying a delete with that key: refused.
+- [x] 9.2 (operator) An age identity generated on the Mac and stored in the password manager; its recipient in `main.yml`. Verify a test file encrypted to the recipient decrypts with the stored identity.
 - [ ] 9.3 (operator) The vault: `proxy_outbound` from the client configuration of the server the laptop uses, a random `proxy_socks_password`, `b2_key_id`, `b2_application_key`, `b2_bucket_name`; the old proxy endpoint keys removed. Verify `ansible-vault view` shows the keys and `scripts/assert-vault-encrypted.sh` passes on commit.
 - [ ] 9.4 (operator) `deploy/inventory.ini`: the server under `[collector]`, the laptop under `[previous]`. Verify `ansible collector -m ping` and `ansible previous -m ping`.
 
