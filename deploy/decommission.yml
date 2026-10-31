@@ -54,13 +54,17 @@
 
     # Stopping by what is on disk, not by a list carried here: a unit
     # renamed out from under this playbook would otherwise survive by
-    # being forgotten.
+    # being forgotten. Only names ending in a unit type, though: the old
+    # deploy templated its units with `backup: true`, which left copies
+    # named `<unit>.<pid>.<date>@<time>~` beside them. Those are no unit
+    # to systemd and asking it to stop one fails, but they are itgraph's
+    # all the same, and the next task removes them with the rest.
     - name: Every itgraph unit stopped and disabled
       ansible.builtin.systemd_service:
         name: "{{ item }}"
         state: stopped
         enabled: false
-      loop: "{{ unit_files.files | map(attribute='path') | map('basename') | list }}"
+      loop: "{{ unit_files.files | map(attribute='path') | map('basename') | select('search', '[.](service|timer)$') | list }}"
 
     - name: The unit files removed
       ansible.builtin.file:
@@ -120,14 +124,24 @@
         masked: false
       loop: "{{ sleep_targets }}"
 
+    # The drop-in was templated with `backup: true` too, so its copies
+    # are found beside it. logind reads only `*.conf` and ignores them,
+    # but they are itgraph's, and go with it.
+    - name: The logind drop-in and its backup copies on disk
+      ansible.builtin.find:
+        paths: "{{ logind_drop_in | dirname }}"
+        patterns: "{{ logind_drop_in | basename }}*"
+      register: logind_files
+
     # Removed, and logind deliberately not restarted: on a machine with a
     # graphical session a restart can end that session. Without the
     # drop-in logind reads its defaults at the next boot; until then a
     # closed lid merely does not suspend, which is what it did all along.
     - name: The logind drop-in removed
       ansible.builtin.file:
-        path: "{{ logind_drop_in }}"
+        path: "{{ item.path }}"
         state: absent
+      loop: "{{ logind_files.files }}"
 
     # `systemd:` has no query mode — it asserts a state, which would
     # mask exactly the leftovers this check exists to catch.
