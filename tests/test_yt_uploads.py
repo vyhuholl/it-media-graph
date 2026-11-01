@@ -20,7 +20,13 @@ from itgraph.db.models import YtCommand
 from itgraph.db.session import Database
 from itgraph.yt.client import YouTube, youtube
 from itgraph.yt.errors import ApiError, ListingFailed
-from itgraph.yt.uploads import FIELDS, PART, newest_uploads
+from itgraph.yt.uploads import (
+    FIELDS,
+    PAGED_FIELDS,
+    PART,
+    newest_uploads,
+    uploads_page,
+)
 
 NOW = datetime(2026, 10, 26, 12, 0, tzinfo=UTC)
 
@@ -109,5 +115,77 @@ async def test_a_bad_request_stops_the_pass(database: Database) -> None:
     async with client(database, fake) as yt:
         with pytest.raises(ApiError) as caught:
             await newest_uploads(yt, uploads_id(1))
+
+    assert not isinstance(caught.value, ListingFailed)
+
+
+# --- the history walk's pages -------------------------------------------
+
+
+async def test_a_page_names_the_next_token_and_nothing_more(
+    database: Database,
+) -> None:
+    items = [
+        upload_item(n, published=NOW - timedelta(days=n)) for n in range(60)
+    ]
+    fake = FakeYouTube(uploads={uploads_id(1): items})
+
+    async with client(database, fake) as yt:
+        page = await uploads_page(yt, uploads_id(1))
+
+    assert len(page.uploads) == 50
+    assert page.next_token is not None
+    [params] = fake.calls("playlistItems")
+    assert params == {
+        "part": PART,
+        "fields": PAGED_FIELDS,
+        "playlistId": uploads_id(1),
+        "maxResults": "50",
+    }
+    # The token, and no count of the playlist's items: that is a statistic.
+    assert PAGED_FIELDS == (
+        "nextPageToken,items/contentDetails(videoId,videoPublishedAt)"
+    )
+    assert "pageInfo" not in PAGED_FIELDS
+
+
+async def test_the_token_is_passed_back_and_the_last_page_has_none(
+    database: Database,
+) -> None:
+    items = [
+        upload_item(n, published=NOW - timedelta(days=n)) for n in range(60)
+    ]
+    fake = FakeYouTube(uploads={uploads_id(1): items})
+
+    async with client(database, fake) as yt:
+        first = await uploads_page(yt, uploads_id(1))
+        second = await uploads_page(yt, uploads_id(1), first.next_token)
+
+    assert [upload.video_id for upload in second.uploads] == [
+        video_id(n) for n in range(50, 60)
+    ]
+    assert second.next_token is None
+    assert fake.calls("playlistItems")[1]["pageToken"] == first.next_token
+
+
+async def test_a_paged_listing_not_found_is_the_channels_failure(
+    database: Database,
+) -> None:
+    async with client(database, FakeYouTube()) as yt:
+        with pytest.raises(ListingFailed, match="404"):
+            await uploads_page(yt, uploads_id(1))
+
+
+async def test_a_bad_request_on_a_page_stops_the_walk(
+    database: Database,
+) -> None:
+    fake = FakeYouTube()
+    fake.queued = [
+        httpx.Response(400, json=error_body(400, "invalidPageToken"))
+    ]
+
+    async with client(database, fake) as yt:
+        with pytest.raises(ApiError) as caught:
+            await uploads_page(yt, uploads_id(1), "fake-page-token-50")
 
     assert not isinstance(caught.value, ListingFailed)

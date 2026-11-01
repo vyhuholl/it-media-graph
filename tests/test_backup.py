@@ -176,17 +176,23 @@ def test_no_dump_carries_youtube_api_data(
     take_backup(kind(), tmp_path, now=NOW)
 
     dump_command = fake_run[0]
-    flag = dump_command.index("--exclude-table-data")
-    assert dump_command[flag + 1] == "yt_raw_*"
+    left_out = [
+        dump_command[index + 1]
+        for index, arg in enumerate(dump_command)
+        if arg == "--exclude-table-data"
+    ]
+    assert left_out == ["yt_raw_*", "yt_backfill_walks"]
 
 
 def test_the_pattern_reaches_every_table_of_youtube_api_data() -> None:
-    """Videos and readings are left out of dumps by name, and only they.
+    """Videos, readings and walks are left out of dumps by name, and only they.
 
     `pg_dump` matches `--exclude-table-data` the way a shell glob does, so
     a new table of API data is covered only if it is named for it — and
     one of the loop's own tables must not be, or a restore would lose
-    where the loop stood.
+    where the loop stood. The walk records are the one table of ours
+    left out: restored without the history they describe, they would
+    claim walks that are not there.
     """
     from fnmatch import fnmatchcase
 
@@ -199,9 +205,14 @@ def test_the_pattern_reaches_every_table_of_youtube_api_data() -> None:
     youtube = {
         table for table in Base.metadata.tables if table.startswith("yt_")
     }
-    api_data = {"yt_raw_channels", "yt_raw_videos", "yt_raw_video_stats"}
-    assert api_data <= youtube
-    assert {table for table in youtube if excluded(table)} == api_data
+    left_out = {
+        "yt_raw_channels",
+        "yt_raw_videos",
+        "yt_raw_video_stats",
+        "yt_backfill_walks",
+    }
+    assert left_out <= youtube
+    assert {table for table in youtube if excluded(table)} == left_out
     assert not excluded("yt_channel_polls")
     assert not excluded("yt_watch_passes")
 
@@ -489,6 +500,8 @@ def test_the_container_commands_are_unchanged(
         "--format=custom",
         "--exclude-table-data",
         "yt_raw_*",
+        "--exclude-table-data",
+        "yt_backfill_walks",
     ]
     # Inside the container the client needs no password; the child
     # inherits the parent's environment as it always did.

@@ -628,6 +628,29 @@ class Settings(BaseSettings):
     # is still checked.
     youtube_watch_upcoming_give_up_days: float = Field(default=7.0, gt=0)
 
+    # --- the YouTube history walk ----------------------------------------
+    #
+    # Off until something reads the history. An edge parsed from a
+    # description lives no longer than its payload, so a year of payloads
+    # kept fresh before the mention graph exists would be data held for
+    # nobody. Off, nothing walks unattended, the refresh keeps no past
+    # upload, and a walk run by hand expires like any data nobody
+    # refreshes — which is what a verification run wants. Turned on with
+    # the mention graph, or at acceptance if that comes first.
+    youtube_backfill_enabled: bool = False
+    # How far back a walk reaches, counted from the moment each channel's
+    # walk begins. The refresh keeps what is younger than this and lets
+    # the rest expire, so the year rolls forward without walking again.
+    youtube_backfill_days: int = Field(default=365, ge=1)
+    # The most videos one walk stores for one channel. Measured, the
+    # busiest seed publishes about 590 a year, so this binds nothing today
+    # and caps a future high-volume one at about forty units. Zero lifts it.
+    youtube_backfill_max_videos: int = Field(default=1_000, ge=0)
+    # What a walk leaves of the general pool for `add`, `refresh` and
+    # discovery. A courtesy on top of the pool's cap, which stays the hard
+    # limit.
+    youtube_backfill_general_floor: int = Field(default=2_000, ge=0)
+
     backup_dir: Path = DEFAULT_BACKUP_DIR
 
     # Where the PostgreSQL tools run. The Mac keeps Postgres in a
@@ -1028,6 +1051,46 @@ class Settings(BaseSettings):
                 f"youtube_watch_reserve ({self.youtube_watch_reserve}) "
                 f"leave nothing of youtube_daily_quota "
                 f"({self.youtube_daily_quota}) for any other command"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _youtube_backfill_reaches_past_the_horizon(self) -> Self:
+        """Refuse a walk depth that the poll loop's horizon covers.
+
+        A walk leaves everything inside the horizon to the loop, so a
+        depth at or short of it would walk every channel and store
+        nothing — a run that spends quota and looks complete.
+        """
+        if self.youtube_backfill_days <= self.youtube_watch_horizon_days:
+            raise ValueError(
+                f"youtube_backfill_days ({self.youtube_backfill_days}) does "
+                "not lie past youtube_watch_horizon_days "
+                f"({self.youtube_watch_horizon_days}): every video a walk "
+                "could store belongs to the poll loop"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _youtube_backfill_floor_leaves_room(self) -> Self:
+        """Refuse a floor that leaves a walk nothing to spend.
+
+        The floor is what a walk must leave of the general pool, so one
+        at or above the pool's cap would stop every walk before its
+        first request, every day, as if the pool had been spent.
+        """
+        general = general_cap(
+            self.youtube_daily_quota,
+            self.youtube_quota_margin,
+            self.youtube_watch_reserve,
+        )
+        if self.youtube_backfill_general_floor >= general:
+            raise ValueError(
+                f"youtube_backfill_general_floor "
+                f"({self.youtube_backfill_general_floor}) is not below the "
+                f"general pool's cap ({general}, from youtube_daily_quota, "
+                "youtube_quota_margin and youtube_watch_reserve): a walk "
+                "could never make a request"
             )
         return self
 

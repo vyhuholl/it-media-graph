@@ -473,21 +473,27 @@ class YtCommand(enum.StrEnum):
     ADD = "add"
     REFRESH = "refresh"
     WATCH = "watch"
+    BACKFILL = "backfill"
 
 
 class YtDiscoveryPath(enum.StrEnum):
-    """How the poll loop found a video.
+    """How a video was found.
 
-    The loop's own telemetry, not YouTube's: which path is doing the
-    work. ``COUNT`` is a channel's video count having moved, ``CHECK``
-    the daily listing made whatever the count said, ``FIRST`` a
-    channel's first listing. Videos the check finds that the count did
-    not reveal are what the count misses.
+    itgraph's own telemetry, not YouTube's: which path is doing the
+    work. The poll loop's three: ``COUNT`` is a channel's video count
+    having moved, ``CHECK`` the daily listing made whatever the count
+    said, ``FIRST`` a channel's first listing. Videos the check finds
+    that the count did not reveal are what the count misses.
+
+    ``BACKFILL`` is the history walk, which is not the loop and is kept
+    out of the loop's counts — a year of uploads under any of the three
+    would drown the measurement they exist for.
     """
 
     FIRST = "first"
     COUNT = "count"
     CHECK = "check"
+    BACKFILL = "backfill"
 
 
 class YtPassOutcome(enum.StrEnum):
@@ -1970,6 +1976,60 @@ class YtWatchPass(Base):
             f"YtWatchPass(started_at={self.started_at}, "
             f"outcome={self.outcome.value!r})"
         )
+
+
+class YtBackfillWalk(Base):
+    """Where the history walk stands with one channel, and what it saw.
+
+    Ours: times, flags and counts of the walk's own work and of what the
+    API did — never a title, a date or a count YouTube returned. The
+    depth a capped walk actually reached is the oldest stored video's
+    publication date, read from that video while it lasts and never
+    copied here, where it would be API data outside its one home.
+
+    Left out of every dump, although it holds no API data, because it
+    describes data the dumps leave out. Restored without its videos, a
+    record would claim a walk that is not there — what ``yt_channel_polls``
+    did on the move to the server, when every channel's first listing
+    there looked like a moved count. A restore therefore walks again.
+    """
+
+    __tablename__ = "yt_backfill_walks"
+
+    channel_id: Mapped[str] = mapped_column(
+        ForeignKey("yt_channels.channel_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    # The moment the depth was counted back to: the walk's start less the
+    # configured depth. Ours, not a video's date.
+    cutoff: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # NULL: the walk did not end, and the channel is walked again from
+    # its newest page.
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    # Listed to the end of the playlist rather than to the depth.
+    whole: Mapped[bool] = mapped_column(server_default=false())
+    pages: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    videos: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    # Items dated later than one listed before them: the undocumented
+    # newest-first order, checked rather than trusted.
+    out_of_order: Mapped[int] = mapped_column(
+        Integer, server_default=text("0")
+    )
+    # Items the listing gave no publication time.
+    undated: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    # Listed videos YouTube did not return when asked for by id.
+    unreturned: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    capped: Mapped[bool] = mapped_column(server_default=false())
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer, server_default=text("0")
+    )
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+    def __repr__(self) -> str:
+        return f"YtBackfillWalk(channel_id={self.channel_id!r})"
 
 
 class YtQuotaDay(Base):

@@ -28,6 +28,7 @@ from itgraph.db.models import (
     YtRawChannel,
     YtRejectReason,
 )
+from itgraph.db.yt_backfill import forget_walks
 from itgraph.yt_entries import CHANNEL_ID as CHANNEL_ID_SHAPE
 from itgraph.yt_policy import RETENTION
 from itgraph.yt_review import (
@@ -207,8 +208,10 @@ async def mark_gone(
 ) -> list[str]:
     """Record channels YouTube no longer returns, and drop what it said.
 
-    The payload goes at once; the record and its review stay. Returns
-    the ids newly marked — one already gone keeps its first date.
+    The payload goes at once; the record and its review stay. So does
+    any history walk of it: its videos are presumably gone too, and a
+    channel that comes back is walked anew. Returns the ids newly marked
+    — one already gone keeps its first date.
     """
     ids = list(channel_ids)
     if not ids:
@@ -216,6 +219,7 @@ async def mark_gone(
     await session.execute(
         delete(YtRawChannel).where(YtRawChannel.channel_id.in_(ids))
     )
+    await forget_walks(session, ids)
     marked = await session.scalars(
         update(YtChannel)
         .where(YtChannel.channel_id.in_(ids), YtChannel.gone_at.is_(None))
@@ -320,7 +324,17 @@ def current_review(channel: YtChannel) -> Review:
     )
 
 
-def _write(channel: YtChannel, review: Review, now: datetime) -> None:
+async def _write(
+    session: AsyncSession, channel: YtChannel, review: Review, now: datetime
+) -> None:
+    if (
+        channel.status is ChannelStatus.SEED
+        and review.status is not ChannelStatus.SEED
+    ):
+        # Out of scope, its history stops being refreshed and expires;
+        # a walk record left behind would claim it is still there when
+        # the channel comes back.
+        await forget_walks(session, [channel.channel_id])
     channel.status = review.status
     channel.kind = review.kind
     channel.lang = review.lang
@@ -401,7 +415,7 @@ async def mark_channel(
         ),
     )
     kept.check()
-    _write(channel, kept, now or datetime.now(UTC))
+    await _write(session, channel, kept, now or datetime.now(UTC))
     return channel
 
 
@@ -476,7 +490,7 @@ async def apply_review(
         ):
             summary.conflicts.append(decision)
         else:
-            _write(channel, review, moment)
+            await _write(session, channel, review, moment)
             summary.applied.append(decision)
     return summary
 

@@ -12,11 +12,18 @@ spent quota or a failure part way keeps everything refreshed before it,
 and the next run starts where this one stopped — the due list is simply
 shorter.
 
+While the history walk is enabled, the refresh also keeps the year: it
+fetches again every seed's past upload — walked, or finished by the poll
+loop — that is younger than the walk's depth, without counters until
+acceptance and as a reading after it. Past the depth a video is left to
+expire. With the walk disabled, nothing keeps what a walk by hand
+stored, and it expires as data nobody refreshes.
+
 Once the derived-metrics use case is accepted and its date recorded in
 ``yt_policy``, the refresh also fetches again finished videos whose
-readings may now be kept 36 months: a reading goes with its video's
-payload, and the payload still expires at 30 days. Before that date
-there are no such videos, and no video is asked for.
+readings may now be kept 36 months, however old: a reading goes with
+its video's payload, and the payload still expires at 30 days. Before
+that date there are no such videos.
 
 Logs carry ids and nothing YouTube said: the timer runs this under
 systemd, and journald keeps its own counsel about how long.
@@ -33,10 +40,12 @@ from itgraph.db.session import Database
 from itgraph.db.yt_channels import due_for_refresh, mark_gone, store_payloads
 from itgraph.db.yt_quota import QuotaError
 from itgraph.db.yt_videos import (
+    past_uploads_due_for_refresh,
     remove_videos,
     replace_payloads,
     videos_due_for_refresh,
 )
+from itgraph.derive.yt_videos import Counters, counters_of
 from itgraph.yt import videos as yt_videos
 from itgraph.yt.channels import IDS_PER_CALL, by_ids
 from itgraph.yt.client import YouTube
@@ -55,6 +64,10 @@ class RefreshSummary:
     refreshed: int = 0
     gone: list[str] = field(default_factory=list)
     returned: list[str] = field(default_factory=list)
+    past_due: int = 0
+    past_refreshed: int = 0
+    past_readings: int = 0
+    past_removed: int = 0
     videos_due: int = 0
     videos_refreshed: int = 0
     videos_removed: int = 0
@@ -65,6 +78,13 @@ class RefreshSummary:
             f"due {self.due}, refreshed {self.refreshed}, "
             f"gone {len(self.gone)}, back {len(self.returned)}"
         )
+        if settings.youtube_backfill_enabled:
+            line += (
+                f"; past uploads due {self.past_due}, refreshed "
+                f"{self.past_refreshed}, removed {self.past_removed}"
+            )
+            if self.past_readings:
+                line += f", readings {self.past_readings}"
         if yt_policy.DERIVED_METRICS_ACCEPTED_ON is not None:
             line += (
                 f"; videos due {self.videos_due}, refreshed "
@@ -120,11 +140,62 @@ async def refresh_channels(
         for channel_id in returned:
             logger.info("YouTube returns %s again", channel_id)
 
+    # Past uploads before the accepted readings: a video both would take
+    # is then refreshed here, where after acceptance it is also a
+    # reading, and is no longer stale when the second list is drawn.
+    if summary.stopped is None and settings.youtube_backfill_enabled:
+        await _refresh_past_uploads(
+            youtube, database, summary, older_than, moment
+        )
     if summary.stopped is None:
         await _refresh_videos(youtube, database, summary, older_than)
 
     logger.info("refresh: %s", summary.line())
     return summary
+
+
+async def _refresh_past_uploads(
+    youtube: YouTube,
+    database: Database,
+    summary: RefreshSummary,
+    older_than: datetime,
+    now: datetime,
+) -> None:
+    """Fetch again the year of past uploads the history walk keeps."""
+    since = now - timedelta(days=settings.youtube_backfill_days)
+    async with database.session() as session:
+        due = await past_uploads_due_for_refresh(
+            session, older_than=older_than, since=since
+        )
+    summary.past_due = len(due)
+    accepted = yt_policy.DERIVED_METRICS_ACCEPTED_ON is not None
+    asked = yt_videos.for_past_uploads()
+
+    for batch in batched(due, yt_videos.IDS_PER_CALL):
+        try:
+            found = await yt_videos.by_ids(youtube, batch, asked=asked)
+        except (QuotaError, YtError) as exc:
+            summary.stopped = exc
+            return
+
+        fetched_at = datetime.now(UTC)
+        readings: dict[str, Counters] = (
+            {video_id: counters_of(found[video_id]) for video_id in found}
+            if accepted
+            else {}
+        )
+        async with database.session() as session:
+            summary.past_readings += await replace_payloads(
+                session, found, fetched_at=fetched_at, readings=readings
+            )
+            removed = await remove_videos(
+                session,
+                [video_id for video_id in batch if video_id not in found],
+            )
+        summary.past_refreshed += len(found)
+        summary.past_removed += len(removed)
+        for video_id in removed:
+            logger.info("YouTube no longer returns %s", video_id)
 
 
 async def _refresh_videos(

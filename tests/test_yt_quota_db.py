@@ -17,6 +17,7 @@ from itgraph.db.models import (
 from itgraph.db.session import Database
 from itgraph.db.yt_quota import (
     Booking,
+    FloorReachedError,
     PoolSpentError,
     QuotaExhaustedError,
     book,
@@ -279,3 +280,80 @@ async def test_an_empty_day_reports_zero(database: Database) -> None:
 
     assert [(use.spent, use.cap) for use in report.pools] == [(0, 7), (0, 3)]
     assert report.methods == []
+
+
+# --- the history walk's floor -------------------------------------------
+
+
+@pytest.fixture
+def real_quota(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The defaults: 6,000 for the general pool, 2,000 of it left alone."""
+    monkeypatch.setattr(settings, "youtube_daily_quota", 10_000)
+    monkeypatch.setattr(settings, "youtube_quota_margin", 0.10)
+    monkeypatch.setattr(settings, "youtube_watch_reserve", 3_000)
+    monkeypatch.setattr(settings, "youtube_backfill_general_floor", 2_000)
+
+
+async def _book_walk(database: Database, units: int = 1) -> Booking:
+    return await book(
+        database,
+        command=YtCommand.BACKFILL,
+        method="playlistItems.list",
+        units=units,
+        now=NOW,
+    )
+
+
+async def test_the_walk_spends_the_general_pool(
+    database: Database, real_quota: None
+) -> None:
+    booking = await _book_walk(database)
+
+    assert booking.pool is YtQuotaPool.GENERAL
+    [row] = await _journal(database)
+    assert (row.command, row.pool) == (YtCommand.BACKFILL, YtQuotaPool.GENERAL)
+
+
+async def test_the_floor_stops_a_walk_one_request_short(
+    database: Database, real_quota: None
+) -> None:
+    """2,001 left and a floor of 2,000: one request, and not a second."""
+    await _book(database, 3_999)
+
+    await _book_walk(database)
+    with pytest.raises(FloorReachedError, match="2000 units") as caught:
+        await _book_walk(database)
+
+    assert "next quota day begins" in str(caught.value)
+    assert await _spent(database) == 4_000
+    # What the walk left is the other commands' to spend.
+    await _book(database, 2_000)
+
+
+async def test_other_commands_have_no_floor(
+    database: Database, real_quota: None
+) -> None:
+    await _book(database, 6_000)
+
+    with pytest.raises(PoolSpentError):
+        await _book(database, 1)
+
+
+async def test_the_report_lists_the_walk_under_the_general_pool(
+    database: Database, real_quota: None
+) -> None:
+    await record_outcome(
+        database, await _book_walk(database, 1), YtRequestOutcome.OK
+    )
+
+    async with database.session() as session:
+        report = await quota_report(session, now=NOW)
+
+    general, _ = report.pools
+    assert general.spent == 1
+    [walk] = report.methods
+    assert (walk.command, walk.method, walk.units) == (
+        YtCommand.BACKFILL,
+        "playlistItems.list",
+        1,
+    )

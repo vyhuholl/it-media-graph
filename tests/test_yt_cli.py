@@ -257,7 +257,10 @@ def test_after_acceptance_readings_from_its_date_survive_expiry(
 ) -> None:
     from itgraph import yt_policy
 
-    accepted = (datetime.now(UTC) - timedelta(days=31, hours=12)).date()
+    # The day of the 31-day reading, whatever the hour: the 32-day one is
+    # then always a day earlier. Half a day back, as this used to be, put
+    # both on one date whenever the suite ran before noon UTC.
+    accepted = (datetime.now(UTC) - timedelta(days=31)).date()
     monkeypatch.setattr(yt_policy, "DERIVED_METRICS_ACCEPTED_ON", accepted)
     asyncio.run(_videos_with_readings(database_url))
     use_test_database(monkeypatch, database_url)
@@ -268,6 +271,86 @@ def test_after_acceptance_readings_from_its_date_survive_expiry(
     # The 31-day reading was taken on the acceptance date and stays; the
     # 32-day one predates it and goes. Video 1's payload still expires.
     assert asyncio.run(_video_counts(database_url)) == (1, 2)
+
+
+async def _walks_ended(database_url: str, *ages: int) -> None:
+    """A seed per age, its walk ended that many days ago."""
+    from itgraph.db.models import (
+        ChannelStatus,
+        YtChannel,
+        YtChannelKind,
+        YtLang,
+    )
+    from itgraph.db.yt_backfill import finish_walk, start_walk
+
+    now = datetime.now(UTC)
+    database = Database(database_url)
+    try:
+        async with database.session() as session:
+            for number, age in enumerate(ages, start=1):
+                await create_channels(session, [channel_id(number)])
+                record = await session.get(YtChannel, channel_id(number))
+                assert record is not None
+                record.status = ChannelStatus.SEED
+                record.kind = YtChannelKind.PERSONAL
+                record.lang = YtLang.EN
+                ended = now - timedelta(days=age)
+                await start_walk(
+                    session,
+                    channel_id(number),
+                    now=ended,
+                    cutoff=ended - timedelta(days=365),
+                    whole=False,
+                )
+                await finish_walk(
+                    session, channel_id(number), now=ended, capped=False
+                )
+    finally:
+        await database.dispose()
+
+
+async def _walks_left(database_url: str) -> int:
+    from itgraph.db.models import YtBackfillWalk
+
+    database = Database(database_url)
+    try:
+        async with database.session() as session:
+            count = await session.scalar(
+                select(func.count()).select_from(YtBackfillWalk)
+            )
+    finally:
+        await database.dispose()
+    return int(count or 0)
+
+
+def test_while_the_walk_is_disabled_unkept_walks_are_forgotten(
+    monkeypatch: pytest.MonkeyPatch, database_url: str, offline: None
+) -> None:
+    """Nothing refreshed their videos, so they have expired."""
+    monkeypatch.setattr(settings, "youtube_api_key", None)
+    monkeypatch.setattr(settings, "youtube_backfill_enabled", False)
+    asyncio.run(_walks_ended(database_url, 31, 29))
+    use_test_database(monkeypatch, database_url)
+
+    result = runner.invoke(app, ["yt", "quota"])
+
+    assert result.exit_code == 0, result.output
+    assert asyncio.run(_walks_left(database_url)) == 1
+
+
+def test_while_the_walk_is_enabled_walks_are_kept(
+    monkeypatch: pytest.MonkeyPatch, database_url: str, offline: None
+) -> None:
+    """The refresh keeps their videos, so the walk still stands."""
+    monkeypatch.setattr(settings, "youtube_api_key", None)
+    monkeypatch.setattr(settings, "youtube_backfill_enabled", True)
+    asyncio.run(_walks_ended(database_url, 90))
+    use_test_database(monkeypatch, database_url)
+
+    result = runner.invoke(app, ["yt", "quota"])
+
+    assert result.exit_code == 0, result.output
+    assert asyncio.run(_walks_left(database_url)) == 1
 
 
 @pytest.mark.parametrize(
@@ -282,6 +365,8 @@ def test_after_acceptance_readings_from_its_date_survive_expiry(
         "channels",
         "watch",
         "watch-status",
+        "backfill",
+        "backfill-status",
     ],
 )
 def test_help_needs_no_database(

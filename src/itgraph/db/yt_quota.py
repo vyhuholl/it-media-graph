@@ -35,6 +35,7 @@ from itgraph.yt_quota import general_cap, next_reset, quota_day
 __all__ = [
     "POOL_OF",
     "Booking",
+    "FloorReachedError",
     "MethodUse",
     "PoolSpentError",
     "PoolUse",
@@ -49,6 +50,7 @@ __all__ = [
     "quota_report",
     "record_exhaustion",
     "record_outcome",
+    "units_to_leave",
 ]
 
 
@@ -73,6 +75,20 @@ class PoolSpentError(QuotaError):
         super().__init__(
             f"the {pool.value} YouTube quota pool is spent for today "
             f"({cap} units); the next quota day begins "
+            f"{describe_reset(reset)}"
+        )
+        self.pool = pool
+        self.reset = reset
+
+
+class FloorReachedError(QuotaError):
+    """What is left of the pool is what this command must leave the others."""
+
+    def __init__(self, pool: YtQuotaPool, floor: int, reset: datetime) -> None:
+        super().__init__(
+            f"the history walk leaves {floor} units of the {pool.value} "
+            "YouTube quota pool to the other commands, and no more than "
+            "that is left today; the next quota day begins "
             f"{describe_reset(reset)}"
         )
         self.pool = pool
@@ -104,7 +120,20 @@ POOL_OF: Mapping[YtCommand, YtQuotaPool] = {
     YtCommand.ADD: YtQuotaPool.GENERAL,
     YtCommand.REFRESH: YtQuotaPool.GENERAL,
     YtCommand.WATCH: YtQuotaPool.WATCH,
+    YtCommand.BACKFILL: YtQuotaPool.GENERAL,
 }
+
+
+def units_to_leave(command: YtCommand) -> int:
+    """What a command must leave unspent of its pool for the others.
+
+    The history walk's floor, and nothing for every other command. By
+    command, like the pool itself, so no caller can walk past the floor
+    by forgetting to pass it.
+    """
+    if command is YtCommand.BACKFILL:
+        return settings.youtube_backfill_general_floor
+    return 0
 
 
 def pool_cap(pool: YtQuotaPool) -> int:
@@ -173,14 +202,17 @@ async def book(
     """Book a request's units, or refuse it. Commits before returning.
 
     The pool is the command's, from ``POOL_OF``. Raises
-    ``QuotaExhaustedError`` on a day YouTube declared over, and
-    ``PoolSpentError`` when the units would carry the pool past its cap.
-    Either way nothing is written and the request must not be sent.
+    ``QuotaExhaustedError`` on a day YouTube declared over,
+    ``FloorReachedError`` when the units would leave the pool less than
+    the command must leave the others, and ``PoolSpentError`` when they
+    would carry it past its cap. Either way nothing is written and the
+    request must not be sent.
     """
     moment = now or datetime.now(UTC)
     day = quota_day(moment)
     pool = POOL_OF[command]
-    cap = pool_cap(pool)
+    leave = units_to_leave(command)
+    cap = pool_cap(pool) - leave
     async with database.session() as session:
         if await session.get(YtQuotaExhausted, day) is not None:
             raise QuotaExhaustedError(next_reset(moment))
@@ -202,6 +234,8 @@ async def book(
             .execution_options(synchronize_session=False)
         )
         if spent is None:
+            if leave:
+                raise FloorReachedError(pool, leave, next_reset(moment))
             raise PoolSpentError(pool, cap, next_reset(moment))
 
         request_id = await session.scalar(

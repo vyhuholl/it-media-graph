@@ -5,6 +5,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import httpx
 import pytest
@@ -373,3 +374,272 @@ async def test_nothing_to_refresh_before_acceptance(
     assert summary.videos_due == 0
     assert fake.calls("videos") == []
     assert "videos" not in summary.line()
+
+
+# --- past uploads, kept fresh while the history walk is enabled ------------
+
+
+@pytest.fixture
+def walk_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "youtube_backfill_enabled", True)
+
+
+async def _seed(database: Database, number: int = 1) -> None:
+    from itgraph.db.models import YtChannelKind, YtLang
+
+    await _channels(database, [number], FRESH)
+    async with database.session() as session:
+        record = await session.get(YtChannel, channel_id(number))
+        assert record is not None
+        record.status = ChannelStatus.SEED
+        record.kind = YtChannelKind.PERSONAL
+        record.lang = YtLang.EN
+
+
+async def _past_upload(
+    database: Database,
+    number: int,
+    *,
+    age: int,
+    channel: int = 1,
+    walked: bool = True,
+    **resource: Any,
+) -> None:
+    """A past upload last fetched 26 days ago: by a walk, or by the loop."""
+    from itgraph.db.models import YtDiscoveryPath
+    from itgraph.db.yt_videos import (
+        FoundVideo,
+        VideoWrite,
+        store_found_videos,
+        store_videos,
+    )
+    from itgraph.derive.yt_videos import Counters
+
+    payload = video_resource(
+        number,
+        published=datetime.now(UTC) - timedelta(days=age),
+        channel=channel,
+        **resource,
+    )
+    async with database.session() as session:
+        if walked:
+            await store_found_videos(
+                session,
+                [
+                    FoundVideo(
+                        video_id=video_id(number),
+                        payload=payload,
+                        due_at=None,
+                        reading=None,
+                    )
+                ],
+                fetched_at=STALE,
+            )
+        else:
+            await store_videos(
+                session,
+                [
+                    VideoWrite(
+                        video_id=video_id(number),
+                        payload=payload,
+                        due_at=None,
+                        reading=Counters(views=10),
+                        discovered_via=YtDiscoveryPath.CHECK,
+                    )
+                ],
+                observed_at=STALE,
+            )
+
+
+def _answer(number: int, *, age: int) -> dict[str, Any]:
+    return video_resource(
+        number, published=datetime.now(UTC) - timedelta(days=age), views=555
+    )
+
+
+async def _video_row(database: Database, number: int) -> Any:
+    from itgraph.db.models import YtRawVideo
+
+    async with database.session() as session:
+        return await session.get(YtRawVideo, video_id(number))
+
+
+async def _reading_ids(database: Database) -> list[str]:
+    from itgraph.db.models import YtRawVideoStat
+
+    async with database.session() as session:
+        return list(await session.scalars(select(YtRawVideoStat.video_id)))
+
+
+async def test_a_past_upload_is_refreshed(
+    database: Database, walk_enabled: None
+) -> None:
+    await _seed(database)
+    await _past_upload(database, 1, age=100)
+    fake = FakeYouTube(videos=[_answer(1, age=100)])
+
+    async with client(database, fake) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert (summary.past_due, summary.past_refreshed) == (1, 1)
+    found = await _video_row(database, 1)
+    assert found is not None and found.fetched_at > STALE
+    assert "past uploads due 1, refreshed 1, removed 0" in summary.line()
+
+
+async def test_a_video_the_poll_loop_finished_joins_the_year(
+    database: Database, walk_enabled: None
+) -> None:
+    await _seed(database)
+    await _past_upload(database, 1, age=35, walked=False)
+    fake = FakeYouTube(videos=[_answer(1, age=35)])
+
+    async with client(database, fake) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert summary.past_refreshed == 1
+
+
+async def test_a_video_past_the_depth_is_left_to_expire(
+    database: Database, walk_enabled: None
+) -> None:
+    await _seed(database)
+    await _past_upload(database, 1, age=370)
+    fake = FakeYouTube(videos=[_answer(1, age=370)])
+
+    async with client(database, fake) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert summary.past_due == 0
+    assert fake.calls("videos") == []
+
+
+async def test_a_channel_out_of_scope_is_not_kept(
+    database: Database, walk_enabled: None
+) -> None:
+    await _seed(database)
+    await _channels(database, [2], FRESH)
+    await _past_upload(database, 1, age=100, channel=2)
+    fake = FakeYouTube(videos=[_answer(1, age=100)])
+
+    async with client(database, fake) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert summary.past_due == 0
+
+
+async def test_a_broadcast_yet_to_start_is_the_loop_s_to_check(
+    database: Database, walk_enabled: None
+) -> None:
+    await _seed(database)
+    await _past_upload(
+        database,
+        1,
+        age=100,
+        broadcast="upcoming",
+        scheduled=datetime.now(UTC) - timedelta(days=90),
+    )
+
+    async with client(database, FakeYouTube()) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert summary.past_due == 0
+
+
+async def test_nothing_is_kept_while_the_walk_is_disabled(
+    database: Database,
+) -> None:
+    await _seed(database)
+    await _past_upload(database, 1, age=100)
+    fake = FakeYouTube(videos=[_answer(1, age=100)])
+
+    async with client(database, fake) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert summary.past_due == 0
+    assert fake.calls("videos") == []
+    assert "past uploads" not in summary.line()
+
+
+async def test_before_acceptance_no_counts_are_read(
+    database: Database, walk_enabled: None
+) -> None:
+    from itgraph.yt.videos import PAST_UPLOADS
+
+    await _seed(database)
+    await _past_upload(database, 1, age=35, walked=False)
+    fake = FakeYouTube(videos=[_answer(1, age=35)])
+
+    async with client(database, fake) as yt:
+        await refresh_channels(yt, database)
+
+    [call] = fake.calls("videos")
+    assert (call["part"], call["fields"]) == (
+        PAST_UPLOADS.parts,
+        PAST_UPLOADS.fields,
+    )
+    found = await _video_row(database, 1)
+    assert found is not None and "statistics" not in found.payload
+    # The loop's own reading from 26 days ago, and nothing new.
+    assert await _reading_ids(database) == [video_id(1)]
+
+
+async def test_after_acceptance_every_refresh_is_a_reading(
+    database: Database, walk_enabled: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from itgraph import yt_policy
+    from itgraph.db.models import YtRawVideoStat
+
+    monkeypatch.setattr(
+        yt_policy,
+        "DERIVED_METRICS_ACCEPTED_ON",
+        (datetime.now(UTC) - timedelta(days=10)).date(),
+    )
+    await _seed(database)
+    await _past_upload(database, 1, age=100)
+    fake = FakeYouTube(videos=[_answer(1, age=100)])
+
+    async with client(database, fake) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert summary.past_readings == 1
+    async with database.session() as session:
+        [reading] = list(await session.scalars(select(YtRawVideoStat)))
+    assert (reading.video_id, reading.views) == (video_id(1), 555)
+    # Refreshed here, so not again by the accepted-readings list.
+    assert len(fake.calls("videos")) == 1
+
+
+async def test_a_past_upload_youtube_no_longer_returns_is_removed(
+    database: Database, walk_enabled: None
+) -> None:
+    await _seed(database)
+    await _past_upload(database, 1, age=100)
+
+    async with client(database, FakeYouTube()) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert summary.past_removed == 1
+    assert await _video_row(database, 1) is None
+
+
+async def test_readings_outlive_the_depth(
+    database: Database, walk_enabled: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A video past the depth with readings kept 36 months stays fetched."""
+    from itgraph import yt_policy
+
+    monkeypatch.setattr(
+        yt_policy,
+        "DERIVED_METRICS_ACCEPTED_ON",
+        (datetime.now(UTC) - timedelta(days=60)).date(),
+    )
+    await _seed(database)
+    await _past_upload(database, 1, age=400, walked=False)
+    fake = FakeYouTube(videos=[_answer(1, age=400)])
+
+    async with client(database, fake) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert summary.past_due == 0
+    assert (summary.videos_due, summary.videos_refreshed) == (1, 1)

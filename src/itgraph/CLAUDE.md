@@ -30,11 +30,12 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `yt/errors.py` | YouTube failures a caller names without importing the HTTP client |
 | `yt/client.py` | The only `httpx.AsyncClient`. Key in a header, never a URL; every request booked in the ledger before it is sent; what each answer means |
 | `yt/channels.py` | `channels.list` by ids (fifty a call; a 404 batch asked again id by id), by handle, by legacy name; the parts and `fields` requested — exactly the privacy policy's list |
-| `yt/uploads.py` | `playlistItems.list`: a channel's newest fifty uploads, ids and dates only; a playlist not found or not accessible is that channel's failure |
+| `yt/uploads.py` | `playlistItems.list`: a channel's newest fifty uploads for the poll loop, and page after page for the history walk with the next token and no item count; ids and dates only; a playlist not found or not accessible is that channel's failure |
 | `yt/videos.py` | `videos.list` by ids, fifty a call whatever the channels; a 404 batch asked again id by id; the parts and `fields` the privacy policy lists |
 | `yt/add.py` | The import pass: entries → ids → records, unreviewed. What the inventory already answers costs nothing; every call committed before the next, so the same input resumes |
 | `yt/refresh.py` | The refresh pass: every payload due, fifty a call, whatever the status; gone and back; progress committed per call. Logs ids only |
 | `yt/watch.py` | One pass of the YouTube poll loop, under its lock: every seed asked for, uploads listed when the video count moved or the daily check is due, due videos read fifty a request; a moved count is a debt until its videos are stored; a spent pool ends a pass quietly. Logs ids only |
+| `yt/backfill.py` | The history walk, under its lock: each seed's uploads paged back to a depth, stopping on the page that crosses it; the newest-first order counted rather than trusted; what the poll loop owns left to it, a broadcast yet to start handed to it; payloads without counters until acceptance; each page committed, no page token kept; the general pool spent down to a floor. Logs ids only |
 | `yt/` | YouTube Data API collection: fetch channels, uploads and videos, and store them |
 | `derive/references.py` | Pure parsing of a payload — or of plain text — into the channels it references |
 | `derive/edges.py` | The derivation pass: raw messages → edges; touches no network |
@@ -73,6 +74,7 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `db/yt_channels.py` | The YouTube inventory: records (the operator's, never deleted) and payloads (YouTube's, 30 days at most); creation, expiry, gone and back, what is due for refresh, review, listing |
 | `db/yt_videos.py` | The poll loop's videos: payloads with their schedule, readings appended beside them, what is due, forgetting a video whole, expiry — 30 days, or 36 months for readings once acceptance is recorded in `yt_policy` |
 | `db/yt_watch.py` | The poll loop's own records: listings owed, made and failed, one row per pass, and the lock — an advisory `bigint` key that never meets Telegram's session lease |
+| `db/yt_backfill.py` | The history walk's own records: who is due, what each walk counted (pages, videos, items out of order, undated, not returned), forgetting a walk whose videos nothing keeps, and the lock — a `bigint` key of its own that meets neither the poll loop's nor Telegram's lease |
 | `db/yt_quota.py` | The YouTube quota ledger: booking before sending, in a transaction that commits first; the pool a command spends from, by table — the poll loop its reserve, everything else the general pool, no borrowing; the journal; exhaustion; the day's report. Units are never returned |
 | `db/backfill.py` | Which channels to walk, how far each got, and why one stopped |
 | `db/backup.py` | Dumps, the schedule that picks which, and the pruning; the PostgreSQL clients run through `docker exec` into the Compose container or, without one, from the image against `DATABASE_URL` |

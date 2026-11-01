@@ -14,6 +14,10 @@ import httpx
 # Not a key's shape on purpose; see the module docstring.
 API_KEY = "test-youtube-api-key"
 
+# What a fake page token looks like: the offset of the page it opens,
+# spelt so no one mistakes it for one of YouTube's opaque tokens.
+PAGE_TOKEN = "fake-page-token-"
+
 
 def stamp(moment: datetime) -> str:
     """A moment as YouTube writes one: UTC, seconds, a trailing ``Z``."""
@@ -243,12 +247,27 @@ class FakeYouTube:
                     404, json=error_body(404, "playlistNotFound")
                 )
             limit = int(params.get("maxResults", "5"))
-            return httpx.Response(
-                200, json={"items": self.uploads[playlist][:limit]}
-            )
+            token = params.get("pageToken")
+            start = int(token.removeprefix(PAGE_TOKEN)) if token else 0
+            items = self.uploads[playlist]
+            listing: dict[str, Any] = {"items": items[start : start + limit]}
+            # Only when asked for, as `fields` would have it: the poll
+            # loop's listing names no token and must see none.
+            more = start + limit < len(items)
+            if more and "nextPageToken" in params.get("fields", ""):
+                listing["nextPageToken"] = f"{PAGE_TOKEN}{start + limit}"
+            return httpx.Response(200, json=listing)
         if self.method(request) == "videos":
             ids = params["id"].split(",")
             found = [self.videos[id_] for id_ in ids if id_ in self.videos]
+            # `fields` decides what comes back: a request that names no
+            # counters gets none, as the real API filters partial
+            # resources.
+            if "statistics" not in params.get("fields", "statistics"):
+                found = [
+                    {k: v for k, v in video.items() if k != "statistics"}
+                    for video in found
+                ]
             if self.batch_404 and len(found) < len(ids):
                 return httpx.Response(
                     404, json=error_body(404, "videoNotFound")

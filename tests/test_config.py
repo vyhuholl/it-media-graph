@@ -378,6 +378,57 @@ def test_the_default_caps_leave_six_thousand(env: pytest.MonkeyPatch) -> None:
     )
 
 
+# --- the YouTube history walk ------------------------------------------
+
+
+def test_the_backfill_defaults_load(env: pytest.MonkeyPatch) -> None:
+    """Off, a year deep, a thousand a channel, two thousand left over."""
+    settings = build()
+    assert settings.youtube_backfill_enabled is False
+    assert settings.youtube_backfill_days == 365
+    assert settings.youtube_backfill_max_videos == 1000
+    assert settings.youtube_backfill_general_floor == 2000
+
+
+def test_a_backfill_depth_at_the_horizon_is_refused(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """Everything inside the horizon is the poll loop's to store."""
+    env.setenv("YOUTUBE_BACKFILL_DAYS", "29")
+
+    with pytest.raises(ValidationError) as caught:
+        build()
+
+    assert "youtube_backfill_days" in str(caught.value)
+    assert "youtube_watch_horizon_days" in str(caught.value)
+
+
+def test_a_backfill_floor_at_the_general_cap_is_refused(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """A floor of the whole pool stops every walk before its first request."""
+    env.setenv("YOUTUBE_BACKFILL_GENERAL_FLOOR", "6000")
+
+    with pytest.raises(ValidationError) as caught:
+        build()
+
+    assert "youtube_backfill_general_floor" in str(caught.value)
+    assert "youtube_watch_reserve" in str(caught.value)
+
+
+def test_a_negative_backfill_ceiling_is_refused(
+    env: pytest.MonkeyPatch,
+) -> None:
+    env.setenv("YOUTUBE_BACKFILL_MAX_VIDEOS", "-1")
+    with pytest.raises(ValidationError, match="youtube_backfill_max_videos"):
+        build()
+
+
+def test_a_zero_backfill_ceiling_is_accepted(env: pytest.MonkeyPatch) -> None:
+    env.setenv("YOUTUBE_BACKFILL_MAX_VIDEOS", "0")
+    assert build().youtube_backfill_max_videos == 0
+
+
 # --- where the PostgreSQL tools run ----------------------------------
 
 

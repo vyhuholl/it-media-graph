@@ -1667,19 +1667,32 @@ async def _expire_youtube_data() -> None:
     longer, from the acceptance date, once one is recorded. Needs no key
     and no network: data past its time is a violation whether or not
     anything was going to read it.
+
+    And, while the history walk is disabled, every walk that ended more
+    than 30 days ago: nothing kept its videos, so they have expired, and
+    the record would otherwise keep the channel from being walked again.
     """
+    from itgraph.config import settings
     from itgraph.db.session import Database
+    from itgraph.db.yt_backfill import forget_unkept_walks
     from itgraph.db.yt_channels import purge_expired
     from itgraph.db.yt_videos import purge_expired_videos
 
     database = Database()
+    walks = 0
     try:
         async with database.session() as session:
             channels = await purge_expired(session)
             videos, readings = await purge_expired_videos(session)
+            if not settings.youtube_backfill_enabled:
+                walks = await forget_unkept_walks(
+                    session, now=datetime.now(UTC)
+                )
     finally:
         await database.dispose()
     log = logging.getLogger(__name__)
+    if walks:
+        log.info("forgot %d history walks nothing kept fresh", walks)
     if channels:
         log.info("removed %d YouTube channel payloads past 30 days", channels)
     if videos or readings:
@@ -1929,6 +1942,154 @@ def yt_watch_status() -> None:
             typer.echo(f"  {latest.list_failures} listing(s) failed")
         if latest.error:
             typer.echo(f"  {latest.error}")
+
+    _run_yt(run())
+
+
+@yt_app.command("backfill")
+def yt_backfill(
+    channels: Annotated[
+        list[str] | None,
+        typer.Argument(
+            metavar="[CHANNEL]...",
+            help="UC… ids or @handles of seeds to walk, walked or not. "
+            "Without them, every seed not yet walked.",
+        ),
+    ] = None,
+    whole: Annotated[
+        bool,
+        typer.Option(
+            "--whole",
+            help="List the named channels to the end of the playlist, "
+            "storing only what the depth admits: how the newest-first "
+            "order is checked.",
+        ),
+    ] = False,
+    limit: Annotated[
+        int | None,
+        typer.Option(min=1, help="Make at most this many requests."),
+    ] = None,
+) -> None:
+    """Walk seeds' uploads back to the depth, a year by default.
+
+    Stores payloads in `yt_raw_videos`, without counters until the
+    derived-metrics use case is accepted; leaves the poll loop's horizon
+    to it and hands it broadcasts yet to start. Spends the general pool
+    and leaves it `youtube_backfill_general_floor` units for the others.
+
+    Reaching the floor, the limit or a day YouTube declared over, or
+    finding another walk running, ends it with status 0 and a sentence;
+    the next run carries on. Anything else is a failure.
+    """
+    if whole and not channels:
+        raise typer.BadParameter(
+            "--whole needs the channels to walk to the end of their "
+            "playlists; name them"
+        )
+
+    from itgraph.db.models import ChannelStatus
+    from itgraph.db.session import Database
+    from itgraph.db.yt_backfill import BackfillBusyError
+    from itgraph.db.yt_channels import find_channel
+    from itgraph.yt.backfill import run_walk
+
+    async def run() -> None:
+        database = Database()
+        try:
+            named: list[str] | None = None
+            if channels:
+                named = []
+                async with database.session() as session:
+                    for ref in channels:
+                        channel = await find_channel(session, ref)
+                        if (
+                            channel.status is not ChannelStatus.SEED
+                            or channel.gone_at is not None
+                        ):
+                            state = (
+                                "gone"
+                                if channel.gone_at is not None
+                                else channel.status.value
+                            )
+                            typer.secho(
+                                f"{channel.channel_id} is {state}, not a "
+                                "seed YouTube returns; only seeds are walked",
+                                fg=typer.colors.RED,
+                                err=True,
+                            )
+                            raise typer.Exit(1)
+                        named.append(channel.channel_id)
+            report = await run_walk(
+                database, named=named, whole=whole, limit=limit
+            )
+        except BackfillBusyError as exc:
+            typer.echo(str(exc))
+            return
+        finally:
+            await database.dispose()
+
+        typer.echo(report.line())
+        if report.failed is not None:
+            typer.secho(str(report.failed), fg=typer.colors.RED, err=True)
+            raise typer.Exit(1)
+        if report.stopped is not None:
+            typer.echo(str(report.stopped))
+
+    _run_yt(run())
+
+
+@yt_app.command("backfill-status")
+def yt_backfill_status() -> None:
+    """Where the history walk stands: seeds walked, due, failing, capped.
+
+    Makes no request and takes no lock. The counts of items out of order,
+    undated and not returned are what the first walks are for: they say
+    whether the listing's newest-first order holds and what the API does
+    with videos it will not show.
+    """
+    from itgraph.config import settings
+    from itgraph.db.models import YtQuotaPool
+    from itgraph.db.session import Database
+    from itgraph.db.yt_backfill import walk_summary
+    from itgraph.db.yt_quota import pool_cap, pool_spent
+    from itgraph.db.yt_videos import count_found_by_walks
+
+    async def run() -> None:
+        now = datetime.now(UTC)
+        database = Database()
+        try:
+            spent = await pool_spent(database, YtQuotaPool.GENERAL, now=now)
+            async with database.session() as session:
+                summary = await walk_summary(session)
+                found = await count_found_by_walks(session)
+        finally:
+            await database.dispose()
+
+        if settings.youtube_backfill_enabled:
+            typer.echo(
+                "walk enabled: seeds are walked daily, past uploads kept fresh"
+            )
+        else:
+            typer.echo(
+                "walk disabled: nothing walks unattended, and what a walk by "
+                "hand stores expires in 30 days"
+            )
+        typer.echo(
+            f"{summary.seeds} seed(s): {summary.walked} walked, "
+            f"{summary.due} due ({summary.interrupted} interrupted), "
+            f"{summary.failing} failing, {summary.capped} capped"
+        )
+        typer.echo(
+            f"listing: {summary.out_of_order} item(s) out of order, "
+            f"{summary.undated} undated, {summary.unreturned} not returned"
+        )
+        typer.echo(f"{found} stored video(s) found by walks")
+        cap = pool_cap(YtQuotaPool.GENERAL)
+        floor = settings.youtube_backfill_general_floor
+        typer.echo(
+            f"general pool: {spent} of {cap} units today; a walk stops "
+            f"with {floor} left"
+        )
 
     _run_yt(run())
 

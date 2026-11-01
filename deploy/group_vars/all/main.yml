@@ -48,6 +48,16 @@ itgraph_yt_watch_schedule: "*/15 * * * *"
 itgraph_backup_schedule: "40 */4 * * *"
 itgraph_baselines_schedule: "30 4 * * *"
 itgraph_yt_refresh_schedule: "0 5 * * *"
+# After the Pacific midnight in either season: 10:00 here in summer and
+# 11:00 in winter, so 11:30 is always early in a fresh quota day.
+itgraph_yt_backfill_schedule: "30 11 * * *"
+
+# The YouTube history walk: the daily CronJob that walks seeds not yet
+# walked, and the refresh that keeps their past uploads fresh. Off until
+# something reads the history — the mention graph, or acceptance of the
+# derived-metrics use case, whichever comes first. A walk run by hand
+# works either way; with this off, what it stores expires in 30 days.
+youtube_backfill_enabled: false
 
 # The z a post's best metric must pass to raise an alert. Measured: 3.7
 # gives about eight a day after folding, the volume 3.3 gave before

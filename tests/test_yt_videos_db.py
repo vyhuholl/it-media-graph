@@ -26,12 +26,14 @@ from itgraph.db.models import (
 from itgraph.db.session import Database
 from itgraph.db.yt_channels import create_channels
 from itgraph.db.yt_videos import (
+    FoundVideo,
     VideoWrite,
     discoveries_since,
     due_videos,
     known_video_ids,
     purge_expired_videos,
     remove_videos,
+    store_found_videos,
     store_videos,
 )
 from itgraph.derive.yt_videos import Counters
@@ -236,6 +238,82 @@ async def test_discoveries_are_counted_by_path(database: Database) -> None:
         YtDiscoveryPath.COUNT: 2,
         YtDiscoveryPath.CHECK: 1,
     }
+
+
+async def test_the_walk_s_finds_are_not_counted_among_the_loop_s(
+    database: Database,
+) -> None:
+    await _seed(database, 1)
+    await _store(database, _write(1, via=YtDiscoveryPath.COUNT))
+    async with database.session() as session:
+        await store_found_videos(
+            session,
+            [_found(n) for n in range(2, 12)],
+            fetched_at=NOW,
+        )
+        found = await discoveries_since(session, since=NOW - timedelta(days=7))
+
+    assert found == {
+        YtDiscoveryPath.FIRST: 0,
+        YtDiscoveryPath.COUNT: 1,
+        YtDiscoveryPath.CHECK: 0,
+    }
+
+
+def _found(
+    number: int, *, reading: bool = False, due: datetime | None = None
+) -> FoundVideo:
+    return FoundVideo(
+        video_id=video_id(number),
+        payload=video_resource(number, published=NOW - timedelta(days=90)),
+        due_at=due,
+        reading=Counters(views=7, likes=1, comments=0) if reading else None,
+    )
+
+
+async def test_a_walk_never_touches_a_video_already_stored(
+    database: Database,
+) -> None:
+    """A video the poll loop tracks keeps its payload, schedule and path."""
+    await _seed(database, 1)
+    due = NOW + timedelta(hours=2)
+    await _store(database, _write(1, due=due, via=YtDiscoveryPath.COUNT))
+    later = NOW + timedelta(hours=1)
+
+    async with database.session() as session:
+        stored = await store_found_videos(
+            session, [_found(1, reading=True), _found(2)], fetched_at=later
+        )
+
+    assert stored == [video_id(2)]
+    async with database.session() as session:
+        video = await session.get(YtRawVideo, video_id(1))
+        walked = await session.get(YtRawVideo, video_id(2))
+    assert video is not None and walked is not None
+    assert video.payload["snippet"]["title"] == TITLE
+    assert (video.fetched_at, video.due_at) == (NOW, due)
+    assert video.discovered_via is YtDiscoveryPath.COUNT
+    assert walked.discovered_via is YtDiscoveryPath.BACKFILL
+    assert (walked.discovered_at, walked.fetched_at) == (later, later)
+    assert walked.due_at is None
+    # The reading offered for the video the loop owns went nowhere.
+    assert [r.observed_at for r in await _readings(database)] == [NOW]
+
+
+async def test_a_walk_s_reading_goes_in_with_its_video(
+    database: Database,
+) -> None:
+    await _seed(database, 1)
+
+    async with database.session() as session:
+        await store_found_videos(
+            session, [_found(1, reading=True), _found(2)], fetched_at=NOW
+        )
+
+    readings = await _readings(database)
+    assert [(r.video_id, r.observed_at, r.views) for r in readings] == [
+        (video_id(1), NOW, 7)
+    ]
 
 
 async def test_expired_videos_and_readings_are_removed(

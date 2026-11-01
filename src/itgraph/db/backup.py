@@ -59,7 +59,12 @@ INVENTORY_TABLES = ("channels", "backfill_state", "yt_channels")
 # out makes that irrelevant, and costs nothing worth having: fetching the
 # whole YouTube inventory again is about ten units of quota, the one
 # thing in this database cheaper to fetch than to keep.
-EXCLUDED_DATA = ("yt_raw_*",)
+#
+# `yt_backfill_walks` holds no API data and is left out for another
+# reason: it says which channels' history was walked, and that history
+# is in `yt_raw_videos`. Restored without it, the record would claim
+# walks that are not there — and nothing would walk them again.
+EXCLUDED_DATA = ("yt_raw_*", "yt_backfill_walks")
 
 # UTC, and said so in the name: a dump taken at 13:08 local is stamped
 # 10:08, and without the Z that reads as a machine with the wrong clock.

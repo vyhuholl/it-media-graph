@@ -375,4 +375,66 @@ spec:
           volumes:
             - name: tmp
               emptyDir: {}
+{# A YAML boolean from main.yml and a string from `-e` read alike. #}
+{% if (youtube_backfill_enabled | default(false) | string | lower) in ["true", "yes", "on", "1"] %}
+---
+# The history walk: seeds not yet walked, once a day, within the floor
+# it leaves the general pool. Only with the walk switched on; the
+# playbook deletes it when it is switched off.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: itgraph-yt-backfill
+  namespace: itgraph
+spec:
+  schedule: {{ itgraph_yt_backfill_schedule | tojson }}
+  timeZone: Europe/Moscow
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 82800
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      # Fifty minutes: a walk of 500 channels is estimated at 11–21.
+      activeDeadlineSeconds: 3000
+      template:
+        metadata:
+          labels:
+            app: itgraph-yt-backfill
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 3000
+            runAsGroup: 3000
+            fsGroup: 3000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: itgraph
+              image: {{ itgraph_image | tojson }}
+              args: ["yt", "backfill"]
+              envFrom:
+                - secretRef:
+                    name: itgraph-env
+              securityContext:
+                readOnlyRootFilesystem: true
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 1Gi
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}
+{% endif %}
 {% endif %}

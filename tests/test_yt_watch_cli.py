@@ -367,3 +367,75 @@ def test_the_status_before_any_pass(
     assert result.exit_code == 0, result.output
     assert "0 video(s) tracked" in result.output
     assert "no pass has run yet" in result.output
+
+
+def test_the_walk_s_finds_stay_out_of_the_loop_s_counts(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    """A thousand walked videos and one broadcast handed over this week:
+    none is counted under a path of the loop's, and the broadcast is
+    tracked."""
+    from itgraph.db.yt_videos import FoundVideo, store_found_videos
+
+    now = datetime.now(UTC)
+
+    async def walked() -> None:
+        await _arrange(database_url)
+        database = Database(database_url)
+        try:
+            async with database.session() as session:
+                old = [
+                    FoundVideo(
+                        video_id=f"fakewalk{n:03d}",
+                        payload=video_resource(
+                            1, published=now - timedelta(days=60)
+                        )
+                        | {"id": f"fakewalk{n:03d}"},
+                        due_at=None,
+                        reading=None,
+                    )
+                    for n in range(1000)
+                ]
+                stream = video_resource(
+                    2,
+                    published=now - timedelta(days=60),
+                    broadcast="upcoming",
+                    scheduled=now + timedelta(days=1),
+                )
+                handed = FoundVideo(
+                    video_id=video_id(2),
+                    payload=stream,
+                    due_at=now + timedelta(days=1),
+                    reading=None,
+                )
+                await store_found_videos(
+                    session, [*old, handed], fetched_at=now
+                )
+        finally:
+            await database.dispose()
+
+    asyncio.run(walked())
+    _use(monkeypatch, database_url, FakeYouTube())
+
+    result = runner.invoke(app, ["yt", "watch-status"])
+
+    assert result.exit_code == 0, result.output
+    assert "1 video(s) tracked" in result.output
+    assert (
+        "found in 7 days: 0 by the video count, 0 by the daily check, "
+        "0 by first listings"
+    ) in result.output
+
+    async def path() -> YtDiscoveryPath:
+        database = Database(database_url)
+        try:
+            async with database.session() as session:
+                from itgraph.db.models import YtRawVideo
+
+                found = await session.get(YtRawVideo, video_id(2))
+                assert found is not None
+                return found.discovered_via
+        finally:
+            await database.dispose()
+
+    assert asyncio.run(path()) is YtDiscoveryPath.BACKFILL

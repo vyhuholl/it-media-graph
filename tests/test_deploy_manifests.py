@@ -48,6 +48,8 @@ EXAMPLE: dict[str, Any] = {
     "itgraph_backup_schedule": "40 */4 * * *",
     "itgraph_baselines_schedule": "30 4 * * *",
     "itgraph_yt_refresh_schedule": "0 5 * * *",
+    "itgraph_yt_backfill_schedule": "30 11 * * *",
+    "youtube_backfill_enabled": False,
     "b2_key_id": "test-b2-key-id",
     "b2_application_key": "test-b2-app-key",
     "b2_bucket_name": "test-b2-bucket",
@@ -207,11 +209,16 @@ SCHEDULES = {
     "itgraph-backup": ("40 */4 * * *", 10800, 7200),
     "itgraph-baselines": ("30 4 * * *", 82800, 10800),
     "itgraph-yt-refresh": ("0 5 * * *", 82800, 10800),
+    # After the Pacific reset in either season; fifty minutes for a walk
+    # of 500 channels estimated at 11–21 (add-youtube-backfill).
+    "itgraph-yt-backfill": ("30 11 * * *", 82800, 3000),
 }
+
+WALK_ON = {**EXAMPLE, "youtube_backfill_enabled": True}
 
 
 def test_cronjobs_moscow_time_forbid_and_no_retry() -> None:
-    jobs = of(render_all(), "CronJob")
+    jobs = of(render_all(WALK_ON), "CronJob")
     assert {job["metadata"]["name"] for job in jobs} == set(SCHEDULES)
     for job in jobs:
         name = job["metadata"]["name"]
@@ -252,7 +259,7 @@ def test_alerts_derives_before_it_alerts() -> None:
 
 
 def test_every_container_runs_in_moscow_time() -> None:
-    objects = render_all()
+    objects = render_all(WALK_ON)
     secrets = secret_data(objects)
     for _, pod_spec in pod_specs(objects):
         for container in containers(pod_spec):
@@ -286,7 +293,7 @@ def test_the_proxy_has_exactly_one_way_out() -> None:
 
 
 def test_itgraph_pods_are_contained() -> None:
-    for name, pod_spec in pod_specs(render_all()):
+    for name, pod_spec in pod_specs(render_all(WALK_ON)):
         assert pod_spec["automountServiceAccountToken"] is False, name
         if name == "itgraph-postgres":
             # The official image manages its own user, root to postgres,
@@ -319,6 +326,56 @@ def test_youtube_cronjobs_follow_the_key() -> None:
     without_key_env = secret_data(render_all(without_key))["itgraph-env"]
     assert "YOUTUBE_API_KEY" not in without_key_env
     assert "YOUTUBE_API_KEY" in secret_data(render_all())["itgraph-env"]
+
+
+def _jobs(variables: dict[str, Any]) -> set[str]:
+    return {
+        job["metadata"]["name"] for job in of(render_all(variables), "CronJob")
+    }
+
+
+def test_the_walk_s_cronjob_follows_the_key_and_the_switch() -> None:
+    without_key = dict(WALK_ON)
+    del without_key["youtube_api_key"]
+    assert "itgraph-yt-backfill" not in _jobs(without_key)
+    assert "itgraph-yt-backfill" not in _jobs(EXAMPLE)
+    assert "itgraph-yt-backfill" in _jobs(WALK_ON)
+    # From `-e`, a switch arrives as a string; "false" must not read true.
+    assert "itgraph-yt-backfill" not in _jobs(
+        {**EXAMPLE, "youtube_backfill_enabled": "false"}
+    )
+    assert "itgraph-yt-backfill" in _jobs(
+        {**EXAMPLE, "youtube_backfill_enabled": "true"}
+    )
+
+    walk = named(render_all(WALK_ON), "CronJob", "itgraph-yt-backfill")
+    pod = walk["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+    assert pod["containers"][0]["args"] == ["yt", "backfill"]
+
+
+def test_the_switch_reaches_every_command() -> None:
+    """Expiry reads it in every `yt` command, key or no key."""
+    without_key = dict(EXAMPLE)
+    del without_key["youtube_api_key"]
+    assert (
+        secret_data(render_all(without_key))["itgraph-env"][
+            "YOUTUBE_BACKFILL_ENABLED"
+        ]
+        == "false"
+    )
+    assert (
+        secret_data(render_all(WALK_ON))["itgraph-env"][
+            "YOUTUBE_BACKFILL_ENABLED"
+        ]
+        == "true"
+    )
+
+
+def test_main_yml_leaves_the_walk_off() -> None:
+    path = TEMPLATES.parents[1] / "group_vars" / "all" / "main.yml"
+    assert (
+        yaml.safe_load(path.read_text())["youtube_backfill_enabled"] is False
+    )
 
 
 def test_every_object_lives_in_the_namespace() -> None:

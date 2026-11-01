@@ -1120,10 +1120,21 @@
     - name: Delete the YouTube jobs when there is no key
       ansible.builtin.command: >-
         {{ kubectl }} delete cronjob itgraph-yt-watch itgraph-yt-refresh
-        --ignore-not-found
+        itgraph-yt-backfill --ignore-not-found
       register: youtube_deleted
       changed_when: "'deleted' in youtube_deleted.stdout"
       when: youtube_api_key | default('') | length == 0
+      tags: [services]
+
+    # With a key and the walk switched off: the walk's job alone goes.
+    - name: Delete the history walk's job when the walk is off
+      ansible.builtin.command: >-
+        {{ kubectl }} delete cronjob itgraph-yt-backfill --ignore-not-found
+      register: backfill_deleted
+      changed_when: "'deleted' in backfill_deleted.stdout"
+      when:
+        - youtube_api_key | default('') | length > 0
+        - not (youtube_backfill_enabled | default(false) | bool)
       tags: [services]
 
     - name: The collector is rolled out

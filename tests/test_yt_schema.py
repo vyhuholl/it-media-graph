@@ -17,6 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from ytfakes import channel_id, channel_resource, video_id, video_resource
 
 from itgraph.db.models import (
+    YtBackfillWalk,
     YtDiscoveryPath,
     YtRawChannel,
     YtRawVideo,
@@ -88,6 +89,29 @@ async def test_a_reading_goes_with_its_video(database: Database) -> None:
         )
         left = await session.scalar(
             select(func.count()).select_from(YtRawVideoStat)
+        )
+    assert left == 0
+
+
+async def test_a_walk_goes_with_its_channel(database: Database) -> None:
+    """A walk record is about a channel; without the channel it is nothing."""
+    async with database.session() as session:
+        await create_channels(session, [channel_id(1)])
+        session.add(
+            YtBackfillWalk(
+                channel_id=channel_id(1),
+                cutoff=NOW - timedelta(days=365),
+                started_at=NOW,
+            )
+        )
+
+    async with database.session() as session:
+        await session.execute(
+            text("DELETE FROM yt_channels WHERE channel_id = :id"),
+            {"id": channel_id(1)},
+        )
+        left = await session.scalar(
+            select(func.count()).select_from(YtBackfillWalk)
         )
     assert left == 0
 

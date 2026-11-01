@@ -12,7 +12,7 @@ Nothing here decides anything. When a video is due is computed in
 ``derive/yt_videos``.
 """
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, time
 from typing import Any
@@ -21,6 +21,7 @@ from sqlalchemy import (
     ColumnElement,
     DateTime,
     and_,
+    cast,
     delete,
     func,
     literal,
@@ -42,18 +43,23 @@ from itgraph.db.models import (
 from itgraph.derive.yt_videos import Counters
 
 __all__ = [
+    "LOOP_PATHS",
     "DueVideo",
+    "FoundVideo",
     "VideoWrite",
     "count_due",
+    "count_found_by_walks",
     "count_tracked",
     "discoveries_since",
     "due_videos",
     "finish_videos",
     "known_video_ids",
     "oldest_due",
+    "past_uploads_due_for_refresh",
     "purge_expired_videos",
     "remove_videos",
     "replace_payloads",
+    "store_found_videos",
     "store_videos",
     "videos_due_for_refresh",
 ]
@@ -90,6 +96,15 @@ class VideoWrite:
     due_at: datetime | None
     reading: Counters | None
     discovered_via: YtDiscoveryPath
+
+
+# The paths the poll loop itself finds videos by. The history walk's is
+# not among them.
+LOOP_PATHS = (
+    YtDiscoveryPath.FIRST,
+    YtDiscoveryPath.COUNT,
+    YtDiscoveryPath.CHECK,
+)
 
 
 def _watched() -> ColumnElement[bool]:
@@ -205,6 +220,75 @@ async def store_videos(
     return len(stored.all())
 
 
+@dataclass(frozen=True, slots=True)
+class FoundVideo:
+    """A video the history walk found, ready to be stored.
+
+    ``due_at`` is set only for a broadcast yet to start, which the walk
+    hands to the poll loop; every other video it stores is past the
+    horizon and never due. ``reading`` is ``None`` until acceptance is
+    recorded, and for a broadcast in any case.
+    """
+
+    video_id: str
+    payload: dict[str, Any]
+    due_at: datetime | None
+    reading: Counters | None
+
+
+async def store_found_videos(
+    session: AsyncSession,
+    found: Sequence[FoundVideo],
+    *,
+    fetched_at: datetime,
+) -> list[str]:
+    """Store what a walk found, never touching a video already stored.
+
+    Returns the ids actually stored. A video the poll loop tracks keeps
+    its payload, its schedule and how it was found: ``DO NOTHING`` on
+    conflict, where the loop's own write replaces. A reading goes in
+    only for a video this call stored, in the same transaction.
+    """
+    if not found:
+        return []
+    stored = set(
+        await session.scalars(
+            insert(YtRawVideo)
+            .values(
+                [
+                    {
+                        "video_id": video.video_id,
+                        "payload": video.payload,
+                        "fetched_at": fetched_at,
+                        "discovered_at": fetched_at,
+                        "discovered_via": YtDiscoveryPath.BACKFILL,
+                        "due_at": video.due_at,
+                    }
+                    for video in found
+                ]
+            )
+            .on_conflict_do_nothing(index_elements=[YtRawVideo.video_id])
+            .returning(YtRawVideo.video_id)
+        )
+    )
+    readings = [
+        {
+            "video_id": video.video_id,
+            "observed_at": fetched_at,
+            "views": video.reading.views,
+            "likes": video.reading.likes,
+            "comments": video.reading.comments,
+        }
+        for video in found
+        if video.reading is not None and video.video_id in stored
+    ]
+    if readings:
+        await session.execute(
+            insert(YtRawVideoStat).values(readings).on_conflict_do_nothing()
+        )
+    return [video.video_id for video in found if video.video_id in stored]
+
+
 async def videos_due_for_refresh(
     session: AsyncSession, *, older_than: datetime
 ) -> list[str]:
@@ -236,13 +320,50 @@ async def videos_due_for_refresh(
     return list(rows)
 
 
+async def past_uploads_due_for_refresh(
+    session: AsyncSession, *, older_than: datetime, since: datetime
+) -> list[str]:
+    """Past uploads the refresh keeps: a year of every seed's, kept fresh.
+
+    Every video of a seed that the poll loop is done with — no longer
+    due, and not a broadcast still waiting to start, which the loop
+    checks itself — published since ``since`` (the depth back from now),
+    whose payload is older than the refresh age. The poll loop's finished
+    videos and the walk's alike: together they are the year.
+
+    The publication time is read out of the payload here because it is
+    not a column: a text-to-``timestamptz`` cast cannot be generated.
+    """
+    snippet = YtRawVideo.payload["snippet"]
+    published = cast(snippet["publishedAt"].astext, DateTime(timezone=True))
+    broadcast = snippet["liveBroadcastContent"].astext
+    rows = await session.scalars(
+        select(YtRawVideo.video_id)
+        .where(
+            _watched(),
+            YtRawVideo.due_at.is_(None),
+            YtRawVideo.fetched_at < older_than,
+            func.coalesce(broadcast, "none") != "upcoming",
+            published >= since,
+        )
+        .order_by(YtRawVideo.fetched_at, YtRawVideo.video_id)
+    )
+    return list(rows)
+
+
 async def replace_payloads(
     session: AsyncSession,
     payloads: dict[str, dict[str, Any]],
     *,
     fetched_at: datetime,
-) -> None:
-    """Replace stored video payloads and nothing else: no reading, no schedule."""
+    readings: Mapping[str, Counters] | None = None,
+) -> int:
+    """Replace stored video payloads; with ``readings``, take them too.
+
+    No schedule changes. A reading is added beside the earlier ones, as
+    the poll loop's are, for each video given one. Returns how many
+    readings were stored.
+    """
     for video_id, payload in payloads.items():
         await session.execute(
             update(YtRawVideo)
@@ -250,6 +371,26 @@ async def replace_payloads(
             .values(payload=payload, fetched_at=fetched_at)
             .execution_options(synchronize_session=False)
         )
+    rows = [
+        {
+            "video_id": video_id,
+            "observed_at": fetched_at,
+            "views": counters.views,
+            "likes": counters.likes,
+            "comments": counters.comments,
+        }
+        for video_id, counters in (readings or {}).items()
+        if video_id in payloads
+    ]
+    if not rows:
+        return 0
+    stored = await session.execute(
+        insert(YtRawVideoStat)
+        .values(rows)
+        .on_conflict_do_nothing()
+        .returning(YtRawVideoStat.video_id)
+    )
+    return len(stored.all())
 
 
 async def finish_videos(
@@ -370,21 +511,38 @@ async def oldest_due(
     return oldest
 
 
+async def count_found_by_walks(session: AsyncSession) -> int:
+    """How many stored videos the history walk found."""
+    return (
+        await session.scalar(
+            select(func.count())
+            .select_from(YtRawVideo)
+            .where(YtRawVideo.discovered_via == YtDiscoveryPath.BACKFILL)
+        )
+        or 0
+    )
+
+
 async def discoveries_since(
     session: AsyncSession, *, since: datetime
 ) -> dict[YtDiscoveryPath, int]:
-    """How many videos each discovery path found since a moment.
+    """How many videos each of the poll loop's paths found since a moment.
 
     Read from the videos themselves, so it reaches back only as far as
     their data does — 30 days, which is more than the week the status
-    command asks for.
+    command asks for. The history walk's finds are left out: a year of
+    uploads counted beside a week of the loop's would say nothing about
+    how often the count misses, which is what these numbers are for.
     """
     rows = await session.execute(
         select(YtRawVideo.discovered_via, func.count())
-        .where(YtRawVideo.discovered_at >= since)
+        .where(
+            YtRawVideo.discovered_at >= since,
+            YtRawVideo.discovered_via.in_(LOOP_PATHS),
+        )
         .group_by(YtRawVideo.discovered_via)
     )
-    found = {path: 0 for path in YtDiscoveryPath}
+    found = {path: 0 for path in LOOP_PATHS}
     for path, count in rows.tuples():
         found[path] = count
     return found
