@@ -7,7 +7,7 @@ What is read from the YouTube Data API with an API key may be kept at most 30 da
 
 ### Requirement: API Data Has One Home
 
-The system SHALL store data read from the API in one home only: a channel's as its latest payload, a video's as its latest payload, a reading's counters as that reading, and which channel a linked video, handle or legacy name belongs to as that name's lookup. A title, handle, description or statistic MUST NOT be copied into any other table, column, log record or backup, so that removing the home removes the data. What the system works out from a video's data SHALL be stored with that video's payload and removed with it.
+The system SHALL store data read from the API in one home only: a channel's as its latest payload, a video's as its latest payload, a reading's counters as that reading, which channel a linked video, handle or legacy name belongs to as that name's lookup, which channels a seed features as that seed's featured list, and which channels a search returned as that search's results. A title, handle, description or statistic MUST NOT be copied into any other table, column, log record or backup, so that removing the home removes the data. What the system works out from a video's data SHALL be stored with that video's payload and removed with it.
 
 #### Scenario: Removing the payload removes the data
 
@@ -44,6 +44,29 @@ The system SHALL store data read from the API in one home only: a channel's as i
 - **GIVEN** a video whose channel is known only from its lookup
 - **WHEN** the lookup is removed
 - **THEN** nothing in the database says which channel the video belongs to
+
+#### Scenario: A featured list holds channel ids only
+
+- **WHEN** a seed's featured list is stored
+- **THEN** it holds the seed's id, the channel ids its sections list, and the moment
+- **AND** no section type or title, and nothing about the listed channels
+
+#### Scenario: A newer featured list replaces the old one
+
+- **WHEN** a seed's sections are read again
+- **THEN** its stored list is replaced, not added to
+
+#### Scenario: A search result holds a channel id only
+
+- **WHEN** a search's results are stored
+- **THEN** each holds its run, its position and a channel id
+- **AND** no title, description or video id
+
+#### Scenario: Removing a run removes its results
+
+- **GIVEN** a search run with results
+- **WHEN** the run is removed
+- **THEN** nothing in the database says which channels it returned
 
 ### Requirement: Refresh
 
@@ -102,7 +125,7 @@ The system SHALL run the refresh daily on the collection host without an operato
 
 ### Requirement: Expiry
 
-The system SHALL remove every channel payload and video payload fetched, every lookup fetched, and every reading taken, more than 30 days ago, except readings the derived-metrics decision keeps longer. The removal SHALL happen in every YouTube command that reaches the database, whether or not it makes requests, before the command reads or writes anything else there. The channel record SHALL remain.
+The system SHALL remove every channel payload and video payload fetched, every lookup and featured list fetched, every search run made with its results, and every reading taken, more than 30 days ago, except readings the derived-metrics decision keeps longer. The removal SHALL happen in every YouTube command that reaches the database, whether or not it makes requests, before the command reads or writes anything else there. The channel record SHALL remain.
 
 #### Scenario: An expired payload is removed before any work
 
@@ -123,6 +146,13 @@ The system SHALL remove every channel payload and video payload fetched, every l
 - **GIVEN** a lookup fetched 31 days ago, found or not found
 - **WHEN** any YouTube command reaches the database, the offline ranking of Telegram links included
 - **THEN** the lookup is removed before the command reads or writes anything else there
+
+#### Scenario: An expired featured list and search run are removed before any work
+
+- **GIVEN** a featured list fetched 31 days ago and a search run made 31 days ago
+- **WHEN** any YouTube command reaches the database, an offline candidates report included
+- **THEN** the list, the run and its results are removed before the command reads or writes anything else there
+- **AND** the operator's record of the query remains
 
 #### Scenario: A command that refuses its input touches nothing
 
@@ -170,7 +200,7 @@ The system SHALL treat a channel YouTube no longer returns when asked for by id,
 
 ### Requirement: Backups Carry No API Data
 
-Database dumps SHALL NOT contain YouTube API data, nor the history walk's records, which describe API data the dumps leave out. The daily inventory dump SHALL contain the YouTube channel records; restoring any dump SHALL leave payloads, readings, lookups and walk records empty until YouTube is asked again.
+Database dumps SHALL NOT contain YouTube API data, nor the history walk's records or the search runs, which describe API data the dumps leave out. The daily inventory dump SHALL contain the YouTube channel records and the operator's search queries; restoring any dump SHALL leave payloads, readings, lookups, featured lists, search runs and results, and walk records empty until YouTube is asked again.
 
 #### Scenario: A full dump leaves the payloads out
 
@@ -192,16 +222,27 @@ Database dumps SHALL NOT contain YouTube API data, nor the history walk's record
 - **WHEN** a full dump is taken
 - **THEN** it holds the definition of the walk records' table and none of its rows
 
+#### Scenario: A full dump leaves featured lists and searches out
+
+- **WHEN** a full dump is taken
+- **THEN** it holds the definitions of the featured lists', search runs' and search results' tables and none of their rows
+
 #### Scenario: The inventory dump keeps the review
 
 - **WHEN** the daily inventory dump is taken
 - **THEN** it holds every YouTube channel record with its review
+
+#### Scenario: The inventory dump keeps the queries
+
+- **WHEN** the daily inventory dump is taken
+- **THEN** it holds every search query the operator has asked, with its type and dates
 
 #### Scenario: A restore is completed by a refresh
 
 - **GIVEN** a database restored from a dump
 - **WHEN** a refresh runs
 - **THEN** every channel's payload is fetched again
+- **AND** every seed's featured list is read again
 
 #### Scenario: A restore is completed by a walk
 
@@ -215,6 +256,12 @@ Database dumps SHALL NOT contain YouTube API data, nor the history walk's record
 - **GIVEN** a database restored from a dump
 - **WHEN** `itgraph yt tg-lookup` runs
 - **THEN** every name linked from the seeds that no stored payload answers is looked up anew
+
+#### Scenario: A restored query is not taken for a recent run
+
+- **GIVEN** a database restored from a dump, holding a query searched 5 days before the dump
+- **WHEN** the query is searched again
+- **THEN** it is asked, since no run of it is in date
 
 ### Requirement: Review Files Expire
 

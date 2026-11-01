@@ -13,8 +13,9 @@ What an answer means:
 
 - 200 is the body.
 - 404 is "no such channel, playlist or video", returned as ``None``.
-- 403 ``quotaExceeded`` ends the quota day for every command: recorded,
-  never retried.
+- 403 ``quotaExceeded`` ends the quota day for the bucket the method is
+  charged to — search's own, or the main one every other method shares:
+  recorded, never retried.
 - 5xx and 429 are retried, each attempt booked again.
 - Anything else stops the command with what YouTube said. So does a 403
   whose body cannot be read: failing closed must not mean marking a day
@@ -40,11 +41,12 @@ from typing import Any
 import httpx
 
 from itgraph.config import settings
-from itgraph.db.models import YtCommand, YtRequestOutcome
+from itgraph.db.models import YtCommand, YtQuotaBucket, YtRequestOutcome
 from itgraph.db.session import Database
 from itgraph.db.yt_quota import (
     QuotaExhaustedError,
     book,
+    bucket_of,
     record_exhaustion,
     record_outcome,
 )
@@ -55,7 +57,9 @@ __all__ = [
     "API_ROOT",
     "COSTS",
     "KEY_HEADER",
+    "SEPARATE_BUCKETS",
     "YouTube",
+    "bucket_of_method",
     "request_urls_unlogged",
     "youtube",
 ]
@@ -70,9 +74,25 @@ KEY_HEADER = "x-goog-api-key"
 # looked up is a request the ledger cannot book honestly.
 COSTS: Mapping[str, int] = {
     "channels.list": 1,
+    "channelSections.list": 1,
     "playlistItems.list": 1,
+    "search.list": 1,
     "videos.list": 1,
 }
+
+# Which of Google's buckets a method is charged to, when not the main
+# one. Since 2026-06-01 `search.list` has a bucket of its own — 100 calls
+# a day at a unit each, outside the daily 10,000 — and a `quotaExceeded`
+# it draws ends that bucket's day and no other.
+SEPARATE_BUCKETS: Mapping[str, YtQuotaBucket] = {
+    "search.list": YtQuotaBucket.SEARCH,
+}
+
+
+def bucket_of_method(method: str) -> YtQuotaBucket:
+    """The bucket Google charges a method to."""
+    return SEPARATE_BUCKETS.get(method, YtQuotaBucket.MAIN)
+
 
 # Attempts at one request, and the wait before each attempt after the
 # first. Three, because a 5xx from Google is nearly always one bad
@@ -147,8 +167,20 @@ class YouTube:
         ledger) when the call may not be made or YouTube refuses it for
         quota, and ``ApiError`` for everything else that is not an
         answer.
+
+        A method charged to another bucket than the command's pool is
+        refused before anything is booked: booking a search against the
+        general pool would spend units Google never charged, and a
+        ``quotaExceeded`` it drew would end the wrong bucket's day.
         """
         units = COSTS[method]
+        bucket = bucket_of_method(method)
+        if bucket is not bucket_of(self._command):
+            raise ValueError(
+                f"{method} is charged to the {bucket.value} bucket, and "
+                f"`yt {self._command.value}` spends from the "
+                f"{bucket_of(self._command).value} one"
+            )
         path = method.split(".")[0]
         for attempt in range(ATTEMPTS):
             if attempt:
@@ -188,10 +220,11 @@ class YouTube:
                     self._database, booking, YtRequestOutcome.QUOTA_EXCEEDED
                 )
                 now = datetime.now(UTC)
+                # The command's bucket is the method's, as checked above.
                 await record_exhaustion(
                     self._database, command=self._command, now=now
                 )
-                raise QuotaExhaustedError(next_reset(now))
+                raise QuotaExhaustedError(next_reset(now), bucket)
 
             await record_outcome(
                 self._database, booking, YtRequestOutcome.ERROR

@@ -1,5 +1,8 @@
 """Reading the mention graph out of the stored payloads, as of now.
 
+The sources are seeds' videos — title and description — and seeds'
+featured lists in date, each read as a reference of the seed itself.
+
 Reads, and writes nothing: no edge, no pending target, no count is
 stored anywhere, because a handle read out of a description is API data
 and lives only in its payload. Whatever expiry, a refresh or a removal
@@ -23,6 +26,10 @@ from itgraph.db.models import (
     YtRawChannel,
     YtRawVideo,
 )
+from itgraph.db.yt_lookups import lookups_in_date
+from itgraph.db.yt_sections import featured_lists
+from itgraph.derive.yt_featured import featured_ids
+from itgraph.derive.yt_mention_candidates import Naming, name_channels
 from itgraph.derive.yt_references import (
     Known,
     References,
@@ -33,7 +40,12 @@ from itgraph.derive.yt_references import (
 )
 from itgraph.derive.yt_videos import moment_of
 
-__all__ = ["YT_REFERENCE_SOURCE_STATUSES", "read_known", "read_references"]
+__all__ = [
+    "YT_REFERENCE_SOURCE_STATUSES",
+    "read_known",
+    "read_mention_queue",
+    "read_references",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -122,12 +134,48 @@ async def read_references(session: AsyncSession) -> References:
             )
         )
 
-    references = resolve(sources, known)
+    featured = {
+        seed: featured_ids(payload)
+        for seed, payload in (await featured_lists(session)).items()
+    }
+    references = resolve(sources, known, featured)
     logger.info(
-        "read %d videos of %d seeds: %d edges, %d pending targets",
+        "read %d videos and %d featured lists of %d seeds: %d edges, "
+        "%d pending targets",
         references.videos,
+        references.featured_lists,
         references.seeds,
         len(references.edges),
         len(references.pending),
     )
     return references
+
+
+async def read_mention_queue(
+    session: AsyncSession,
+) -> tuple[References, Naming]:
+    """The mention graph, and the channels its references name, as of now.
+
+    The graph and the lookups in date are read in the one transaction
+    ``read_references`` opens, so a lookup committed in between cannot
+    make a reference both named and awaiting. Must be the first thing
+    done in the session.
+    """
+    references = await read_references(session)
+    lookups = await lookups_in_date(session)
+    naming = name_channels(
+        references,
+        {
+            (kind.value, value): channel
+            for (kind, value), channel in lookups.items()
+        },
+    )
+    logger.info(
+        "the seeds' videos name %d channels; %d references await a lookup, "
+        "%d named none, %d named their own channel",
+        len(naming.channels),
+        len(naming.awaiting),
+        naming.not_found,
+        naming.own,
+    )
+    return references, naming

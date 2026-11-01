@@ -19,7 +19,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from itgraph.db.models import Metric
 from itgraph.yt_policy import RETENTION
-from itgraph.yt_quota import general_cap
+from itgraph.yt_quota import general_cap, search_cap
 
 __all__ = ["ProxyType", "Settings", "settings"]
 
@@ -572,6 +572,10 @@ class Settings(BaseSettings):
     # 500 channels, of which discovery is most; the headroom over that
     # is a guess until two weeks of `yt quota` measure it.
     youtube_watch_reserve: int = Field(default=3_000, ge=0)
+    # Google's default allocation of `search.list` calls a day, a bucket
+    # of its own outside `youtube_daily_quota` since 2026-06-01. The
+    # search pool is this less the same margin: 90 by default.
+    youtube_search_daily_quota: int = Field(default=100, ge=1)
     # How old a channel's payload may grow before the refresh asks for it
     # again. Strictly under the policy's 30 days — the difference is what
     # a few missed runs of the daily timer may eat.
@@ -1051,6 +1055,22 @@ class Settings(BaseSettings):
                 f"youtube_watch_reserve ({self.youtube_watch_reserve}) "
                 f"leave nothing of youtube_daily_quota "
                 f"({self.youtube_daily_quota}) for any other command"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _youtube_search_pool_is_not_empty(self) -> Self:
+        """Refuse a margin that leaves search nothing of its bucket."""
+        if (
+            search_cap(
+                self.youtube_search_daily_quota, self.youtube_quota_margin
+            )
+            < 1
+        ):
+            raise ValueError(
+                f"youtube_quota_margin ({self.youtube_quota_margin}) leaves "
+                "nothing of youtube_search_daily_quota "
+                f"({self.youtube_search_daily_quota}) for search"
             )
         return self
 

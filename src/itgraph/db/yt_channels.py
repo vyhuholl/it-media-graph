@@ -53,6 +53,7 @@ __all__ = [
     "due_for_refresh",
     "find_channel",
     "ids_by_handle",
+    "inventory_ids",
     "inventory_summary",
     "known_ids",
     "list_channels",
@@ -105,6 +106,15 @@ def stored_handle() -> ColumnElement[str]:
     """
     custom_url = YtRawChannel.payload["snippet"]["customUrl"].astext
     return func.lower(func.ltrim(custom_url, "@"))
+
+
+async def inventory_ids(session: AsyncSession) -> frozenset[str]:
+    """Every channel id with a record, whatever its status, gone included.
+
+    What every review queue leaves out: a record is never deleted, so a
+    rejected channel is never proposed again.
+    """
+    return frozenset(await session.scalars(select(YtChannel.channel_id)))
 
 
 async def known_ids(

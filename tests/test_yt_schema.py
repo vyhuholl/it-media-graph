@@ -19,13 +19,21 @@ from ytfakes import channel_id, channel_resource, video_id, video_resource
 from itgraph.db.models import (
     YtBackfillWalk,
     YtChannel,
+    YtCommand,
     YtDiscoveryPath,
     YtDiscoverySource,
     YtLookupKind,
+    YtQuotaBucket,
+    YtQuotaExhausted,
     YtRawChannel,
+    YtRawChannelSections,
     YtRawLookup,
+    YtRawSearchResult,
     YtRawVideo,
     YtRawVideoStat,
+    YtSearchQuery,
+    YtSearchRun,
+    YtSearchType,
 )
 from itgraph.db.session import Database
 from itgraph.db.yt_channels import create_channels, store_payloads
@@ -255,3 +263,157 @@ async def test_a_lookup_may_name_no_channel(database: Database) -> None:
             select(func.count()).select_from(YtRawLookup)
         )
     assert stored == 2
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        YtDiscoverySource.MENTION,
+        YtDiscoverySource.FEATURED,
+        YtDiscoverySource.SEARCH,
+    ],
+)
+async def test_records_from_youtube_queues_are_accepted(
+    database: Database, source: YtDiscoverySource
+) -> None:
+    async with database.session() as session:
+        await create_channels(session, [channel_id(1)], discovered_via=source)
+
+    async with database.session() as session:
+        record = await session.get(YtChannel, channel_id(1))
+    assert record is not None
+    assert record.discovered_via is source
+
+
+async def test_featured_lists_belong_to_records(database: Database) -> None:
+    """A list is a seed's, so its owner must be in the inventory."""
+    with pytest.raises(IntegrityError, match="fk_yt_raw_channel_sections"):
+        async with database.session() as session:
+            session.add(
+                YtRawChannelSections(
+                    channel_id=channel_id(9), payload={}, fetched_at=NOW
+                )
+            )
+
+
+async def test_a_featured_list_goes_with_its_channel(
+    database: Database,
+) -> None:
+    async with database.session() as session:
+        await create_channels(
+            session, [channel_id(1)], discovered_via=YtDiscoverySource.MANUAL
+        )
+        session.add(
+            YtRawChannelSections(
+                channel_id=channel_id(1), payload={"items": []}, fetched_at=NOW
+            )
+        )
+
+    async with database.session() as session:
+        await session.execute(text("DELETE FROM yt_channels"))
+    async with database.session() as session:
+        left = await session.scalar(
+            select(func.count()).select_from(YtRawChannelSections)
+        )
+    assert left == 0
+
+
+async def _run(database: Database) -> int:
+    async with database.session() as session:
+        query = YtSearchQuery(
+            query="fake query",
+            type=YtSearchType.VIDEO,
+            first_asked_at=NOW,
+            last_asked_at=NOW,
+        )
+        session.add(query)
+        await session.flush()
+        run = YtSearchRun(query_id=query.id, asked_at=NOW, pages=1)
+        session.add(run)
+        await session.flush()
+        return run.id
+
+
+@pytest.mark.parametrize(
+    ("position", "channel", "constraint"),
+    [
+        (1, "not-a-channel-id", "channel_shape"),
+        (0, channel_id(1), "position_from_one"),
+    ],
+)
+async def test_a_malformed_search_result_is_refused(
+    database: Database, position: int, channel: str, constraint: str
+) -> None:
+    run_id = await _run(database)
+    with pytest.raises(IntegrityError, match=constraint):
+        async with database.session() as session:
+            session.add(
+                YtRawSearchResult(
+                    run_id=run_id, position=position, channel_id=channel
+                )
+            )
+
+
+async def test_results_go_with_their_run(database: Database) -> None:
+    run_id = await _run(database)
+    async with database.session() as session:
+        session.add(
+            YtRawSearchResult(
+                run_id=run_id, position=1, channel_id=channel_id(1)
+            )
+        )
+
+    async with database.session() as session:
+        await session.execute(text("DELETE FROM yt_search_runs"))
+    async with database.session() as session:
+        left = await session.scalar(
+            select(func.count()).select_from(YtRawSearchResult)
+        )
+    assert left == 0
+
+
+async def test_a_query_is_one_row_per_type(database: Database) -> None:
+    async with database.session() as session:
+        for kind in YtSearchType:
+            session.add(
+                YtSearchQuery(
+                    query="fake query",
+                    type=kind,
+                    first_asked_at=NOW,
+                    last_asked_at=NOW,
+                )
+            )
+    with pytest.raises(IntegrityError, match="uq_yt_search_queries"):
+        async with database.session() as session:
+            session.add(
+                YtSearchQuery(
+                    query="fake query",
+                    type=YtSearchType.VIDEO,
+                    first_asked_at=NOW,
+                    last_asked_at=NOW,
+                )
+            )
+
+
+async def test_one_day_may_be_exhausted_in_both_buckets(
+    database: Database,
+) -> None:
+    """The search bucket's day ends apart from the main bucket's."""
+    day = NOW.date()
+    async with database.session() as session:
+        session.add(
+            YtQuotaExhausted(
+                day=day, bucket=YtQuotaBucket.MAIN, command=YtCommand.REFRESH
+            )
+        )
+        session.add(
+            YtQuotaExhausted(
+                day=day, bucket=YtQuotaBucket.SEARCH, command=YtCommand.SEARCH
+            )
+        )
+
+    async with database.session() as session:
+        rows = await session.scalar(
+            select(func.count()).select_from(YtQuotaExhausted)
+        )
+    assert rows == 2

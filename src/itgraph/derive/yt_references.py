@@ -36,7 +36,7 @@ cut out of its sentence.
 import re
 import unicodedata
 from collections import Counter
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -182,12 +182,18 @@ _AT = re.compile(r"(?<![\w.%+/@-])@")
 
 
 class Form(StrEnum):
-    """How a reference was written. The order is the precedence."""
+    """How a reference was written. The order is the precedence.
+
+    ``FEATURED`` is a seed's featured list naming a channel: a reference
+    of the channel, not of a video, so it never competes with the others
+    for a video's one reference to a target.
+    """
 
     ID_LINK = "id link"
     HANDLE_LINK = "handle link"
     MENTION = "mention"
     VIDEO_LINK = "video link"
+    FEATURED = "featured"
 
 
 _PRECEDENCE = {form: rank for rank, form in enumerate(Form)}
@@ -288,17 +294,28 @@ class Pending:
 
 @dataclass(slots=True)
 class Evidence:
-    """Which seeds, and which of their videos, reference one target."""
+    """Which seeds, and which of their videos, reference one target.
+
+    ``seeds`` is every seed naming it, however; ``linking`` the seeds
+    whose videos do, and ``featuring`` those whose featured lists do —
+    kept apart because a review queue may count one and not the other.
+    """
 
     seeds: set[str] = field(default_factory=set)
     videos: set[str] = field(default_factory=set)
+    linking: set[str] = field(default_factory=set)
+    featuring: set[str] = field(default_factory=set)
 
 
 @dataclass(frozen=True, slots=True)
 class Edge:
-    """One reference from a seed's video to a known channel or video."""
+    """One reference from a seed to a known channel or video.
 
-    video_id: str
+    ``video_id`` is the referencing video, or ``None`` for a reference
+    from the seed's featured list, which no video makes.
+    """
+
+    video_id: str | None
     channel_id: str
     published_at: datetime | None
     target_channel: str
@@ -316,6 +333,7 @@ class References:
 
     videos: int = 0
     seeds: int = 0
+    featured_lists: int = 0
     edges: list[Edge] = field(default_factory=list)
     pending: dict[Pending, Evidence] = field(default_factory=dict)
     ambiguous: dict[str, frozenset[str]] = field(default_factory=dict)
@@ -473,13 +491,22 @@ def read_text(text: str) -> Named:
     )
 
 
-def resolve(sources: Iterable[Source], known: Known) -> References:
+def resolve(
+    sources: Iterable[Source],
+    known: Known,
+    featured: Mapping[str, Sequence[str]] | None = None,
+) -> References:
     """Every source's forms, against what is known, as edges and pending.
 
     Per video: one reference per target channel and target video, a
     channel reached two ways recorded once in the first form of
     :class:`Form`; a reference to the video's own channel, or to another
     video of it, dropped. A handle two channels carry names neither.
+
+    ``featured`` maps a seed to the channel ids its featured list names:
+    each one reference of the seed, of the form ``FEATURED`` and with no
+    video — an edge when known, a pending channel id otherwise — and
+    none to the seed's own channel.
     """
     references = References(
         handles={
@@ -493,8 +520,37 @@ def resolve(sources: Iterable[Source], known: Known) -> References:
         references.videos += 1
         seeds.add(source.channel_id)
         _resolve_one(source, known, references)
+    for seed, channels in sorted((featured or {}).items()):
+        references.featured_lists += 1
+        seeds.add(seed)
+        _resolve_featured(seed, channels, known, references)
     references.seeds = len(seeds)
     return references
+
+
+def _resolve_featured(
+    seed: str, channels: Sequence[str], known: Known, into: References
+) -> None:
+    for channel in sorted(dict.fromkeys(channels)):
+        if channel == seed:
+            continue
+        if channel in known.channels:
+            into.edges.append(
+                Edge(
+                    video_id=None,
+                    channel_id=seed,
+                    published_at=None,
+                    target_channel=channel,
+                    target_video=None,
+                    form=Form.FEATURED,
+                )
+            )
+            continue
+        evidence = into.pending.setdefault(
+            Pending(PendingKind.CHANNEL, channel), Evidence()
+        )
+        evidence.seeds.add(seed)
+        evidence.featuring.add(seed)
 
 
 def _resolve_one(source: Source, known: Known, into: References) -> None:
@@ -513,6 +569,7 @@ def _resolve_one(source: Source, known: Known, into: References) -> None:
     def pending(kind: PendingKind, value: str) -> None:
         evidence = into.pending.setdefault(Pending(kind, value), Evidence())
         evidence.seeds.add(source.channel_id)
+        evidence.linking.add(source.channel_id)
         evidence.videos.add(source.video_id)
 
     def by_handle(handle: str) -> str | None:
@@ -620,9 +677,10 @@ def report(
     }
     lines = [
         (
-            f"read {references.videos} videos of {references.seeds} seeds: "
-            f"{len(references.edges)} references to {len(known)} known "
-            f"channels, {len(pending)} pending targets"
+            f"read {references.videos} videos and "
+            f"{references.featured_lists} featured lists of "
+            f"{references.seeds} seeds: {len(references.edges)} references "
+            f"to {len(known)} known channels, {len(pending)} pending targets"
         )
     ]
 

@@ -166,6 +166,23 @@ def test_the_inventory_dump_keeps_the_youtube_review(
     assert "yt_raw_channels" not in fake_run[0]
 
 
+def test_the_inventory_dump_keeps_the_search_queries(
+    tmp_path: Path, fake_run: list[list[str]]
+) -> None:
+    """The operator's words and dates, which steer the next round; the
+    runs and results they led to are left out of every dump."""
+    take_backup(inventory_kind(), tmp_path, now=NOW)
+
+    tables = [
+        fake_run[0][index + 1]
+        for index, arg in enumerate(fake_run[0])
+        if arg == "--table"
+    ]
+    assert "yt_search_queries" in tables
+    assert "yt_search_runs" not in tables
+    assert "yt_raw_search_results" not in tables
+
+
 @pytest.mark.parametrize("kind", [inventory_kind, full_kind])
 def test_no_dump_carries_youtube_api_data(
     tmp_path: Path, fake_run: list[list[str]], kind: Any
@@ -181,18 +198,20 @@ def test_no_dump_carries_youtube_api_data(
         for index, arg in enumerate(dump_command)
         if arg == "--exclude-table-data"
     ]
-    assert left_out == ["yt_raw_*", "yt_backfill_walks"]
+    assert left_out == ["yt_raw_*", "yt_backfill_walks", "yt_search_runs"]
 
 
 def test_the_pattern_reaches_every_table_of_youtube_api_data() -> None:
-    """Videos, readings and walks are left out of dumps by name, and only they.
+    """API data, walks and search runs are left out of dumps by name, and
+    only they.
 
     `pg_dump` matches `--exclude-table-data` the way a shell glob does, so
     a new table of API data is covered only if it is named for it — and
     one of the loop's own tables must not be, or a restore would lose
-    where the loop stood. The walk records are the one table of ours
-    left out: restored without the history they describe, they would
-    claim walks that are not there.
+    where the loop stood. The walk records and the search runs are the
+    tables of ours left out: restored without what they describe, they
+    would claim walks and answers that are not there. The search queries
+    are the operator's own and stay in.
     """
     from fnmatch import fnmatchcase
 
@@ -207,15 +226,19 @@ def test_the_pattern_reaches_every_table_of_youtube_api_data() -> None:
     }
     left_out = {
         "yt_raw_channels",
+        "yt_raw_channel_sections",
         "yt_raw_lookups",
+        "yt_raw_search_results",
         "yt_raw_videos",
         "yt_raw_video_stats",
         "yt_backfill_walks",
+        "yt_search_runs",
     }
     assert left_out <= youtube
     assert {table for table in youtube if excluded(table)} == left_out
     assert not excluded("yt_channel_polls")
     assert not excluded("yt_watch_passes")
+    assert not excluded("yt_search_queries")
 
 
 def test_a_dump_is_read_back_before_it_counts(
@@ -503,6 +526,8 @@ def test_the_container_commands_are_unchanged(
         "yt_raw_*",
         "--exclude-table-data",
         "yt_backfill_walks",
+        "--exclude-table-data",
+        "yt_search_runs",
     ]
     # Inside the container the client needs no password; the child
     # inherits the parent's environment as it always did.

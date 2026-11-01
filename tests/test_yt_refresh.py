@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from typer.testing import CliRunner
 from ytfakes import (
     FakeYouTube,
@@ -17,6 +17,7 @@ from ytfakes import (
     channel_resource,
     error_body,
     no_sleep,
+    sections_response,
     use_key,
     video_id,
     video_resource,
@@ -28,8 +29,11 @@ from itgraph.db import session as db_session
 from itgraph.db.models import (
     ChannelStatus,
     YtChannel,
+    YtChannelKind,
     YtCommand,
+    YtLang,
     YtRawChannel,
+    YtRawChannelSections,
     YtRejectReason,
 )
 from itgraph.db.session import Database
@@ -39,6 +43,8 @@ from itgraph.db.yt_channels import (
     store_payloads,
 )
 from itgraph.db.yt_quota import QuotaExhaustedError, record_exhaustion
+from itgraph.db.yt_sections import store_sections
+from itgraph.derive.yt_featured import featured_ids
 from itgraph.yt import client as yt_client
 from itgraph.yt.client import YouTube, youtube
 from itgraph.yt.refresh import refresh_channels
@@ -643,3 +649,208 @@ async def test_readings_outlive_the_depth(
 
     assert summary.past_due == 0
     assert (summary.videos_due, summary.videos_refreshed) == (1, 1)
+
+
+# --- featured lists ------------------------------------------------------
+
+
+async def _seeds(
+    database: Database,
+    numbers: list[int],
+    *,
+    status: ChannelStatus = ChannelStatus.SEED,
+) -> None:
+    """Channels with fresh payloads, so only their sections can be due."""
+    await _channels(database, numbers, FRESH)
+    async with database.session() as session:
+        for number in numbers:
+            record = await session.get(YtChannel, channel_id(number))
+            assert record is not None
+            record.status = status
+            record.kind = YtChannelKind.PERSONAL
+            record.lang = YtLang.EN
+            if status is ChannelStatus.REJECTED:
+                record.reject_reason = YtRejectReason.NOT_IT
+
+
+async def _lists(database: Database) -> dict[str, list[str]]:
+    async with database.session() as session:
+        rows = await session.scalars(select(YtRawChannelSections))
+        return {row.channel_id: featured_ids(row.payload) for row in rows}
+
+
+async def test_a_seed_without_a_list_has_its_sections_read(
+    database: Database,
+) -> None:
+    await _seeds(database, [1])
+    fake = FakeYouTube(
+        channel_resource(1),
+        sections={channel_id(1): sections_response([], [channel_id(5)])},
+    )
+
+    async with client(database, fake) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert (summary.sections_due, summary.sections_read) == (1, 1)
+    assert len(fake.calls("channelSections")) == 1
+    assert await _lists(database) == {channel_id(1): [channel_id(5)]}
+    assert "featured lists due 1, read 1" in summary.line()
+
+
+async def test_reading_sections_logs_ids_only(
+    database: Database, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Featured Logs Name Ids Only: the seed's id, never a title or handle."""
+    caplog.set_level(logging.DEBUG)
+    await _seeds(database, [1])
+    fake = FakeYouTube(
+        channel_resource(1, title="Fake Channel Title"),
+        sections={
+            channel_id(1): {
+                "items": [
+                    {
+                        "snippet": {"title": "Fake Shelf Title"},
+                        "contentDetails": {"channels": [channel_id(5)]},
+                    }
+                ]
+            }
+        },
+    )
+
+    async with client(database, fake) as yt:
+        await refresh_channels(yt, database)
+
+    assert f"read the featured list of {channel_id(1)}" in caplog.text
+    for said in ("Fake Shelf Title", "Fake Channel Title", "fakehandle"):
+        assert said not in caplog.text
+
+
+async def test_a_fresh_list_costs_nothing(database: Database) -> None:
+    await _seeds(database, [1])
+    async with database.session() as session:
+        await store_sections(
+            session, channel_id(1), sections_response([]), fetched_at=FRESH
+        )
+    fake = FakeYouTube(channel_resource(1))
+
+    async with client(database, fake) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert summary.sections_due == 0
+    assert fake.calls("channelSections") == []
+
+
+async def test_a_stale_list_is_read_again(database: Database) -> None:
+    await _seeds(database, [1])
+    async with database.session() as session:
+        await store_sections(
+            session,
+            channel_id(1),
+            sections_response([channel_id(5)]),
+            fetched_at=STALE,
+        )
+    fake = FakeYouTube(
+        channel_resource(1),
+        sections={channel_id(1): sections_response([channel_id(6)])},
+    )
+
+    async with client(database, fake) as yt:
+        await refresh_channels(yt, database)
+
+    assert await _lists(database) == {channel_id(1): [channel_id(6)]}
+
+
+@pytest.mark.parametrize(
+    "status",
+    [ChannelStatus.CANDIDATE, ChannelStatus.MAYBE, ChannelStatus.REJECTED],
+)
+async def test_other_statuses_are_not_asked_about(
+    database: Database, status: ChannelStatus
+) -> None:
+    await _seeds(database, [1], status=status)
+    fake = FakeYouTube(channel_resource(1))
+
+    async with client(database, fake) as yt:
+        await refresh_channels(yt, database)
+
+    assert fake.calls("channelSections") == []
+
+
+async def test_a_seed_found_gone_is_not_asked_about(
+    database: Database,
+) -> None:
+    """The channels come first, so a seed just marked gone is skipped."""
+    await _seeds(database, [1])
+    async with database.session() as session:
+        payload = await session.get(YtRawChannel, channel_id(1))
+        assert payload is not None
+        payload.fetched_at = STALE
+    fake = FakeYouTube()  # YouTube no longer returns the channel
+
+    async with client(database, fake) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert summary.gone == [channel_id(1)]
+    assert fake.calls("channelSections") == []
+
+
+async def test_exhaustion_stops_the_lists_part_way(database: Database) -> None:
+    await _seeds(database, [1, 2, 3])
+    fake = FakeYouTube(
+        channel_resource(1),
+        channel_resource(2),
+        channel_resource(3),
+        sections={
+            channel_id(n): sections_response([channel_id(9)])
+            for n in (1, 2, 3)
+        },
+    )
+    real = fake.handler
+
+    def second_call_spent(request: httpx.Request) -> httpx.Response:
+        if (
+            fake.method(request) == "channelSections"
+            and len(fake.calls("channelSections")) == 1
+        ):
+            fake.requests.append(request)
+            return httpx.Response(403, json=error_body(403, "quotaExceeded"))
+        return real(request)
+
+    async with youtube(
+        database,
+        YtCommand.REFRESH,
+        transport=httpx.MockTransport(second_call_spent),
+        sleep=no_sleep,
+    ) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert isinstance(summary.stopped, QuotaExhaustedError)
+    assert summary.sections_read == 1
+    assert set(await _lists(database)) == {channel_id(1)}
+
+    # The next quota day continues with those still due.
+    async with database.session() as session:
+        await session.execute(text("DELETE FROM yt_quota_exhausted"))
+    async with client(database, fake) as yt:
+        summary = await refresh_channels(yt, database)
+    assert summary.sections_due == 2
+    assert set(await _lists(database)) == {channel_id(n) for n in (1, 2, 3)}
+
+
+async def test_a_restore_is_completed_by_a_refresh(database: Database) -> None:
+    """A dump carries no lists, so after a restore every seed is due."""
+    await _seeds(database, [1, 2])
+    fake = FakeYouTube(
+        channel_resource(1),
+        channel_resource(2),
+        sections={channel_id(1): sections_response([channel_id(9)])},
+    )
+
+    async with client(database, fake) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert summary.sections_read == 2
+    assert await _lists(database) == {
+        channel_id(1): [channel_id(9)],
+        channel_id(2): [],
+    }

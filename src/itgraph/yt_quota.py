@@ -18,6 +18,7 @@ __all__ = [
     "general_cap",
     "next_reset",
     "quota_day",
+    "search_cap",
 ]
 
 QUOTA_ZONE = ZoneInfo("America/Los_Angeles")
@@ -60,3 +61,13 @@ def general_cap(daily: int, margin: float, reserved: int) -> int:
     binary fractions, 999.
     """
     return daily - round(daily * margin) - reserved
+
+
+def search_cap(daily: int, margin: float) -> int:
+    """What search may spend in one quota day: its bucket less the margin.
+
+    The bucket is Google's own, outside the daily units, so nothing is
+    reserved out of it — only the margin, for the reason the general
+    pool keeps one.
+    """
+    return daily - round(daily * margin)

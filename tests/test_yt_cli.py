@@ -138,6 +138,29 @@ def test_quota_says_when_the_day_is_exhausted(
     assert result.exit_code == 0, result.output
     assert "quotaExceeded" in result.output
     assert "yt refresh" in result.output
+    # The main bucket ended; the search bucket did not.
+    assert "main bucket: exhausted" in result.output
+    assert "search bucket: not exhausted" in result.output
+
+
+def test_quota_shows_the_search_pool(
+    monkeypatch: pytest.MonkeyPatch,
+    database_url: str,
+    offline: None,
+    small_quota: None,
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    monkeypatch.setattr(settings, "youtube_search_daily_quota", 100)
+
+    result = runner.invoke(app, ["yt", "quota"])
+
+    assert result.exit_code == 0, result.output
+    row = next(
+        line
+        for line in result.output.splitlines()
+        if line.startswith("search ")
+    )
+    assert row.split()[:4] == ["search", "0", "of", "100"]
 
 
 def test_the_reset_is_also_on_the_local_clock() -> None:

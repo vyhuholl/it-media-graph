@@ -138,8 +138,8 @@ def test_the_most_named_target_first(database_url: str) -> None:
     assert "2 seeds" in lines[shared]
     assert channel_id(1) in lines[shared] and channel_id(2) in lines[shared]
     assert lines[0] == (
-        "read 2 videos of 2 seeds: 0 references to 0 known channels, "
-        "2 pending targets"
+        "read 2 videos and 0 featured lists of 2 seeds: 0 references to "
+        "0 known channels, 2 pending targets"
     )
 
 

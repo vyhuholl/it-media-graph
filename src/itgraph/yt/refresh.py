@@ -7,6 +7,11 @@ channel nobody refreshes is one whose title quietly expires. A channel
 YouTube no longer returns is marked gone; one that comes back is
 restored.
 
+Then every seed's featured list — the channel ids its channel sections
+list — is read again once it is absent or older than the refresh age, a
+unit a seed. After the channels, so a seed just found gone is not asked
+about; before past uploads, which are the larger bill.
+
 Each call's results are committed before the next call is made, so a
 spent quota or a failure part way keeps everything refreshed before it,
 and the next run starts where this one stopped — the due list is simply
@@ -39,6 +44,7 @@ from itgraph.config import settings
 from itgraph.db.session import Database
 from itgraph.db.yt_channels import due_for_refresh, mark_gone, store_payloads
 from itgraph.db.yt_quota import QuotaError
+from itgraph.db.yt_sections import sections_due, store_sections
 from itgraph.db.yt_videos import (
     past_uploads_due_for_refresh,
     remove_videos,
@@ -46,6 +52,7 @@ from itgraph.db.yt_videos import (
     videos_due_for_refresh,
 )
 from itgraph.derive.yt_videos import Counters, counters_of
+from itgraph.yt import sections
 from itgraph.yt import videos as yt_videos
 from itgraph.yt.channels import IDS_PER_CALL, by_ids
 from itgraph.yt.client import YouTube
@@ -64,6 +71,8 @@ class RefreshSummary:
     refreshed: int = 0
     gone: list[str] = field(default_factory=list)
     returned: list[str] = field(default_factory=list)
+    sections_due: int = 0
+    sections_read: int = 0
     past_due: int = 0
     past_refreshed: int = 0
     past_readings: int = 0
@@ -76,7 +85,9 @@ class RefreshSummary:
     def line(self) -> str:
         line = (
             f"due {self.due}, refreshed {self.refreshed}, "
-            f"gone {len(self.gone)}, back {len(self.returned)}"
+            f"gone {len(self.gone)}, back {len(self.returned)}; "
+            f"featured lists due {self.sections_due}, "
+            f"read {self.sections_read}"
         )
         if settings.youtube_backfill_enabled:
             line += (
@@ -140,6 +151,8 @@ async def refresh_channels(
         for channel_id in returned:
             logger.info("YouTube returns %s again", channel_id)
 
+    if summary.stopped is None:
+        await _refresh_sections(youtube, database, summary, older_than)
     # Past uploads before the accepted readings: a video both would take
     # is then refreshed here, where after acceptance it is also a
     # reading, and is no longer stale when the second list is drawn.
@@ -152,6 +165,31 @@ async def refresh_channels(
 
     logger.info("refresh: %s", summary.line())
     return summary
+
+
+async def _refresh_sections(
+    youtube: YouTube,
+    database: Database,
+    summary: RefreshSummary,
+    older_than: datetime,
+) -> None:
+    """Read again every seed's featured list that is absent or stale."""
+    async with database.session() as session:
+        due = await sections_due(session, older_than=older_than)
+    summary.sections_due = len(due)
+
+    for channel_id in due:
+        try:
+            payload = await sections.of_channel(youtube, channel_id)
+        except (QuotaError, YtError) as exc:
+            summary.stopped = exc
+            return
+        async with database.session() as session:
+            await store_sections(
+                session, channel_id, payload, fetched_at=datetime.now(UTC)
+            )
+        summary.sections_read += 1
+        logger.debug("read the featured list of %s", channel_id)
 
 
 async def _refresh_past_uploads(

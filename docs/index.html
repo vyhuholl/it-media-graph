@@ -23,7 +23,7 @@
       <p class="lead">A private analytics tool that follows a hand-reviewed set of IT channels and flags the videos and posts their audiences are responding to unusually strongly right now.</p>
 
       <div class="panel">
-        <p><strong>Status, October 2026.</strong> itgraph has been running for public Telegram channels since summer 2026. The YouTube part is being built on the same approach: the channel inventory and the tracking of video statistics are in use; YouTube alerts are in development.</p>
+        <p><strong>Status, November 2026.</strong> itgraph has been running for public Telegram channels since summer 2026. The YouTube part is being built on the same approach: the channel inventory and the tracking of video statistics are in use; YouTube alerts are in development.</p>
       </div>
 
       <h2>What it does with YouTube</h2>
@@ -31,7 +31,9 @@
         <li><strong>A reviewed inventory.</strong> A list of channels about software development and IT, mostly English-language, with a small number in Russian. A person looks at each channel and labels it: what kind of channel it is, which language it publishes in, and whether it is in scope.</li>
         <li><strong>Public statistics of new videos.</strong> For channels in scope, itgraph reads the public view, like and comment counts of recent uploads several times as each video ages.</li>
         <li><strong>Past uploads.</strong> For channels in scope, itgraph also lists up to a year of earlier uploads and reads their titles and descriptions. It does not read their view, like or comment counts.</li>
-        <li><strong>Mentions.</strong> From the titles and descriptions of those channels' uploads, new and past, itgraph works out which other channels and videos they mention or link to — to map how the channels refer to one another, and to find channels to review. It works this out when it is needed and keeps no copy.</li>
+        <li><strong>Mentions.</strong> From the titles and descriptions of those channels' uploads, new and past, itgraph works out which other channels and videos they mention or link to — to map how the channels refer to one another, and to find channels to review. It works this out when it is needed and keeps no copy. When a mentioned or linked channel or video is not in the inventory, itgraph asks YouTube which channel it belongs to, and nothing else.</li>
+        <li><strong>Featured channels.</strong> For channels in scope, itgraph reads which other channels each features on its channel page — to find channels to review.</li>
+        <li><strong>Search.</strong> itgraph searches YouTube for recent videos and channels about software development, with search terms the developer chooses, and keeps only which channel each result belongs to — to find channels to review.</li>
         <li><strong>Links from Telegram.</strong> When posts of the public Telegram channels itgraph follows link to YouTube channels or videos, itgraph asks YouTube which channel each linked video, handle or name belongs to, and nothing else — to find channels to review. It keeps that answer for at most 30 days and works out the rest when it is needed.</li>
         <li><strong>Alerts.</strong> When a video is doing much better than that channel's own videos usually do at the same age, itgraph sends a short message to a private Telegram chat: the video's title, a link to it on YouTube, the counts YouTube reports, and itgraph's score.</li>
       </ul>

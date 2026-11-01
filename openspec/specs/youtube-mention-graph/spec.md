@@ -148,7 +148,7 @@ The system SHALL count, and never turn into a reference, a custom URL (`youtube.
 
 ### Requirement: Sources Are Seeds' Videos
 
-The system SHALL read references only from the titles and descriptions of stored videos whose channel has status `seed`, whichever command stored them. Videos of channels with any other status, and channel descriptions, SHALL NOT be read as sources.
+The system SHALL read references only from the titles and descriptions of stored videos whose channel has status `seed`, whichever command stored them, and from the stored featured lists of seeds. Videos and featured lists of channels with any other status, and channel descriptions, SHALL NOT be read as sources.
 
 #### Scenario: Videos found by the poll loop and the walk
 
@@ -168,9 +168,21 @@ The system SHALL read references only from the titles and descriptions of stored
 - **WHEN** references are read
 - **THEN** that link is not a reference
 
+#### Scenario: A seed's featured list is a source
+
+- **GIVEN** a seed whose stored featured list names another channel
+- **WHEN** references are read
+- **THEN** that channel is referenced by the seed
+
+#### Scenario: A former seed's featured list is not a source
+
+- **GIVEN** a channel whose featured list was stored while it was a seed, and which is now `rejected`
+- **WHEN** references are read
+- **THEN** its list is not read
+
 ### Requirement: Known Targets Become Edges
 
-The system SHALL turn a reference into an edge when its target is known without the network: a channel id in the inventory, a handle a channel in the inventory carries in its stored data, or a video whose data is stored. An edge SHALL name the referencing video and its channel, the target channel, the target video where there is one, and the form the reference took.
+The system SHALL turn a reference into an edge when its target is known without the network: a channel id in the inventory, a handle a channel in the inventory carries in its stored data, or a video whose data is stored. An edge SHALL name the referencing channel, the referencing video where there is one, the target channel, the target video where there is one, and the form the reference took.
 
 #### Scenario: A link to another seed
 
@@ -196,9 +208,15 @@ The system SHALL turn a reference into an edge when its target is known without 
 - **WHEN** references are read
 - **THEN** the edge is recorded
 
+#### Scenario: An edge from a featured list names no video
+
+- **GIVEN** a seed whose featured list names a channel in the inventory
+- **WHEN** references are read
+- **THEN** the edge names the seed and the target channel, and no referencing or target video
+
 ### Requirement: Unknown Targets Are Pending
 
-The system SHALL hold a reference whose target is not known without the network — a handle link, a legacy name, a channel id or a video id — as a pending target, together with the set of distinct seeds whose videos make it. It MUST NOT create an inventory record or make a request for one.
+The system SHALL hold a reference whose target is not known without the network — a handle link, a legacy name, a channel id or a video id — as a pending target, together with the set of distinct seeds whose videos or featured lists make it. It MUST NOT create an inventory record or make a request for one.
 
 #### Scenario: An unknown handle link
 
@@ -224,6 +242,12 @@ The system SHALL hold a reference whose target is not known without the network 
 - **GIVEN** a seed's video linking `youtube.com/user/fakelegacy`
 - **WHEN** references are read
 - **THEN** `fakelegacy` is a pending legacy name
+
+#### Scenario: A featured id and a linked id are one target
+
+- **GIVEN** one seed featuring an unknown channel id and another seed's video linking the same id
+- **WHEN** references are read
+- **THEN** that id is pending with two sources
 
 ### Requirement: One Reference Per Target Per Video
 
@@ -289,7 +313,7 @@ When two channels in the inventory carry the same handle in their stored data, t
 
 ### Requirement: References Live With Their Payloads
 
-The system SHALL work references out of the payloads stored at the moment they are asked for, and MUST NOT store a reference, an edge, a pending target or anything else read out of a title or description. A payload refreshed, expired or removed SHALL change what is referenced from the next reading on.
+The system SHALL work references out of the payloads and featured lists stored at the moment they are asked for, and MUST NOT store a reference, an edge, a pending target or anything else read out of a title, a description or a featured list. A payload or list refreshed, expired or removed SHALL change what is referenced from the next reading on.
 
 #### Scenario: A description edited upstream
 
@@ -302,6 +326,12 @@ The system SHALL work references out of the payloads stored at the moment they a
 - **GIVEN** a seed's video linking an unknown handle, whose payload then expires
 - **WHEN** references are read
 - **THEN** that handle is not pending, unless another stored video names it
+
+#### Scenario: An expired featured list
+
+- **GIVEN** a seed whose featured list named an unknown channel id, and whose list then expires
+- **WHEN** references are read
+- **THEN** that id is not pending, unless another stored source names it
 
 #### Scenario: Reading writes nothing
 
@@ -374,3 +404,31 @@ Log records written while reading references SHALL identify channels and videos 
 - **GIVEN** logging at debug level
 - **WHEN** the report runs over videos mentioning handles
 - **THEN** no log record contains a handle, a title or a link from those videos
+
+### Requirement: Featured Channels Are References
+
+The system SHALL take each channel id in a seed's stored featured list as a reference from that seed, of the form `featured`, with no referencing video: an edge when the channel is known, a pending channel id otherwise. One seed SHALL make one such reference per channel, and none to its own channel.
+
+#### Scenario: A featured seed
+
+- **GIVEN** a seed whose featured list names another seed
+- **WHEN** references are read
+- **THEN** an edge of the form `featured` leads from the first seed to the second, naming no video
+
+#### Scenario: A featured channel outside the inventory
+
+- **GIVEN** a seed whose featured list names a channel id with no record
+- **WHEN** references are read
+- **THEN** that id is a pending channel id, with that seed as its source
+
+#### Scenario: Featured and linked
+
+- **GIVEN** a seed whose featured list names another seed, and one of whose videos links it
+- **WHEN** references are read
+- **THEN** two references are recorded: one of the form `featured`, one from the video
+
+#### Scenario: The seed's own channel in its list
+
+- **GIVEN** a seed whose featured list names its own channel id
+- **WHEN** references are read
+- **THEN** no reference is recorded for it

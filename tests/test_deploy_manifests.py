@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
@@ -394,11 +395,19 @@ def test_no_job_runs_the_mentions_report() -> None:
             assert "mentions" not in container.get("args", []), name
 
 
-MANUAL_ONLY = ("tg-lookup", "tg-candidates")
+MANUAL_ONLY = (
+    "tg-lookup",
+    "tg-candidates",
+    "mention-lookup",
+    "mention-candidates",
+    "featured-candidates",
+    "search",
+    "search-candidates",
+)
 
 
 def _runs_manual_only(pod_spec: dict[str, Any]) -> list[str]:
-    """Which of the hand-run Telegram-links commands a pod would run."""
+    """Which of the hand-run review-queue commands a pod would run."""
     return [
         command
         for container in containers(pod_spec)
@@ -415,9 +424,26 @@ def test_no_job_runs_the_telegram_links_commands() -> None:
         assert _runs_manual_only(pod_spec) == [], name
 
 
-def test_the_check_would_catch_such_a_job() -> None:
-    job = {"containers": [{"args": ["yt", "tg-candidates", "--add"]}]}
-    assert _runs_manual_only(job) == ["tg-candidates"]
+def test_no_job_runs_the_review_queues_or_search() -> None:
+    # The queues' reports, their `--add` and search are a round's steps,
+    # run by a person who reads them; search spends a bucket of its own
+    # and reads the operator's queries from a file. The featured lists are
+    # read by the refresh job, which keeps its one command.
+    for name, pod_spec in pod_specs(render_all(WALK_ON)):
+        assert _runs_manual_only(pod_spec) == [], name
+    refresh = [
+        container.get("args", [])
+        for name, pod_spec in pod_specs(render_all(WALK_ON))
+        if name == "itgraph-yt-refresh"
+        for container in containers(pod_spec)
+    ]
+    assert refresh == [["yt", "refresh"]]
+
+
+@pytest.mark.parametrize("command", MANUAL_ONLY)
+def test_the_check_would_catch_such_a_job(command: str) -> None:
+    job = {"containers": [{"args": ["yt", command, "--add"]}]}
+    assert _runs_manual_only(job) == [command]
 
 
 def test_every_object_lives_in_the_namespace() -> None:

@@ -33,7 +33,7 @@ The system SHALL store one record per YouTube channel, keyed by its channel id. 
 
 ### Requirement: Review Values
 
-The system SHALL accept exactly these review values for YouTube. Status: `candidate`, `seed`, `maybe`, `rejected`. Kind: `personal`, `company`, `media`, `event`, `education`. Rejection reason: `not_it`, `adjacent`, `crypto`, `infobiz`, `ads`, `content_farm`, `consumer_tech`. Language: `en`, `ru`, `other`. Discovery source: `manual`, `telegram`.
+The system SHALL accept exactly these review values for YouTube. Status: `candidate`, `seed`, `maybe`, `rejected`. Kind: `personal`, `company`, `media`, `event`, `education`. Rejection reason: `not_it`, `adjacent`, `crypto`, `infobiz`, `ads`, `content_farm`, `consumer_tech`. Language: `en`, `ru`, `other`. Discovery source: `manual`, `telegram`, `mention`, `featured`, `search`.
 
 #### Scenario: A value outside the set is refused
 
@@ -52,6 +52,12 @@ The system SHALL accept exactly these review values for YouTube. Status: `candid
 - **WHEN** a channel is added with `itgraph yt add`
 - **THEN** its discovery source is `manual`
 - **AND** no option of that command records `telegram`
+
+#### Scenario: Only a queue records its own source
+
+- **WHEN** candidates are added from the mentions, featured lists or search
+- **THEN** their discovery source is `mention`, `featured` or `search` respectively
+- **AND** no option of `itgraph yt add` records any of the three
 
 ### Requirement: Records Are Never Deleted
 
@@ -181,7 +187,7 @@ The system SHALL report an entry the API cannot resolve, create no record for it
 
 ### Requirement: Review File Export
 
-The system SHALL provide `itgraph yt review-export`, writing a tab-separated review file of the channels awaiting review to standard output or a path. Each row SHALL hold the channel id, the editable review columns filled with the current values, and read-only columns from the channel's API data. A header SHALL state the export moment and the accepted values.
+The system SHALL provide `itgraph yt review-export`, writing a tab-separated review file of the channels awaiting review to standard output or a path. Each row SHALL hold the channel id, the editable review columns filled with the current values, and read-only columns from the channel's API data and its provenance. A header SHALL state the export moment and the accepted values.
 
 #### Scenario: Unreviewed channels are exported by default
 
@@ -205,6 +211,13 @@ The system SHALL provide `itgraph yt review-export`, writing a tab-separated rev
 - **WHEN** a channel with stored API data is exported
 - **THEN** its row holds the handle, title, subscriber count, the language and country the channel declares, and a link to the channel
 - **AND** a channel without stored API data is exported with its id and link only
+
+#### Scenario: The file says how a channel was found
+
+- **WHEN** a channel is exported
+- **THEN** its row's `source` column holds its discovery source
+- **AND** for a channel found by search, also the query of the earliest run in date that returned it
+- **AND** no count of seeds, families or results
 
 #### Scenario: Exporting costs nothing
 

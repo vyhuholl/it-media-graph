@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from itgraph.affiliation.run import DetectionSummary
     from itgraph.db.affiliation import CandidateRow
     from itgraph.tg.backfill import FloodWaitTooLong
+    from itgraph.yt.lookup_pass import LookupSummary
 
 from itgraph import __version__
 from itgraph.affiliation.signals import DEFAULT_THRESHOLDS, DEFAULT_WEIGHTS
@@ -35,6 +36,7 @@ from itgraph.db.models import (
     YtChannelKind,
     YtLang,
     YtRejectReason,
+    YtSearchType,
 )
 
 app = typer.Typer(
@@ -1663,10 +1665,12 @@ app.add_typer(yt_app, name="yt")
 async def _expire_youtube_data() -> None:
     """Delete every piece of YouTube data past its time.
 
-    Channel and video payloads at 30 days, lookups at 30 days, readings
-    at 30 days — or longer, from the acceptance date, once one is
-    recorded. Needs no key and no network: data past its time is a
-    violation whether or not anything was going to read it.
+    Channel and video payloads at 30 days, lookups, featured lists and
+    search runs with their results at 30 days, readings at 30 days — or
+    longer, from the acceptance
+    date, once one is recorded. Needs no key and no network: data past
+    its time is a violation whether or not anything was going to read
+    it.
 
     And, while the history walk is disabled, every walk that ended more
     than 30 days ago: nothing kept its videos, so they have expired, and
@@ -1677,6 +1681,8 @@ async def _expire_youtube_data() -> None:
     from itgraph.db.yt_backfill import forget_unkept_walks
     from itgraph.db.yt_channels import purge_expired
     from itgraph.db.yt_lookups import purge_expired_lookups
+    from itgraph.db.yt_search import purge_expired_searches
+    from itgraph.db.yt_sections import purge_expired_sections
     from itgraph.db.yt_videos import purge_expired_videos
 
     database = Database()
@@ -1686,6 +1692,8 @@ async def _expire_youtube_data() -> None:
             channels = await purge_expired(session)
             videos, readings = await purge_expired_videos(session)
             lookups = await purge_expired_lookups(session)
+            sections = await purge_expired_sections(session)
+            searches = await purge_expired_searches(session)
             if not settings.youtube_backfill_enabled:
                 walks = await forget_unkept_walks(
                     session, now=datetime.now(UTC)
@@ -1699,6 +1707,10 @@ async def _expire_youtube_data() -> None:
         log.info("removed %d YouTube channel payloads past 30 days", channels)
     if lookups:
         log.info("removed %d YouTube lookups past 30 days", lookups)
+    if sections:
+        log.info("removed %d featured lists past 30 days", sections)
+    if searches:
+        log.info("removed %d search runs past 30 days, with results", searches)
     if videos or readings:
         log.info(
             "removed %d YouTube videos and %d readings past their time",
@@ -1748,6 +1760,7 @@ def yt_quota() -> None:
     Makes no request. The day is Google's — the Pacific date — so the
     reset is printed in UTC and on this machine's clock.
     """
+    from itgraph.db.models import YtQuotaBucket
     from itgraph.db.session import Database
     from itgraph.db.yt_quota import describe_reset, quota_report
 
@@ -1768,11 +1781,15 @@ def yt_quota() -> None:
                 f"{use.pool.value:<10} {use.spent:>6} of {use.cap:>6} units, "
                 f"{max(use.cap - use.spent, 0)} left"
             )
-        if report.exhausted is not None:
+        for bucket in YtQuotaBucket:
+            exhausted = report.exhausted.get(bucket)
+            if exhausted is None:
+                typer.echo(f"{bucket.value} bucket: not exhausted")
+                continue
             typer.secho(
-                f"exhausted: YouTube answered quotaExceeded at "
-                f"{report.exhausted.observed_at:%H:%M} UTC, during "
-                f"`yt {report.exhausted.command.value}`; nothing is sent "
+                f"{bucket.value} bucket: exhausted — YouTube answered "
+                f"quotaExceeded at {exhausted.observed_at:%H:%M} UTC, during "
+                f"`yt {exhausted.command.value}`; nothing is charged to it "
                 "until the reset",
                 fg=typer.colors.RED,
             )
@@ -2180,13 +2197,64 @@ def yt_tg_lookup(
         finally:
             await database.dispose()
 
-        for line in summary.lines():
-            typer.echo(line)
-        if summary.limited is not None:
-            typer.echo(str(summary.limited))
-        if summary.stopped is not None:
-            typer.secho(str(summary.stopped), fg=typer.colors.RED, err=True)
-            raise typer.Exit(1)
+        _say_looked_up(summary)
+
+    _run_yt(run())
+
+
+def _say_looked_up(summary: LookupSummary) -> None:
+    """A lookup run's report, and why it stopped if it did."""
+    for line in summary.lines():
+        typer.echo(line)
+    if summary.limited is not None:
+        typer.echo(str(summary.limited))
+    if summary.stopped is not None:
+        typer.secho(str(summary.stopped), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+
+
+@yt_app.command("mention-lookup")
+def yt_mention_lookup(
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", help="Make at most this many requests."),
+    ] = None,
+) -> None:
+    """Ask YouTube whose the handles and videos the seeds' videos link are.
+
+    Reads the mention graph out of the stored payloads and looks up every
+    referenced handle, legacy name and video that no stored payload and
+    no lookup in date answers: the channel id alone, fifty videos to a
+    unit, a handle or a name a unit each, the names most seeds reference
+    first. A channel id needs no lookup. Each answer is kept 30 days, in
+    the same place as Telegram's, and committed as it arrives, so
+    `--limit` (which counts requests) or a spent pool only pauses it; run
+    it again to go on.
+
+    Spends the general pool with no floor. Prints counts, never names.
+    Then `itgraph yt mention-candidates` ranks what was found.
+    """
+    from itgraph.db.models import YtCommand
+    from itgraph.db.session import Database
+    from itgraph.db.yt_quota import check_not_exhausted
+    from itgraph.yt.client import youtube
+    from itgraph.yt.mention_lookup import run_mention_lookups
+
+    if limit is not None and limit < 1:
+        raise typer.BadParameter("--limit must be at least 1")
+
+    async def run() -> None:
+        database = Database()
+        try:
+            await check_not_exhausted(database)
+            async with youtube(
+                database, YtCommand.MENTION_LOOKUP, limit=limit
+            ) as client:
+                summary = await run_mention_lookups(client, database)
+        finally:
+            await database.dispose()
+
+        _say_looked_up(summary)
 
     _run_yt(run())
 
@@ -2268,14 +2336,185 @@ def yt_tg_candidates(
         finally:
             await database.dispose()
 
-        typer.echo(f"added {len(created)} candidates")
-        for channel_id in created:
-            typer.echo(f"  + {channel_id}")
-        if created:
-            typer.echo(
-                "their data comes with `itgraph yt refresh`; then review "
-                "them with `itgraph yt review-export`"
+        _say_added(created)
+
+    _run_yt(run())
+
+
+def _say_added(created: list[str]) -> None:
+    """What an `--add` created, and what the operator does next."""
+    typer.echo(f"added {len(created)} candidates")
+    for channel_id in created:
+        typer.echo(f"  + {channel_id}")
+    if created:
+        typer.echo(
+            "their data comes with `itgraph yt refresh`; then review "
+            "them with `itgraph yt review-export`"
+        )
+
+
+@yt_app.command("mention-candidates")
+def yt_mention_candidates(
+    top: Annotated[
+        int,
+        typer.Option(min=1, help="Rows shown, and records --add creates."),
+    ] = 100,
+    min_seeds: Annotated[
+        int,
+        typer.Option(
+            "--min-seeds",
+            min=1,
+            help="Rank only channels referenced by at least this many seeds.",
+        ),
+    ] = 2,
+    add: Annotated[
+        bool,
+        typer.Option(
+            "--add",
+            help="Create the shown channels as candidates for review.",
+        ),
+    ] = False,
+) -> None:
+    """Channels the seeds' videos reference, most seeds first.
+
+    Worked out from the stored payloads and the lookups as they stand,
+    and nothing worked out is stored: each handle, name, id and video a
+    seed's title or description links named as a channel, a reference
+    to the seed's own channel dropped, then the channels outside the
+    inventory, in any status, ranked by how many distinct seeds reference
+    them, then by id. Featured lists are not counted here; they have
+    `itgraph yt featured-candidates`. Shows channel ids and no other data
+    read from YouTube. Makes no request and needs no key.
+
+    With `--add`, the shown channels become candidates with discovery
+    source `mention`. Refused while any reference still awaits `itgraph
+    yt mention-lookup`, because the cut would then be made on half the
+    evidence.
+    """
+    from itgraph.db.models import YtDiscoverySource
+    from itgraph.db.session import Database
+    from itgraph.db.yt_channels import create_channels, inventory_ids
+    from itgraph.db.yt_references import read_mention_queue
+    from itgraph.derive.yt_mention_candidates import ranking, report
+
+    async def run() -> None:
+        database = Database()
+        try:
+            async with database.session() as session:
+                references, naming = await read_mention_queue(session)
+                inventory = await inventory_ids(session)
+            ranked = ranking(naming, inventory, min_seeds=min_seeds)
+            for line in report(references, naming, ranked, top=top):
+                typer.echo(line)
+            if not add:
+                return
+            if naming.awaiting:
+                typer.secho(
+                    f"not added: {len(naming.awaiting)} references still "
+                    "await a lookup; run `itgraph yt mention-lookup` first",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                raise typer.Exit(1)
+            async with database.session() as session:
+                created = await create_channels(
+                    session,
+                    [row.channel_id for row in ranked[:top]],
+                    discovered_via=YtDiscoverySource.MENTION,
+                )
+        finally:
+            await database.dispose()
+
+        _say_added(created)
+
+    _run_yt(run())
+
+
+@yt_app.command("featured-candidates")
+def yt_featured_candidates(
+    top: Annotated[
+        int,
+        typer.Option(min=1, help="Rows shown, and records --add creates."),
+    ] = 100,
+    min_seeds: Annotated[
+        int,
+        typer.Option(
+            "--min-seeds",
+            min=1,
+            help="Rank only channels featured by at least this many seeds.",
+        ),
+    ] = 1,
+    add: Annotated[
+        bool,
+        typer.Option(
+            "--add",
+            help="Create the shown channels as candidates for review.",
+        ),
+    ] = False,
+) -> None:
+    """Channels the seeds feature on their pages, most seeds first.
+
+    Worked out from the seeds' featured lists as they stand — the channel
+    ids their channel sections list, read by `itgraph yt refresh` — and
+    nothing worked out is stored: channels outside the inventory, in any
+    status, ranked by how many distinct seeds feature them, then by id.
+    One seed is enough by default: featuring a channel is deliberate.
+    Shows channel ids and no other data read from YouTube. Makes no
+    request and needs no key.
+
+    With `--add`, the shown channels become candidates with discovery
+    source `featured`. Refused while any seed has no featured list in
+    date, because the cut would then be made on part of the evidence.
+    """
+    from itgraph.db.models import YtDiscoverySource
+    from itgraph.db.session import Database
+    from itgraph.db.yt_channels import create_channels, inventory_ids
+    from itgraph.db.yt_sections import featured_lists, seeds_without_list
+    from itgraph.derive.yt_featured import (
+        evidence,
+        featured_ids,
+        ranking,
+        report,
+    )
+
+    async def run() -> None:
+        database = Database()
+        try:
+            async with database.session() as session:
+                lists = await featured_lists(session)
+                missing = await seeds_without_list(session)
+                inventory = await inventory_ids(session)
+            ranked = ranking(
+                evidence(
+                    {seed: featured_ids(lst) for seed, lst in lists.items()}
+                ),
+                inventory,
+                min_seeds=min_seeds,
             )
+            for line in report(
+                lists=len(lists), missing=missing, ranked=ranked, top=top
+            ):
+                typer.echo(line)
+            if not add:
+                return
+            if missing:
+                typer.secho(
+                    f"not added: {missing} seeds have no featured list in "
+                    "date; run `itgraph yt refresh` first",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                raise typer.Exit(1)
+            async with database.session() as session:
+                created = await create_channels(
+                    session,
+                    [row.channel_id for row in ranked[:top]],
+                    discovered_via=YtDiscoverySource.FEATURED,
+                )
+        finally:
+            await database.dispose()
+
+        _say_added(created)
 
     _run_yt(run())
 
@@ -2290,6 +2529,174 @@ def _read_input(source: str) -> str:
     if not path.is_file():
         raise typer.BadParameter(f"no such file: {source}")
     return path.read_text(encoding="utf-8")
+
+
+@yt_app.command("search")
+def yt_search(
+    queries: Annotated[
+        list[str] | None,
+        typer.Argument(metavar="[QUERY]...", help="What to search for."),
+    ] = None,
+    from_file: Annotated[
+        str | None,
+        typer.Option(
+            "--from-file",
+            metavar="PATH|-",
+            help="Read queries from a file, one per line; - for stdin.",
+        ),
+    ] = None,
+    kind: Annotated[
+        YtSearchType,
+        typer.Option(
+            "--type",
+            help="Recent uploads, or channels whose own data matches.",
+        ),
+    ] = YtSearchType.VIDEO,
+    pages: Annotated[
+        int,
+        typer.Option(min=1, help="Pages of 50 results per query, at most."),
+    ] = 1,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Ask a query again though it was asked in the last 30 days.",
+        ),
+    ] = False,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", help="Make at most this many requests."),
+    ] = None,
+) -> None:
+    """Search YouTube for channels to review, with your own queries.
+
+    One query a line in a file or on stdin, or as arguments; blank lines
+    and lines beginning with `#` are skipped. A video search asks for
+    uploads of the last 30 days, so every channel it finds publishes now;
+    `--type channel` asks for channels whose own data matches. English
+    relevance, 50 results a page, one page unless `--pages`. Only each
+    result's channel id is read, and kept 30 days.
+
+    A query asked in the last 30 days, for the same type, is skipped and
+    costs nothing; `--force` asks it again, for videos since that run.
+    Spends the search pool alone — 90 calls a day, outside the daily
+    units — and `--limit` counts requests. Prints counts; then `itgraph yt
+    search-candidates` ranks what was found. Never scheduled.
+    """
+    from itgraph.db.models import YtCommand, YtQuotaBucket
+    from itgraph.db.session import Database
+    from itgraph.db.yt_quota import check_not_exhausted
+    from itgraph.derive.yt_search import read_queries
+    from itgraph.yt.client import youtube
+    from itgraph.yt.search_pass import run_searches
+
+    if bool(queries) == bool(from_file):
+        raise typer.BadParameter(
+            "give queries or --from-file, not both and not neither"
+        )
+    if limit is not None and limit < 1:
+        raise typer.BadParameter("--limit must be at least 1")
+    asked = read_queries(
+        _read_input(from_file).splitlines()
+        if from_file is not None
+        else queries or []
+    )
+    if not asked:
+        typer.echo("Nothing to search.")
+        return
+
+    async def run() -> None:
+        database = Database()
+        try:
+            await check_not_exhausted(database, bucket=YtQuotaBucket.SEARCH)
+            async with youtube(
+                database, YtCommand.SEARCH, limit=limit
+            ) as client:
+                summary = await run_searches(
+                    client, database, asked, kind, pages=pages, force=force
+                )
+        finally:
+            await database.dispose()
+
+        typer.echo(summary.line())
+        if summary.limited is not None:
+            typer.echo(str(summary.limited))
+        if summary.stopped is not None:
+            typer.secho(str(summary.stopped), fg=typer.colors.RED, err=True)
+            raise typer.Exit(1)
+
+    _run_yt(run())
+
+
+@yt_app.command("search-candidates")
+def yt_search_candidates(
+    top: Annotated[
+        int,
+        typer.Option(min=1, help="Rows shown, and records --add creates."),
+    ] = 100,
+    add: Annotated[
+        bool,
+        typer.Option(
+            "--add",
+            help="Create the shown channels as candidates for review.",
+        ),
+    ] = False,
+) -> None:
+    """Channels your searches found, in YouTube's order, query by query.
+
+    Worked out from the search results in date — the last 30 days — and
+    nothing worked out is stored: each run's channels without a record,
+    in any status, taken in turn — every run's first result, then every
+    run's second — so no query crowds out the others. No count orders
+    them. Shows channel ids and your queries, no other data read from
+    YouTube. Makes no request and needs no key.
+
+    With `--add`, the shown channels become candidates with discovery
+    source `search`; `itgraph yt refresh` fetches their data, then
+    `itgraph yt review-export` as usual.
+    """
+    from itgraph.db.models import YtDiscoverySource
+    from itgraph.db.session import Database
+    from itgraph.db.yt_channels import create_channels, inventory_ids
+    from itgraph.db.yt_search import runs_in_date
+    from itgraph.derive.yt_search import Run, RunLine, ranking, report
+
+    async def run() -> None:
+        database = Database()
+        try:
+            async with database.session() as session:
+                runs = await runs_in_date(session)
+                inventory = await inventory_ids(session)
+            ranked = ranking(
+                [Run(query=run.query, channels=run.channels) for run in runs],
+                inventory,
+            )
+            lines = [
+                RunLine(
+                    query=run.query,
+                    kind=run.kind.value,
+                    asked=f"{run.asked_at:%Y-%m-%d %H:%M}",
+                    results=run.results,
+                    new=len(set(run.channels) - inventory),
+                )
+                for run in runs
+            ]
+            for line in report(lines, ranked, top=top):
+                typer.echo(line)
+            if not add:
+                return
+            async with database.session() as session:
+                created = await create_channels(
+                    session,
+                    [row.channel_id for row in ranked[:top]],
+                    discovered_via=YtDiscoverySource.SEARCH,
+                )
+        finally:
+            await database.dispose()
+
+        _say_added(created)
+
+    _run_yt(run())
 
 
 @yt_app.command("add")
@@ -2447,8 +2854,10 @@ def yt_review_export(
     From the operator's machine:
     `scripts/on-host.sh yt review-export > ~/itgraph-review/batch.review.tsv`
     """
+    from itgraph.db.models import YtDiscoverySource
     from itgraph.db.session import Database
     from itgraph.db.yt_channels import list_channels
+    from itgraph.db.yt_search import first_queries
     from itgraph.yt_review import export_row, render_review
 
     async def run() -> None:
@@ -2458,11 +2867,24 @@ def yt_review_export(
                 listed = await list_channels(
                     session, status=status, unreviewed=status is None
                 )
+                queries = await first_queries(session)
         finally:
             await database.dispose()
 
         text = render_review(
-            (export_row(item.channel, item.payload) for item in listed),
+            (
+                export_row(
+                    item.channel,
+                    item.payload,
+                    query=(
+                        queries.get(item.channel.channel_id)
+                        if item.channel.discovered_via
+                        is YtDiscoverySource.SEARCH
+                        else None
+                    ),
+                )
+                for item in listed
+            ),
             exported_at=datetime.now(UTC),
         )
         if output is None:

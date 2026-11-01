@@ -172,6 +172,20 @@ def channel_list(*resources: dict[str, Any]) -> dict[str, Any]:
     return body
 
 
+def sections_response(*listed: list[str]) -> dict[str, Any]:
+    """A channel's sections as the trimmed request gets them back.
+
+    One section per argument; an empty list is a section that lists no
+    channel, which `fields` leaves as an empty object.
+    """
+    return {
+        "items": [
+            {"contentDetails": {"channels": channels}} if channels else {}
+            for channels in listed
+        ]
+    }
+
+
 def error_body(code: int, reason: str, message: str = "") -> dict[str, Any]:
     """Google's standard error body, as the YouTube API is expected to send.
 
@@ -216,7 +230,12 @@ class FakeYouTube:
         batch_404: bool = False,
         uploads: dict[str, list[dict[str, Any]]] | None = None,
         videos: list[dict[str, Any]] | None = None,
+        sections: dict[str, dict[str, Any]] | None = None,
+        searches: dict[tuple[str, str], list[str]] | None = None,
     ) -> None:
+        self.sections = dict(sections or {})
+        # (query, type) -> the channel of each result, in order.
+        self.searches = dict(searches or {})
         self.channels = {resource["id"]: resource for resource in resources}
         self.legacy = {
             name.lower(): id_ for name, id_ in (legacy or {}).items()
@@ -245,6 +264,28 @@ class FakeYouTube:
             return self.queued.pop(0)
 
         params = request.url.params
+        if self.method(request) == "search":
+            kind = params.get("type", "")
+            found = self.searches.get((params.get("q", ""), kind), [])
+            limit = int(params.get("maxResults", "5"))
+            token = params.get("pageToken")
+            start = int(token.removeprefix(PAGE_TOKEN)) if token else 0
+            holder = "snippet" if kind == "video" else "id"
+            results: dict[str, Any] = {
+                "items": [
+                    {holder: {"channelId": channel}}
+                    for channel in found[start : start + limit]
+                ]
+            }
+            if start + limit < len(found):
+                results["nextPageToken"] = f"{PAGE_TOKEN}{start + limit}"
+            return httpx.Response(200, json=results)
+        if self.method(request) == "channelSections":
+            # As `fields=items(contentDetails/channels)` leaves it: a
+            # channel with no sections answers with no items at all.
+            return httpx.Response(
+                200, json=self.sections.get(params.get("channelId", ""), {})
+            )
         if self.method(request) == "playlistItems":
             playlist = params.get("playlistId", "")
             if playlist not in self.uploads:

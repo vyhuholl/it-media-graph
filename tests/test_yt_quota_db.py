@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from itgraph.config import settings
 from itgraph.db.models import (
     YtCommand,
+    YtQuotaBucket,
     YtQuotaDay,
     YtQuotaPool,
     YtRequest,
@@ -40,6 +41,8 @@ def small_quota(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "youtube_daily_quota", 10)
     monkeypatch.setattr(settings, "youtube_quota_margin", 0.0)
     monkeypatch.setattr(settings, "youtube_watch_reserve", 3)
+    # And a search bucket of four calls, outside those ten.
+    monkeypatch.setattr(settings, "youtube_search_daily_quota", 4)
 
 
 async def _spent(database: Database) -> int:
@@ -234,8 +237,7 @@ async def test_hearing_exhaustion_twice_changes_nothing(
 
     async with database.session() as session:
         report = await quota_report(session, now=NOW)
-    assert report.exhausted is not None
-    assert report.exhausted.command is YtCommand.ADD
+    assert report.exhausted[YtQuotaBucket.MAIN].command is YtCommand.ADD
 
 
 async def test_the_report(database: Database) -> None:
@@ -256,14 +258,19 @@ async def test_the_report(database: Database) -> None:
 
     assert report.day == date(2026, 10, 26)
     assert report.reset == datetime(2026, 10, 27, 7, 0, tzinfo=UTC)
-    general, watch = report.pools
+    general, watch, search = report.pools
     assert (general.pool, general.spent, general.cap) == (
         YtQuotaPool.GENERAL,
         4,
         7,
     )
     assert (watch.pool, watch.spent, watch.cap) == (YtQuotaPool.WATCH, 0, 3)
-    assert report.exhausted is None
+    assert (search.pool, search.spent, search.cap) == (
+        YtQuotaPool.SEARCH,
+        0,
+        4,
+    )
+    assert report.exhausted == {}
     add, refresh = report.methods
     assert (add.command, add.requests, add.units, add.unknown) == (
         YtCommand.ADD,
@@ -278,8 +285,115 @@ async def test_an_empty_day_reports_zero(database: Database) -> None:
     async with database.session() as session:
         report = await quota_report(session, now=NOW)
 
-    assert [(use.spent, use.cap) for use in report.pools] == [(0, 7), (0, 3)]
+    assert [(use.spent, use.cap) for use in report.pools] == [
+        (0, 7),
+        (0, 3),
+        (0, 4),
+    ]
     assert report.methods == []
+
+
+# --- the search bucket ----------------------------------------------------
+
+
+async def _book_search(
+    database: Database, units: int = 1, *, now: datetime = NOW
+) -> Booking:
+    return await book(
+        database,
+        command=YtCommand.SEARCH,
+        method="search.list",
+        units=units,
+        now=now,
+    )
+
+
+async def test_a_search_spends_its_own_pool(database: Database) -> None:
+    booking = await _book_search(database)
+
+    assert booking.pool is YtQuotaPool.SEARCH
+    async with database.session() as session:
+        for pool in (YtQuotaPool.GENERAL, YtQuotaPool.WATCH):
+            assert await session.get(YtQuotaDay, (NOW.date(), pool)) is None
+
+
+async def test_a_spent_search_pool_does_not_reach_the_general_pool(
+    database: Database,
+) -> None:
+    await _book_search(database, 4)
+
+    with pytest.raises(PoolSpentError, match="search"):
+        await _book_search(database)
+    # And the general pool is whole, and stays the general pool's.
+    await _book(database, 7)
+
+
+async def test_the_general_pool_cannot_reach_the_search_pool(
+    database: Database,
+) -> None:
+    await _book(database, 7)
+
+    with pytest.raises(PoolSpentError, match="general"):
+        await _book(database)
+    await _book_search(database, 4)
+
+
+async def test_the_search_cap_leaves_the_margin(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """100 calls less a tenth, and the general pool's cap untouched."""
+    monkeypatch.setattr(settings, "youtube_daily_quota", 10_000)
+    monkeypatch.setattr(settings, "youtube_quota_margin", 0.10)
+    monkeypatch.setattr(settings, "youtube_watch_reserve", 3_000)
+    monkeypatch.setattr(settings, "youtube_search_daily_quota", 100)
+
+    async with database.session() as session:
+        report = await quota_report(session, now=NOW)
+    caps = {use.pool: use.cap for use in report.pools}
+    assert caps == {
+        YtQuotaPool.GENERAL: 6_000,
+        YtQuotaPool.WATCH: 3_000,
+        YtQuotaPool.SEARCH: 90,
+    }
+
+
+async def test_a_spent_search_bucket_leaves_the_main_one_running(
+    database: Database,
+) -> None:
+    await record_exhaustion(database, command=YtCommand.SEARCH, now=NOW)
+
+    await check_not_exhausted(database, now=NOW)  # the main bucket
+    await _book(database)
+    await _book_watch(database)
+    with pytest.raises(QuotaExhaustedError, match="search") as caught:
+        await _book_search(database)
+    assert caught.value.bucket is YtQuotaBucket.SEARCH
+    with pytest.raises(QuotaExhaustedError):
+        await check_not_exhausted(
+            database, bucket=YtQuotaBucket.SEARCH, now=NOW
+        )
+
+
+async def test_a_spent_main_bucket_leaves_search_running(
+    database: Database,
+) -> None:
+    await record_exhaustion(database, command=YtCommand.WATCH, now=NOW)
+
+    with pytest.raises(QuotaExhaustedError):
+        await _book(database)
+    with pytest.raises(QuotaExhaustedError):
+        await _book_watch(database)
+    await check_not_exhausted(database, bucket=YtQuotaBucket.SEARCH, now=NOW)
+    await _book_search(database)
+
+
+async def test_exhaustion_is_reported_per_bucket(database: Database) -> None:
+    await record_exhaustion(database, command=YtCommand.SEARCH, now=NOW)
+
+    async with database.session() as session:
+        report = await quota_report(session, now=NOW)
+    assert set(report.exhausted) == {YtQuotaBucket.SEARCH}
+    assert report.exhausted[YtQuotaBucket.SEARCH].command is YtCommand.SEARCH
 
 
 # --- the history walk's floor -------------------------------------------
@@ -349,7 +463,7 @@ async def test_the_report_lists_the_walk_under_the_general_pool(
     async with database.session() as session:
         report = await quota_report(session, now=NOW)
 
-    general, _ = report.pools
+    general, *_ = report.pools
     assert general.spent == 1
     [walk] = report.methods
     assert (walk.command, walk.method, walk.units) == (

@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from itgraph.config import settings
 from itgraph.db.models import (
     YtCommand,
+    YtQuotaBucket,
     YtQuotaDay,
     YtQuotaExhausted,
     YtQuotaPool,
@@ -30,9 +31,10 @@ from itgraph.db.models import (
     YtRequestOutcome,
 )
 from itgraph.db.session import Database
-from itgraph.yt_quota import general_cap, next_reset, quota_day
+from itgraph.yt_quota import general_cap, next_reset, quota_day, search_cap
 
 __all__ = [
+    "BUCKET_OF",
     "POOL_OF",
     "Booking",
     "FloorReachedError",
@@ -43,6 +45,7 @@ __all__ = [
     "QuotaExhaustedError",
     "QuotaReport",
     "book",
+    "bucket_of",
     "check_not_exhausted",
     "describe_reset",
     "pool_cap",
@@ -96,19 +99,27 @@ class FloorReachedError(QuotaError):
 
 
 class QuotaExhaustedError(QuotaError):
-    """YouTube itself answered ``quotaExceeded`` today.
+    """YouTube itself answered ``quotaExceeded`` today, for one bucket.
 
     Whatever our counts say: they decide who may spend what, Google's
     decides whether anyone can.
     """
 
-    def __init__(self, reset: datetime) -> None:
+    def __init__(
+        self, reset: datetime, bucket: YtQuotaBucket = YtQuotaBucket.MAIN
+    ) -> None:
+        what = (
+            "no search is sent"
+            if bucket is YtQuotaBucket.SEARCH
+            else "nothing but a search is sent"
+        )
         super().__init__(
-            "YouTube answered quotaExceeded today, so no YouTube request "
-            "is made until the next quota day begins "
+            f"YouTube answered quotaExceeded today for the {bucket.value} "
+            f"quota bucket, so {what} until the next quota day begins "
             f"{describe_reset(reset)}"
         )
         self.reset = reset
+        self.bucket = bucket
 
 
 # Which pool each command spends from. A table rather than a parameter a
@@ -122,7 +133,23 @@ POOL_OF: Mapping[YtCommand, YtQuotaPool] = {
     YtCommand.WATCH: YtQuotaPool.WATCH,
     YtCommand.BACKFILL: YtQuotaPool.GENERAL,
     YtCommand.TG_LOOKUP: YtQuotaPool.GENERAL,
+    YtCommand.MENTION_LOOKUP: YtQuotaPool.GENERAL,
+    YtCommand.SEARCH: YtQuotaPool.SEARCH,
 }
+
+# Which of Google's buckets each pool is carved out of. Pools are
+# itgraph's way of sharing a bucket; a `quotaExceeded` is Google's word
+# about a bucket, and ends the day for every pool in it and for no other.
+BUCKET_OF: Mapping[YtQuotaPool, YtQuotaBucket] = {
+    YtQuotaPool.GENERAL: YtQuotaBucket.MAIN,
+    YtQuotaPool.WATCH: YtQuotaBucket.MAIN,
+    YtQuotaPool.SEARCH: YtQuotaBucket.SEARCH,
+}
+
+
+def bucket_of(command: YtCommand) -> YtQuotaBucket:
+    """The bucket a command's requests are charged to, by its pool."""
+    return BUCKET_OF[POOL_OF[command]]
 
 
 def units_to_leave(command: YtCommand) -> int:
@@ -141,7 +168,8 @@ def units_to_leave(command: YtCommand) -> int:
 def pool_cap(pool: YtQuotaPool) -> int:
     """What a pool may book in one quota day.
 
-    The poll loop's is exactly the reserve the general cap leaves out.
+    The poll loop's is exactly the reserve the general cap leaves out;
+    search's is its own bucket less the margin.
     """
     match pool:
         case YtQuotaPool.GENERAL:
@@ -152,6 +180,11 @@ def pool_cap(pool: YtQuotaPool) -> int:
             )
         case YtQuotaPool.WATCH:
             return settings.youtube_watch_reserve
+        case YtQuotaPool.SEARCH:
+            return search_cap(
+                settings.youtube_search_daily_quota,
+                settings.youtube_quota_margin,
+            )
 
 
 async def pool_spent(
@@ -179,18 +212,22 @@ class Booking:
 
 
 async def check_not_exhausted(
-    database: Database, *, now: datetime | None = None
+    database: Database,
+    *,
+    bucket: YtQuotaBucket = YtQuotaBucket.MAIN,
+    now: datetime | None = None,
 ) -> None:
-    """Refuse to start while today is a day YouTube declared over.
+    """Refuse to start while YouTube has declared today over for a bucket.
 
     The same check a booking makes, asked before a command begins, so a
     command started after exhaustion says so before it reads its input
-    rather than at its first request.
+    rather than at its first request. The main bucket unless told: every
+    command but search spends from it.
     """
     moment = now or datetime.now(UTC)
     async with database.session() as session:
-        if await session.get(YtQuotaExhausted, quota_day(moment)):
-            raise QuotaExhaustedError(next_reset(moment))
+        if await session.get(YtQuotaExhausted, (quota_day(moment), bucket)):
+            raise QuotaExhaustedError(next_reset(moment), bucket)
 
 
 async def book(
@@ -204,7 +241,8 @@ async def book(
     """Book a request's units, or refuse it. Commits before returning.
 
     The pool is the command's, from ``POOL_OF``. Raises
-    ``QuotaExhaustedError`` on a day YouTube declared over,
+    ``QuotaExhaustedError`` on a day YouTube declared over for the
+    pool's bucket,
     ``FloorReachedError`` when the units would leave the pool less than
     the command must leave the others, and ``PoolSpentError`` when they
     would carry it past its cap. Either way nothing is written and the
@@ -213,11 +251,12 @@ async def book(
     moment = now or datetime.now(UTC)
     day = quota_day(moment)
     pool = POOL_OF[command]
+    bucket = BUCKET_OF[pool]
     leave = units_to_leave(command)
     cap = pool_cap(pool) - leave
     async with database.session() as session:
-        if await session.get(YtQuotaExhausted, day) is not None:
-            raise QuotaExhaustedError(next_reset(moment))
+        if await session.get(YtQuotaExhausted, (day, bucket)) is not None:
+            raise QuotaExhaustedError(next_reset(moment), bucket)
 
         await session.execute(
             insert(YtQuotaDay)
@@ -271,16 +310,22 @@ async def record_outcome(
 async def record_exhaustion(
     database: Database, *, command: YtCommand, now: datetime | None = None
 ) -> None:
-    """End the quota day for every pool, as YouTube just did.
+    """End the quota day for the command's bucket, as YouTube just did.
 
-    The first command to hear it is the one recorded; a second hearing
-    the same day changes nothing.
+    Every pool in that bucket stops; the other bucket's do not. The
+    first command to hear it is the one recorded; a second hearing the
+    same day changes nothing.
     """
     moment = now or datetime.now(UTC)
     async with database.session() as session:
         await session.execute(
             insert(YtQuotaExhausted)
-            .values(day=quota_day(moment), observed_at=moment, command=command)
+            .values(
+                day=quota_day(moment),
+                bucket=bucket_of(command),
+                observed_at=moment,
+                command=command,
+            )
             .on_conflict_do_nothing()
         )
 
@@ -317,7 +362,8 @@ class QuotaReport:
     day: date
     reset: datetime
     pools: Sequence[PoolUse]
-    exhausted: YtQuotaExhausted | None
+    # Each bucket YouTube declared over today, with who heard it first.
+    exhausted: Mapping[YtQuotaBucket, YtQuotaExhausted]
     methods: Sequence[MethodUse]
 
 
@@ -361,10 +407,13 @@ async def quota_report(
         for command, method, requests, units, lost in rows.tuples()
     ]
 
+    exhausted = await session.scalars(
+        select(YtQuotaExhausted).where(YtQuotaExhausted.day == day)
+    )
     return QuotaReport(
         day=day,
         reset=next_reset(moment),
         pools=pools,
-        exhausted=await session.get(YtQuotaExhausted, day),
+        exhausted={row.bucket: row for row in exhausted},
         methods=methods,
     )

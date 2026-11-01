@@ -9,7 +9,13 @@ with nothing written anywhere.
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select, text
-from ytfakes import channel_id, channel_resource, video_id, video_resource
+from ytfakes import (
+    channel_id,
+    channel_resource,
+    sections_response,
+    video_id,
+    video_resource,
+)
 
 from itgraph.db.models import (
     Base,
@@ -23,6 +29,7 @@ from itgraph.db.models import (
 from itgraph.db.session import Database
 from itgraph.db.yt_channels import create_channels, store_payloads
 from itgraph.db.yt_references import read_references
+from itgraph.db.yt_sections import store_sections
 from itgraph.db.yt_videos import (
     FoundVideo,
     VideoWrite,
@@ -313,3 +320,64 @@ async def test_reading_writes_nothing(database: Database) -> None:
     await _read(database)
 
     assert await _state(database) == before
+
+
+# --- featured lists ----------------------------------------------------
+
+
+async def _featured(
+    database: Database,
+    number: int,
+    *listed: str,
+    fetched_at: datetime = NOW,
+) -> None:
+    async with database.session() as session:
+        await store_sections(
+            session,
+            channel_id(number),
+            sections_response(list(listed)),
+            fetched_at=fetched_at,
+        )
+
+
+async def test_a_seeds_featured_list_is_a_source(database: Database) -> None:
+    await _channels(database, {1: SEED, 2: SEED})
+    await _featured(database, 1, channel_id(2), channel_id(9))
+
+    references = await _read(database)
+
+    [edge] = references.edges
+    assert (edge.channel_id, edge.target_channel, edge.form) == (
+        channel_id(1),
+        channel_id(2),
+        Form.FEATURED,
+    )
+    assert (edge.video_id, edge.target_video) == (None, None)
+    pending = references.pending[Pending(PendingKind.CHANNEL, channel_id(9))]
+    assert pending.featuring == {channel_id(1)}
+    assert references.featured_lists == 1
+
+
+async def test_a_former_seeds_featured_list_is_not_read(
+    database: Database,
+) -> None:
+    await _channels(database, {1: ChannelStatus.REJECTED})
+    await _featured(database, 1, channel_id(9))
+
+    references = await _read(database)
+
+    assert references.pending == {}
+    assert references.featured_lists == 0
+
+
+async def test_an_expired_featured_list_names_nothing(
+    database: Database,
+) -> None:
+    await _channels(database, {1: SEED})
+    await _featured(
+        database, 1, channel_id(9), fetched_at=NOW - timedelta(days=31)
+    )
+
+    references = await _read(database)
+
+    assert references.pending == {}

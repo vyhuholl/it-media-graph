@@ -49,7 +49,7 @@ DECISIONS: Mapping[str, ChannelStatus] = {
 DECISION_OF = {status: word for word, status in DECISIONS.items()}
 
 EDITABLE = ("decision", "kind", "lang", "reason", "note")
-READ_ONLY = ("handle", "title", "subscribers", "declared", "link")
+READ_ONLY = ("handle", "title", "subscribers", "declared", "link", "source")
 COLUMNS = ("channel_id", *EDITABLE, *READ_ONLY)
 
 GUIDE = 'src/itgraph/README.md, "YouTube: разметка"'
@@ -80,6 +80,7 @@ class ExportRow:
     subscribers: str = ""
     declared: str = ""
     link: str = ""
+    source: str = ""
 
 
 def render_review(rows: Iterable[ExportRow], *, exported_at: datetime) -> str:
@@ -343,13 +344,23 @@ def _row_decision(
 
 
 def export_row(
-    channel: YtChannel, payload: Mapping[str, Any] | None
+    channel: YtChannel,
+    payload: Mapping[str, Any] | None,
+    *,
+    query: str | None = None,
 ) -> ExportRow:
     """One record as the file shows it: its review, then what YouTube said.
 
     A channel without stored data — expired, or gone — still gets its row,
     with the id and the link and nothing YouTube said: the link is how a
     reviewer looks at it anyway.
+
+    ``source`` is how the channel was found, and for one found by search
+    the query of the earliest run in date that returned it — the
+    operator's words; which run returned which channel is API data, and
+    the file is already under the 30-day rule. No count of seeds,
+    families or results: a number of ours beside YouTube's would owe a
+    disclosure (III.E.4.h), and the queue's order is not the review's.
     """
     rejected = channel.status is ChannelStatus.REJECTED
     review = ExportRow(
@@ -360,6 +371,11 @@ def export_row(
         reason=channel.reject_reason.value if channel.reject_reason else "",
         note=(channel.reject_note if rejected else channel.kind_note) or "",
         link=f"https://www.youtube.com/channel/{channel.channel_id}",
+        source=(
+            f"{channel.discovered_via.value}: {query}"
+            if query is not None
+            else channel.discovered_via.value
+        ),
     )
     if payload is None:
         return review

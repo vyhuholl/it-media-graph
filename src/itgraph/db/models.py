@@ -434,11 +434,19 @@ class YtDiscoverySource(enum.StrEnum):
     anything running.
 
     ``TELEGRAM`` is the ranking of the Telegram seeds' links, and only
-    that ranking writes it: ``yt add`` has no option that does.
+    that ranking writes it: ``yt add`` has no option that does. The same
+    holds for the three queues of YouTube's own: ``MENTION`` (what seeds'
+    videos reference), ``FEATURED`` (what seeds list in their channel
+    sections) and ``SEARCH`` (what the operator's queries returned) —
+    each written by its own ``--add`` alone, so ``discovered_via`` by
+    status is the yield of each source.
     """
 
     MANUAL = "manual"
     TELEGRAM = "telegram"
+    MENTION = "mention"
+    FEATURED = "featured"
+    SEARCH = "search"
 
 
 class YtLang(enum.StrEnum):
@@ -458,14 +466,31 @@ class YtLang(enum.StrEnum):
 class YtQuotaPool(enum.StrEnum):
     """Which share of the daily quota a request is booked against.
 
-    ``GENERAL`` is every command but the poll loop; ``WATCH`` is the poll
-    loop's alone, the reserve the general cap leaves out. Which one a
-    request books against follows from its command, never from a
-    caller's choice — see ``db/yt_quota.py``.
+    ``GENERAL`` is every command but the poll loop and search; ``WATCH``
+    is the poll loop's alone, the reserve the general cap leaves out;
+    ``SEARCH`` is ``search.list``'s, which YouTube charges to a bucket of
+    its own outside the daily 10,000. Which one a request books against
+    follows from its command, never from a caller's choice — see
+    ``db/yt_quota.py``.
     """
 
     GENERAL = "general"
     WATCH = "watch"
+    SEARCH = "search"
+
+
+class YtQuotaBucket(enum.StrEnum):
+    """Which of YouTube's own quotas a request is charged to.
+
+    Not a pool: pools are how itgraph shares a bucket out, buckets are
+    what Google counts. Since 2026-06-01 ``search.list`` is charged to a
+    bucket of its own and every method itgraph uses besides it to the
+    main one, so a ``quotaExceeded`` ends the day for one bucket and
+    leaves the other running.
+    """
+
+    MAIN = "main"
+    SEARCH = "search"
 
 
 class YtCommand(enum.StrEnum):
@@ -481,6 +506,21 @@ class YtCommand(enum.StrEnum):
     WATCH = "watch"
     BACKFILL = "backfill"
     TG_LOOKUP = "tg-lookup"
+    MENTION_LOOKUP = "mention-lookup"
+    SEARCH = "search"
+
+
+class YtSearchType(enum.StrEnum):
+    """What a search asks YouTube for.
+
+    ``VIDEO`` is uploads of the last 30 days, so every channel a result
+    names publishes now; ``CHANNEL`` is channels whose own data matches,
+    dormant ones included. Either way only the result's channel id is
+    read.
+    """
+
+    VIDEO = "video"
+    CHANNEL = "channel"
 
 
 class YtLookupKind(enum.StrEnum):
@@ -2004,6 +2044,127 @@ class YtRawLookup(Base):
         )
 
 
+class YtRawChannelSections(Base):
+    """A seed's channel sections as YouTube last returned them, and when.
+
+    API data — ``channelSections.list`` trimmed to each section's listed
+    channel ids, the section's type deliberately not read: the probe of
+    2026-11-01 got lowercase and undocumented types back, and the
+    reference says ``contentDetails.channels`` is the featured channels
+    whatever the type. Replaced by every read, removed at 30 days by the
+    shared expiry, out of every dump by the prefix. A seed with no
+    sections is stored with an empty ``items``, so it is not asked again
+    before the refresh age.
+
+    Kept when its channel stops being a seed — nothing reads it then,
+    and the expiry takes it within 30 days. What is worked out from it —
+    which seeds feature which channel — is never stored.
+    """
+
+    __tablename__ = "yt_raw_channel_sections"
+    __table_args__ = (
+        Index("ix_yt_raw_channel_sections_fetched_at", "fetched_at"),
+    )
+
+    channel_id: Mapped[str] = mapped_column(
+        ForeignKey("yt_channels.channel_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    def __repr__(self) -> str:
+        return f"YtRawChannelSections(channel_id={self.channel_id!r})"
+
+
+class YtSearchQuery(Base):
+    """A search query the operator has asked, and when.
+
+    The operator's own data — the words typed and two moments, nothing
+    YouTube returned — so it is kept for as long as the database lives
+    and goes into the daily inventory dump: which queries were tried is
+    what steers the next round. Whether a query may be asked again is
+    *not* read from here but from the runs in date, which a restore
+    empties; ``last_asked_at`` would otherwise skip a query whose answer
+    the restore threw away.
+    """
+
+    __tablename__ = "yt_search_queries"
+    __table_args__ = (UniqueConstraint("query", "type"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    # Trimmed and its whitespace collapsed; letter case kept.
+    query: Mapped[str] = mapped_column(Text)
+    type: Mapped[YtSearchType] = mapped_column(
+        _pg_enum(YtSearchType, "yt_search_type")
+    )
+    first_asked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_asked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    def __repr__(self) -> str:
+        # No `query`: logs name searches by id.
+        return f"YtSearchQuery(id={self.id}, type={self.type.value!r})"
+
+
+class YtSearchRun(Base):
+    """One search of one query: when, bounded how, and how many pages.
+
+    Holds no API data, and is still left out of every dump with the
+    results it describes, for ``YtBackfillWalk``'s reason: restored
+    without them, a run would say a query was answered when its answer
+    is gone, and the query would not be asked again for 30 days. Removed
+    at 30 days with its results by the shared expiry.
+    """
+
+    __tablename__ = "yt_search_runs"
+    __table_args__ = (Index("ix_yt_search_runs_asked_at", "asked_at"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    query_id: Mapped[int] = mapped_column(
+        ForeignKey("yt_search_queries.id", ondelete="CASCADE")
+    )
+    asked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # The `publishedAfter` a video search sent; NULL for a channel search.
+    published_after: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    pages: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+
+    def __repr__(self) -> str:
+        return f"YtSearchRun(id={self.id}, query_id={self.query_id})"
+
+
+class YtRawSearchResult(Base):
+    """One search result: which channel it belongs to, at which position.
+
+    API data — the channel id of a result and YouTube's order — so it
+    lives 30 days, goes with its run, and stays out of every dump by the
+    prefix. Nothing else of the result is read: no title, no video id.
+    """
+
+    __tablename__ = "yt_raw_search_results"
+    __table_args__ = (
+        CheckConstraint(
+            "channel_id ~ '^UC[0-9A-Za-z_-]{22}$'", name="channel_shape"
+        ),
+        CheckConstraint("position >= 1", name="position_from_one"),
+    )
+
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("yt_search_runs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    # 1-based across every page of the run, in YouTube's order.
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    channel_id: Mapped[str] = mapped_column(Text)
+
+    def __repr__(self) -> str:
+        return (
+            f"YtRawSearchResult(run_id={self.run_id}, "
+            f"position={self.position})"
+        )
+
+
 class YtWatchPass(Base):
     """What one pass of the YouTube poll loop did, and what it could not.
 
@@ -2126,16 +2287,23 @@ class YtQuotaDay(Base):
 
 
 class YtQuotaExhausted(Base):
-    """A quota day YouTube declared over with ``quotaExceeded``.
+    """A quota day YouTube declared over with ``quotaExceeded``, per bucket.
 
-    One row ends the day for every pool. Our counts decide who may spend
-    what; Google's decides whether anyone can, and when the two disagree
-    Google is right.
+    One row ends the day for every pool charged to that bucket: the main
+    bucket's for the general pool and the poll loop alike, the search
+    bucket's for search alone. Our counts decide who may spend what;
+    Google's decides whether anyone can, and when the two disagree Google
+    is right.
     """
 
     __tablename__ = "yt_quota_exhausted"
 
     day: Mapped[date] = mapped_column(Date, primary_key=True)
+    bucket: Mapped[YtQuotaBucket] = mapped_column(
+        _pg_enum(YtQuotaBucket, "yt_quota_bucket"),
+        primary_key=True,
+        server_default=YtQuotaBucket.MAIN.value,
+    )
     observed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -2144,7 +2312,9 @@ class YtQuotaExhausted(Base):
     )
 
     def __repr__(self) -> str:
-        return f"YtQuotaExhausted(day={self.day})"
+        return (
+            f"YtQuotaExhausted(day={self.day}, bucket={self.bucket.value!r})"
+        )
 
 
 class YtRequest(Base):

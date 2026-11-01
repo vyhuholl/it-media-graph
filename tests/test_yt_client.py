@@ -19,6 +19,7 @@ from ytfakes import (
 from itgraph.config import settings
 from itgraph.db.models import (
     YtCommand,
+    YtQuotaBucket,
     YtQuotaDay,
     YtQuotaExhausted,
     YtRequest,
@@ -130,6 +131,92 @@ async def test_quota_exceeded_ends_the_day_and_is_not_retried(
     async with database.session() as session:
         [row] = await session.scalars(select(YtQuotaExhausted))
     assert row.command is YtCommand.ADD
+
+
+SEARCH_PARAMS = {"part": "snippet", "q": "fake query", "type": "video"}
+
+
+async def _call(
+    database: Database,
+    fake: FakeYouTube,
+    command: YtCommand,
+    method: str,
+    params: dict[str, str],
+) -> dict[str, Any] | None:
+    async with youtube(
+        database, command, transport=fake.transport(), sleep=no_sleep
+    ) as client:
+        return await client.get(method, params)
+
+
+async def test_a_spent_search_bucket_leaves_the_poll_loop_running(
+    database: Database,
+) -> None:
+    fake = FakeYouTube(channel_resource(1))
+    fake.queued = [httpx.Response(403, json=error_body(403, "quotaExceeded"))]
+
+    with pytest.raises(QuotaExhaustedError, match="search"):
+        await _call(
+            database, fake, YtCommand.SEARCH, "search.list", SEARCH_PARAMS
+        )
+
+    body = await _call(
+        database, fake, YtCommand.WATCH, "channels.list", PARAMS
+    )
+    assert body is not None
+    assert len(fake.requests) == 2
+    async with database.session() as session:
+        [row] = await session.scalars(select(YtQuotaExhausted))
+    assert (row.bucket, row.command) == (
+        YtQuotaBucket.SEARCH,
+        YtCommand.SEARCH,
+    )
+
+
+async def test_a_spent_main_bucket_leaves_search_running(
+    database: Database,
+) -> None:
+    fake = FakeYouTube(channel_resource(1))
+    fake.queued = [
+        httpx.Response(403, json=error_body(403, "quotaExceeded")),
+        httpx.Response(200, json={"items": []}),
+    ]
+
+    with pytest.raises(QuotaExhaustedError):
+        await _get(database, fake)
+
+    body = await _call(
+        database, fake, YtCommand.SEARCH, "search.list", SEARCH_PARAMS
+    )
+    assert body == {"items": []}
+    assert len(fake.requests) == 2
+
+
+async def test_a_search_under_a_general_command_is_refused_unsent(
+    database: Database,
+) -> None:
+    """A programming error: Google would charge one bucket and the
+    ledger another."""
+    fake = FakeYouTube()
+
+    with pytest.raises(ValueError, match="search bucket"):
+        await _call(
+            database, fake, YtCommand.ADD, "search.list", SEARCH_PARAMS
+        )
+
+    assert fake.requests == []
+    assert await _spent(database) == 0
+
+
+async def test_a_main_method_under_search_is_refused_unsent(
+    database: Database,
+) -> None:
+    fake = FakeYouTube(channel_resource(1))
+
+    with pytest.raises(ValueError, match="main bucket"):
+        await _call(database, fake, YtCommand.SEARCH, "channels.list", PARAMS)
+
+    assert fake.requests == []
 
 
 async def test_an_unreadable_403_is_not_taken_for_exhaustion(

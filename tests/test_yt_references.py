@@ -569,3 +569,73 @@ def test_bounded_by_evidence_and_by_rows() -> None:
 def test_a_row_carries_the_target_and_its_seeds_and_nothing_else() -> None:
     [row] = ranked({"fake-one": frozenset({SEED_ONE})}, key=str)
     assert row == ("fake-one", frozenset({SEED_ONE}))
+
+
+# --- featured lists ----------------------------------------------------
+
+UNKNOWN = channel_id(9)
+
+
+def test_a_featured_seed_is_an_edge_naming_no_video() -> None:
+    references = resolve([], INVENTORY, {SEED_ONE: [SEED_TWO]})
+
+    assert references.edges == [
+        Edge(
+            video_id=None,
+            channel_id=SEED_ONE,
+            published_at=None,
+            target_channel=SEED_TWO,
+            target_video=None,
+            form=Form.FEATURED,
+        )
+    ]
+    assert (references.featured_lists, references.seeds) == (1, 1)
+
+
+def test_a_featured_channel_outside_the_inventory_is_pending() -> None:
+    references = resolve([], INVENTORY, {SEED_ONE: [UNKNOWN]})
+
+    evidence = references.pending[Pending(PendingKind.CHANNEL, UNKNOWN)]
+    assert evidence.seeds == {SEED_ONE}
+    assert evidence.featuring == {SEED_ONE}
+    assert evidence.linking == set()
+    assert evidence.videos == set()
+
+
+def test_featured_and_linked_are_two_references() -> None:
+    references = resolve(
+        [source("see youtube.com/@fake.seed.two")],
+        INVENTORY,
+        {SEED_ONE: [SEED_TWO]},
+    )
+
+    forms = sorted((edge.form, edge.video_id) for edge in references.edges)
+    assert forms == sorted(
+        [(Form.HANDLE_LINK, video_id(100)), (Form.FEATURED, None)]
+    )
+
+
+def test_the_seeds_own_channel_in_its_list_is_no_reference() -> None:
+    references = resolve([], INVENTORY, {SEED_ONE: [SEED_ONE, UNKNOWN]})
+
+    assert references.edges == []
+    assert list(references.pending) == [Pending(PendingKind.CHANNEL, UNKNOWN)]
+
+
+def test_a_featured_id_and_a_linked_id_are_one_target() -> None:
+    references = resolve(
+        [source(f"youtube.com/channel/{UNKNOWN}", channel=SEED_TWO)],
+        INVENTORY,
+        {SEED_ONE: [UNKNOWN]},
+    )
+
+    evidence = references.pending[Pending(PendingKind.CHANNEL, UNKNOWN)]
+    assert evidence.seeds == {SEED_ONE, SEED_TWO}
+    assert evidence.featuring == {SEED_ONE}
+    assert evidence.linking == {SEED_TWO}
+
+
+def test_a_list_naming_one_channel_twice_is_one_reference() -> None:
+    references = resolve([], INVENTORY, {SEED_ONE: [SEED_TWO, SEED_TWO]})
+
+    assert len(references.edges) == 1

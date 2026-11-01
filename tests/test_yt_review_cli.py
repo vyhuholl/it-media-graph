@@ -568,3 +568,80 @@ def test_reviewed_records_are_never_deleted(inventory: str) -> None:
             return len((await session.scalars(select(YtChannel))).all())
 
     assert _run(inventory, count) == 1
+
+
+# --- how a channel was found ---------------------------------------------
+
+
+def test_the_file_says_how_a_channel_was_found(inventory: str) -> None:
+    """The discovery source, and for search the earliest run's query."""
+    from itgraph.db.models import YtDiscoverySource, YtSearchType
+    from itgraph.db.yt_search import start_run
+
+    async def body(database: Database) -> None:
+        now = datetime.now(UTC)
+        async with database.session() as session:
+            await create_channels(
+                session,
+                [channel_id(1)],
+                discovered_via=YtDiscoverySource.MANUAL,
+            )
+            await create_channels(
+                session,
+                [channel_id(2)],
+                discovered_via=YtDiscoverySource.MENTION,
+            )
+            await create_channels(
+                session,
+                [channel_id(3)],
+                discovered_via=YtDiscoverySource.SEARCH,
+            )
+            for query, at in (
+                ("fake later", now),
+                ("fake first", now - timedelta(days=2)),
+            ):
+                await start_run(
+                    session,
+                    query,
+                    YtSearchType.VIDEO,
+                    [channel_id(3)],
+                    asked_at=at,
+                    published_after=None,
+                )
+
+    _run(inventory, body)
+
+    result = runner.invoke(app, ["yt", "review-export"])
+
+    assert result.exit_code == 0, result.output
+    source = COLUMNS.index("source")
+    rows = {
+        line.split("\t")[0]: line.split("\t")
+        for line in result.output.splitlines()
+        if line.startswith("UC")
+    }
+    assert rows[channel_id(1)][source] == "manual"
+    assert rows[channel_id(2)][source] == "mention"
+    assert rows[channel_id(3)][source] == "search: fake first"
+
+
+def test_a_file_from_before_the_source_column_is_refused(
+    inventory: str,
+) -> None:
+    """Exported before the column existed: the existing check refuses it."""
+    _channels(inventory, 1)
+    exported = runner.invoke(app, ["yt", "review-export"]).output
+    old = exported.replace("\tlink\tsource", "\tlink")
+
+    result = runner.invoke(app, ["yt", "review-apply", "-"], input=old)
+
+    assert result.exit_code == 1
+    assert "column line is missing or changed" in result.output
+
+
+@pytest.mark.parametrize("source", ["mention", "featured", "search"])
+def test_yt_add_never_records_a_queues_source(source: str) -> None:
+    shown = runner.invoke(app, ["yt", "add", "--help"])
+
+    assert shown.exit_code == 0
+    assert source not in shown.output.lower()

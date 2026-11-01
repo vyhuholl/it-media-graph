@@ -49,8 +49,15 @@ logger = logging.getLogger(__name__)
 
 # Everything the operator decided by hand. `backfill_state` rides along
 # because losing the cursors means walking every channel's history again
-# — the one operation this project treats as expensive.
-INVENTORY_TABLES = ("channels", "backfill_state", "yt_channels")
+# — the one operation this project treats as expensive. The YouTube
+# search queries are the operator's words too, and which were tried is
+# what steers the next round of candidates.
+INVENTORY_TABLES = (
+    "channels",
+    "backfill_state",
+    "yt_channels",
+    "yt_search_queries",
+)
 
 # Tables whose rows no dump may carry, only their definitions. YouTube API
 # data may be kept at most 30 days (Developer Policies III.E.4), and a
@@ -64,7 +71,10 @@ INVENTORY_TABLES = ("channels", "backfill_state", "yt_channels")
 # reason: it says which channels' history was walked, and that history
 # is in `yt_raw_videos`. Restored without it, the record would claim
 # walks that are not there — and nothing would walk them again.
-EXCLUDED_DATA = ("yt_raw_*", "yt_backfill_walks")
+# `yt_search_runs` is left out for the same reason: restored without the
+# results it describes, a run would say a query was answered, and the
+# query would not be asked again for 30 days.
+EXCLUDED_DATA = ("yt_raw_*", "yt_backfill_walks", "yt_search_runs")
 
 # UTC, and said so in the name: a dump taken at 13:08 local is stamped
 # 10:08, and without the Z that reads as a machine with the wrong clock.

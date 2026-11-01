@@ -378,6 +378,36 @@ def test_the_default_caps_leave_six_thousand(env: pytest.MonkeyPatch) -> None:
     )
 
 
+def test_the_default_search_cap_is_ninety(env: pytest.MonkeyPatch) -> None:
+    """Google's 100 calls a day less the same 10% margin."""
+    from itgraph.yt_quota import search_cap
+
+    settings = build()
+    assert settings.youtube_search_daily_quota == 100
+    assert (
+        search_cap(
+            settings.youtube_search_daily_quota, settings.youtube_quota_margin
+        )
+        == 90
+    )
+
+
+def test_a_margin_that_leaves_search_nothing_is_refused(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """A margin the general pool survives — 1,000 left of 10,000 — and
+    the one search call does not."""
+    env.setenv("YOUTUBE_SEARCH_DAILY_QUOTA", "1")
+    env.setenv("YOUTUBE_QUOTA_MARGIN", "0.6")
+
+    with pytest.raises(
+        ValidationError, match="youtube_search_daily_quota"
+    ) as caught:
+        build()
+
+    assert "youtube_quota_margin" in str(caught.value)
+
+
 # --- the YouTube history walk ------------------------------------------
 
 
