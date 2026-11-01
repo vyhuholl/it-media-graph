@@ -910,6 +910,16 @@
         - volume_session.rc != 0
         - session_previous_host | default('') != 'none'
       tags: [session]
+      # Ansible templates `delegate_to` before it evaluates `when`, so
+      # these tasks resolve their host even when they are skipped — on
+      # every run after the cutover, once [previous] is gone from the
+      # inventory, and `groups['previous'][0]` then fails the run. The
+      # stand-in is a name nothing answers to: never reached, because
+      # the assert above stops a run that would need a previous host and
+      # names none; and if it ever were, the connection would fail rather
+      # than check the wrong machine.
+      vars:
+        previous_host: "{{ (groups['previous'] | default(['no-previous-host-in-inventory'])) | first }}"
       block:
         - name: The previous host's collector is stopped
           # `systemd:` has no query mode — it asserts a state, which
@@ -918,7 +928,7 @@
           register: previous_watch_active
           failed_when: false
           changed_when: false
-          delegate_to: "{{ groups['previous'][0] }}"
+          delegate_to: "{{ previous_host }}"
 
         - name: The previous host's bot is stopped
           # `systemd:` has no query mode — it asserts a state, which
@@ -927,21 +937,21 @@
           register: previous_bot_active
           failed_when: false
           changed_when: false
-          delegate_to: "{{ groups['previous'][0] }}"
+          delegate_to: "{{ previous_host }}"
 
         - name: The previous host's collector will not start on boot
           ansible.builtin.command: systemctl is-enabled itgraph-watch  # noqa: command-instead-of-module
           register: previous_watch_enabled
           failed_when: false
           changed_when: false
-          delegate_to: "{{ groups['previous'][0] }}"
+          delegate_to: "{{ previous_host }}"
 
         - name: The previous host's bot will not start on boot
           ansible.builtin.command: systemctl is-enabled itgraph-bot  # noqa: command-instead-of-module
           register: previous_bot_enabled
           failed_when: false
           changed_when: false
-          delegate_to: "{{ groups['previous'][0] }}"
+          delegate_to: "{{ previous_host }}"
 
         - name: The previous host is out of the collection business
           ansible.builtin.assert:
@@ -951,7 +961,7 @@
               - previous_watch_enabled.stdout | trim in ['disabled', 'masked', 'not-found']
               - previous_bot_enabled.stdout | trim in ['disabled', 'masked', 'not-found']
             fail_msg: >-
-              {{ groups['previous'][0] }}: itgraph-watch is
+              {{ previous_host }}: itgraph-watch is
               {{ previous_watch_active.stdout | trim }} and
               {{ previous_watch_enabled.stdout | trim }},
               itgraph-bot is {{ previous_bot_active.stdout | trim }} and
