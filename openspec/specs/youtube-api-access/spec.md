@@ -223,7 +223,7 @@ The system SHALL provide `itgraph yt quota`, reporting the current quota day's s
 
 ### Requirement: Requests Read Only Declared Fields
 
-Every request SHALL name the resource parts and the fields within them that it reads, and those SHALL be no more than the privacy policy published with the project lists as read from YouTube. Data a request did not ask for MUST NOT be stored.
+Every request SHALL name the resource parts and the fields within them that it reads, and those SHALL be no more than the privacy policy published with the project lists as read from YouTube, together with the token a listing needs to reach its next page. Data a request did not ask for MUST NOT be stored.
 
 #### Scenario: A channel request asks for the declared fields only
 
@@ -241,6 +241,18 @@ Every request SHALL name the resource parts and the fields within them that it r
 
 - **WHEN** the poll loop lists a channel's uploads
 - **THEN** the request names each item's video id and publication time and nothing else
+
+#### Scenario: A walk's listing pages through the uploads
+
+- **WHEN** the history walk lists a channel's uploads
+- **THEN** the request names each item's video id and publication time and the token for the next page
+- **AND** no total count of the playlist's items
+
+#### Scenario: A past upload is asked for without counts before acceptance
+
+- **GIVEN** no acceptance of the derived-metrics use case recorded
+- **WHEN** the history walk or the refresh asks for past uploads
+- **THEN** the request names the video's fields as the poll loop's does, less the view, like and comment counts
 
 #### Scenario: Channel data stored before this rule is trimmed
 
