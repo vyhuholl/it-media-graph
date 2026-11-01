@@ -32,6 +32,7 @@
         <li><strong>Public statistics of new videos.</strong> For channels in scope, itgraph reads the public view, like and comment counts of recent uploads several times as each video ages.</li>
         <li><strong>Past uploads.</strong> For channels in scope, itgraph also lists up to a year of earlier uploads and reads their titles and descriptions. It does not read their view, like or comment counts.</li>
         <li><strong>Mentions.</strong> From the titles and descriptions of those channels' uploads, new and past, itgraph works out which other channels and videos they mention or link to — to map how the channels refer to one another, and to find channels to review. It works this out when it is needed and keeps no copy.</li>
+        <li><strong>Links from Telegram.</strong> When posts of the public Telegram channels itgraph follows link to YouTube channels or videos, itgraph asks YouTube which channel each linked video, handle or name belongs to, and nothing else — to find channels to review. It keeps that answer for at most 30 days and works out the rest when it is needed.</li>
         <li><strong>Alerts.</strong> When a video is doing much better than that channel's own videos usually do at the same age, itgraph sends a short message to a private Telegram chat: the video's title, a link to it on YouTube, the counts YouTube reports, and itgraph's score.</li>
       </ul>
       <p>itgraph's score is calculated independently by itgraph. It is not a YouTube metric, it is labelled as itgraph's own wherever it appears, and it is always shown next to the counts YouTube reports.</p>
@@ -39,7 +40,7 @@
       <h2>How it uses the YouTube API Services</h2>
       <ul>
         <li>The YouTube Data API v3, authenticated with an API key. Public data only: itgraph never signs in to a YouTube or Google account, does not use OAuth, and does not access anyone's private data.</li>
-        <li>Methods: <code>channels.list</code> for the inventory and to notice new uploads; <code>playlistItems.list</code> and <code>videos.list</code> for new and past uploads, and for the statistics of new ones; <code>search.list</code> and <code>channelSections.list</code> for finding channels to review.</li>
+        <li>Methods: <code>channels.list</code> for the inventory, to notice new uploads, and to find which channel a linked handle belongs to; <code>playlistItems.list</code> and <code>videos.list</code> for new and past uploads, and for the statistics of new ones; <code>videos.list</code> also to find which channel a linked video belongs to; <code>search.list</code> and <code>channelSections.list</code> for finding channels to review.</li>
         <li>Data read from YouTube is refreshed or deleted within 30 days and is never included in backups. What itgraph keeps beyond that are its own records: channel IDs and the reviewer's labels. The <a href="privacy.html">Privacy Policy</a> has the details.</li>
       </ul>
 

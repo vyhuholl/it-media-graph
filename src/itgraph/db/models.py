@@ -75,11 +75,13 @@ __all__ = [
     "YtDiscoveryPath",
     "YtDiscoverySource",
     "YtLang",
+    "YtLookupKind",
     "YtPassOutcome",
     "YtQuotaDay",
     "YtQuotaExhausted",
     "YtQuotaPool",
     "YtRawChannel",
+    "YtRawLookup",
     "YtRawVideo",
     "YtRawVideoStat",
     "YtRejectReason",
@@ -430,9 +432,13 @@ class YtDiscoverySource(enum.StrEnum):
     shared with a live table, so the mention graph and discovery can add
     their values with the migrations that bring them, at no risk to
     anything running.
+
+    ``TELEGRAM`` is the ranking of the Telegram seeds' links, and only
+    that ranking writes it: ``yt add`` has no option that does.
     """
 
     MANUAL = "manual"
+    TELEGRAM = "telegram"
 
 
 class YtLang(enum.StrEnum):
@@ -474,6 +480,18 @@ class YtCommand(enum.StrEnum):
     REFRESH = "refresh"
     WATCH = "watch"
     BACKFILL = "backfill"
+    TG_LOOKUP = "tg-lookup"
+
+
+class YtLookupKind(enum.StrEnum):
+    """What a lookup asked YouTube about.
+
+    A channel id is not among them: it is its own answer.
+    """
+
+    VIDEO = "video"
+    HANDLE = "handle"
+    LEGACY = "legacy"
 
 
 class YtDiscoveryPath(enum.StrEnum):
@@ -1935,6 +1953,54 @@ class YtRawVideoStat(Base):
         return (
             f"YtRawVideoStat(video_id={self.video_id!r}, "
             f"observed_at={self.observed_at})"
+        )
+
+
+class YtRawLookup(Base):
+    """Which channel YouTube said a linked name belongs to, and when.
+
+    API data — the answer to ``videos.list`` or ``channels.list`` — so
+    it lives under the 30-day rule like every other ``yt_raw_`` table,
+    and stays out of every dump by that prefix. Never refreshed: a name
+    in date is not asked again, and one past 30 days is removed by the
+    expiry every YouTube command runs first, to be looked up anew by the
+    next run that needs it. ``channel_id`` NULL is YouTube having named
+    no channel — remembered, so a dead video linked in an old post is
+    not paid for on every run.
+
+    No foreign key: the channels behind linked names are almost never in
+    the inventory. Nothing joined from these answers — which Telegram
+    families link which channel — is stored anywhere; it is worked out
+    on reading.
+    """
+
+    __tablename__ = "yt_raw_lookups"
+    __table_args__ = (
+        CheckConstraint(
+            "channel_id IS NULL OR channel_id ~ '^UC[0-9A-Za-z_-]{22}$'",
+            name="channel_shape",
+        ),
+        CheckConstraint(
+            "kind <> 'video' OR value ~ '^[0-9A-Za-z_-]{11}$'",
+            name="video_shape",
+        ),
+        Index("ix_yt_raw_lookups_fetched_at", "fetched_at"),
+    )
+
+    kind: Mapped[YtLookupKind] = mapped_column(
+        _pg_enum(YtLookupKind, "yt_lookup_kind"), primary_key=True
+    )
+    # A video id keeps its case; a handle is `normalize_handle`'s; a
+    # legacy name is lowercased.
+    value: Mapped[str] = mapped_column(Text, primary_key=True)
+    channel_id: Mapped[str | None] = mapped_column(Text)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    def __repr__(self) -> str:
+        # No `value`: a handle or a legacy name must not reach a log.
+        return (
+            f"YtRawLookup(kind={self.kind.value!r}, "
+            f"channel_id={self.channel_id!r})"
         )
 
 

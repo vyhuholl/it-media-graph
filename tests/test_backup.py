@@ -207,6 +207,7 @@ def test_the_pattern_reaches_every_table_of_youtube_api_data() -> None:
     }
     left_out = {
         "yt_raw_channels",
+        "yt_raw_lookups",
         "yt_raw_videos",
         "yt_raw_video_stats",
         "yt_backfill_walks",

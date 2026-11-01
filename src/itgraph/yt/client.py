@@ -26,8 +26,14 @@ What an answer means:
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from contextlib import asynccontextmanager
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterator,
+    Mapping,
+)
+from contextlib import asynccontextmanager, contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
@@ -45,7 +51,14 @@ from itgraph.db.yt_quota import (
 from itgraph.yt.errors import ApiError, MissingKeyError, RequestLimitReached
 from itgraph.yt_quota import next_reset
 
-__all__ = ["API_ROOT", "COSTS", "KEY_HEADER", "YouTube", "youtube"]
+__all__ = [
+    "API_ROOT",
+    "COSTS",
+    "KEY_HEADER",
+    "YouTube",
+    "request_urls_unlogged",
+    "youtube",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -200,6 +213,24 @@ class YouTube:
             raise ApiError(status, reason, self._scrub(message) or "-")
 
         raise AssertionError("unreachable: the last attempt raises")
+
+
+@contextmanager
+def request_urls_unlogged() -> Iterator[None]:
+    """Keep httpx's per-request line, and the URL in it, out of the log.
+
+    httpx logs every URL it requests at INFO. Most commands' URLs carry
+    ids only; a lookup's carries the handle or legacy name it asks about,
+    which must not reach a log. ``--verbose`` does not bring it back, for
+    the same reason. The level is restored when the block ends.
+    """
+    log = logging.getLogger("httpx")
+    previous = log.level
+    log.setLevel(logging.WARNING)
+    try:
+        yield
+    finally:
+        log.setLevel(previous)
 
 
 @asynccontextmanager

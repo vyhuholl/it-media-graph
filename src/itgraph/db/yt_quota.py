@@ -121,15 +121,17 @@ POOL_OF: Mapping[YtCommand, YtQuotaPool] = {
     YtCommand.REFRESH: YtQuotaPool.GENERAL,
     YtCommand.WATCH: YtQuotaPool.WATCH,
     YtCommand.BACKFILL: YtQuotaPool.GENERAL,
+    YtCommand.TG_LOOKUP: YtQuotaPool.GENERAL,
 }
 
 
 def units_to_leave(command: YtCommand) -> int:
     """What a command must leave unspent of its pool for the others.
 
-    The history walk's floor, and nothing for every other command. By
-    command, like the pool itself, so no caller can walk past the floor
-    by forgetting to pass it.
+    The history walk's floor, and nothing for every other command — the
+    lookups of Telegram's links included, since leaving room for such
+    commands is what the floor is for. By command, like the pool itself,
+    so no caller can walk past the floor by forgetting to pass it.
     """
     if command is YtCommand.BACKFILL:
         return settings.youtube_backfill_general_floor

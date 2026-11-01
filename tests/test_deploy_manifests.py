@@ -394,6 +394,32 @@ def test_no_job_runs_the_mentions_report() -> None:
             assert "mentions" not in container.get("args", []), name
 
 
+MANUAL_ONLY = ("tg-lookup", "tg-candidates")
+
+
+def _runs_manual_only(pod_spec: dict[str, Any]) -> list[str]:
+    """Which of the hand-run Telegram-links commands a pod would run."""
+    return [
+        command
+        for container in containers(pod_spec)
+        for command in MANUAL_ONLY
+        if command in container.get("args", [])
+    ]
+
+
+def test_no_job_runs_the_telegram_links_commands() -> None:
+    # `yt tg-candidates` prints what the operator's own subscriptions link
+    # to, and `yt tg-lookup` is its first half; a job's output is kept in
+    # the cluster's logs, so both are run by hand only.
+    for name, pod_spec in pod_specs(render_all(WALK_ON)):
+        assert _runs_manual_only(pod_spec) == [], name
+
+
+def test_the_check_would_catch_such_a_job() -> None:
+    job = {"containers": [{"args": ["yt", "tg-candidates", "--add"]}]}
+    assert _runs_manual_only(job) == ["tg-candidates"]
+
+
 def test_every_object_lives_in_the_namespace() -> None:
     objects = render_all()
     namespaces = of(objects, "Namespace")

@@ -220,6 +220,9 @@ def test_what_was_not_followed(database_url: str) -> None:
     )
     assert output[-1] == "ambiguous handles: none"
     assert "fake_tg_channel" not in "\n".join(output)
+    # The reader returns a custom URL's name now, for Telegram's posts;
+    # out of a description it is API data and stays a number.
+    assert "fakecustom" not in "\n".join(output).lower()
 
 
 def test_an_ambiguous_handle_names_both_channels(

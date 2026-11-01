@@ -227,7 +227,7 @@ Every request SHALL name the resource parts and the fields within them that it r
 
 #### Scenario: A channel request asks for the declared fields only
 
-- **WHEN** a YouTube command asks for channels
+- **WHEN** a YouTube command asks for channels' data — an import, a refresh or the poll loop
 - **THEN** the request names the channel id, title, handle, description, declared country and language, the public subscriber, video and view counts, and the uploads playlist id
 - **AND** no branding, status or topic data
 
@@ -253,6 +253,17 @@ Every request SHALL name the resource parts and the fields within them that it r
 - **GIVEN** no acceptance of the derived-metrics use case recorded
 - **WHEN** the history walk or the refresh asks for past uploads
 - **THEN** the request names the video's fields as the poll loop's does, less the view, like and comment counts
+
+#### Scenario: A linked video is asked for its channel only
+
+- **WHEN** a lookup asks for linked videos
+- **THEN** the request names each video's id and its channel's id
+- **AND** no title, description, publication time, duration, broadcast data or counts
+
+#### Scenario: A linked handle or legacy name is asked for the channel id only
+
+- **WHEN** a lookup asks for the channel behind a handle or a legacy name
+- **THEN** the request names the channel's id and nothing else
 
 #### Scenario: Channel data stored before this rule is trimmed
 

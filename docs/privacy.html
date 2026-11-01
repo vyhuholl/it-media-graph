@@ -32,14 +32,15 @@
       <ul>
         <li><strong>About channels</strong> in its inventory: the channel ID, title, handle, description, declared country and language, public subscriber, video and view counts, whether the subscriber count is shown, and the ID of the channel's uploads playlist.</li>
         <li><strong>About videos</strong> uploaded by those channels: the video ID and the ID of the channel it belongs to, title, description, publication time, duration, live-broadcast state and its scheduled and actual start and end times, and the public view, like and comment counts.</li>
+        <li><strong>About channels and videos linked from the public Telegram channels</strong> itgraph follows, before any of them is in its inventory: for a linked video, its ID and the ID of the channel it belongs to; for a linked handle or legacy username, the ID of the channel it names.</li>
       </ul>
       <p>itgraph does not read comments, and it reads no data about viewers, subscribers or commenters.</p>
 
       <h2>How long it is kept</h2>
       <ul>
-        <li><strong>Data read from YouTube</strong> (titles, handles, descriptions, counts) is kept in a separate set of tables. Channel data is fetched again before it is 25 days old. A channel's uploads of the past year are fetched again before their data is 25 days old while the channel is in scope; an upload more than a year old, or of a channel no longer in scope, is not fetched again. Anything not fetched again within 30 days is deleted, and so is anything YouTube stops returning. What itgraph works out from them — which channels a video mentions or links to — is not stored. It is never included in backups.</li>
+        <li><strong>Data read from YouTube</strong> (titles, handles, descriptions, counts) is kept in a separate set of tables. Channel data is fetched again before it is 25 days old. A channel's uploads of the past year are fetched again before their data is 25 days old while the channel is in scope; an upload more than a year old, or of a channel no longer in scope, is not fetched again. Anything not fetched again within 30 days is deleted, and so is anything YouTube stops returning. The answers to lookups of linked videos, handles and names are kept in the same tables and deleted 30 days after they were read. What itgraph works out from them — which channels a video mentions or links to, and how many of the Telegram channels it follows link to a channel — is not stored. It is never included in backups.</li>
         <li><strong>Statistics</strong> (view, like and comment counts, including readings taken at different ages of a video) are kept for at most 30 days. If YouTube accepts itgraph's analytics use case under its <a href="https://developers.google.com/youtube/terms/derived-metrics-policy">Additional policies on derived metrics and data storage</a>, statistics and the scores itgraph derives from them may be kept for up to 36 months. Titles, descriptions and other data stay under the 30-day rule in any case. This page will say so if that happens.</li>
-        <li><strong>itgraph's own records</strong> are kept for as long as the channel is in the inventory: the channel ID, and the reviewer's labels for it (kind of channel, language, in or out of scope, and a short note).</li>
+        <li><strong>itgraph's own records</strong> are kept for as long as the channel is in the inventory: the channel ID, how it was found (by hand, or through links from Telegram), and the reviewer's labels for it (kind of channel, language, in or out of scope, and a short note).</li>
         <li><strong>A request journal</strong> records when each request to the YouTube Data API was made, which method, how many quota units it cost and whether it succeeded. It contains no data returned by YouTube.</li>
         <li><strong>Review files.</strong> To label channels, the developer exports a file with channel titles and handles to their own computer. Such a file is deleted once its labels are applied, and itgraph refuses to apply one older than 30 days.</li>
         <li><strong>Logs</strong> name channels and videos by ID only.</li>
@@ -47,7 +48,7 @@
 
       <h2>How it is used and shared</h2>
       <ul>
-        <li>The data is used to decide which channels are in scope, to recognise videos that are doing unusually well compared with the same channel's other videos at the same age, and to see which other channels the videos mention or link to, so that those channels can be reviewed.</li>
+        <li>The data is used to decide which channels are in scope, to recognise videos that are doing unusually well compared with the same channel's other videos at the same age, and to see which other channels the videos mention or link to, so that those channels can be reviewed, and to find which YouTube channels the public Telegram channels itgraph follows link to, for the same purpose.</li>
         <li>Scores calculated by itgraph are labelled as calculated by itgraph and are always shown alongside the counts YouTube reports. They are never presented as YouTube metrics.</li>
         <li>Alerts are delivered through the Telegram Bot API to a private Telegram chat whose members are invited by the developer. An alert contains the video title, a link to the video on YouTube, the counts YouTube reports, and itgraph's score. Telegram processes these messages under its own <a href="https://telegram.org/privacy">privacy policy</a>.</li>
         <li>The database runs on a private server reachable only by the developer. Nothing is sold, used for advertising, or shared with anyone else.</li>
@@ -60,7 +61,7 @@
       <p>This website is a set of static pages hosted on GitHub Pages. It sets no cookies and runs no analytics. GitHub may log visits under the <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement">GitHub General Privacy Statement</a>.</p>
 
       <h2>Telegram</h2>
-      <p>itgraph also follows public Telegram channels. That part uses no YouTube data: it stores public posts of those channels and their public view, reaction and forward counts, and no data about their readers.</p>
+      <p>itgraph also follows public Telegram channels. That part uses no YouTube data: it stores public posts of those channels and their public view, reaction and forward counts, and no data about their readers. Links to YouTube in those posts are used to find YouTube channels to review, as described above.</p>
 
       <h2>Authorized Data</h2>
       <p>itgraph does not use Authorized Data: it never asks anyone to grant it access to their account. If it ever did, that access could be revoked at any time through the Google security settings page at <a href="https://security.google.com/settings/security/permissions">https://security.google.com/settings/security/permissions</a>, in addition to asking the developer to delete the data.</p>

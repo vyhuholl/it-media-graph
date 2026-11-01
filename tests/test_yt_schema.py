@@ -18,8 +18,12 @@ from ytfakes import channel_id, channel_resource, video_id, video_resource
 
 from itgraph.db.models import (
     YtBackfillWalk,
+    YtChannel,
     YtDiscoveryPath,
+    YtDiscoverySource,
+    YtLookupKind,
     YtRawChannel,
+    YtRawLookup,
     YtRawVideo,
     YtRawVideoStat,
 )
@@ -183,3 +187,71 @@ async def test_the_trim_adds_nothing_a_channel_never_had(
     assert stored is not None
     assert "defaultLanguage" not in stored.payload["snippet"]
     assert "country" not in stored.payload["snippet"]
+
+
+async def test_a_record_from_telegram_is_accepted(database: Database) -> None:
+    """The ranking of Telegram links has a discovery source of its own."""
+    async with database.session() as session:
+        await create_channels(
+            session, [channel_id(1)], discovered_via=YtDiscoverySource.TELEGRAM
+        )
+
+    async with database.session() as session:
+        record = await session.get(YtChannel, channel_id(1))
+    assert record is not None
+    assert record.discovered_via is YtDiscoverySource.TELEGRAM
+
+
+@pytest.mark.parametrize(
+    ("kind", "value", "channel", "constraint"),
+    [
+        (
+            YtLookupKind.HANDLE,
+            "fake-unknown",
+            "not-a-channel-id",
+            "channel_shape",
+        ),
+        (YtLookupKind.VIDEO, "not-a-video-id", None, "video_shape"),
+    ],
+)
+async def test_a_malformed_lookup_is_refused(
+    database: Database,
+    kind: YtLookupKind,
+    value: str,
+    channel: str | None,
+    constraint: str,
+) -> None:
+    with pytest.raises(IntegrityError, match=constraint):
+        async with database.session() as session:
+            session.add(
+                YtRawLookup(
+                    kind=kind, value=value, channel_id=channel, fetched_at=NOW
+                )
+            )
+
+
+async def test_a_lookup_may_name_no_channel(database: Database) -> None:
+    """Not found is an answer worth keeping; a handle is any name."""
+    async with database.session() as session:
+        session.add(
+            YtRawLookup(
+                kind=YtLookupKind.HANDLE,
+                value="fake.unknown-two",
+                channel_id=None,
+                fetched_at=NOW,
+            )
+        )
+        session.add(
+            YtRawLookup(
+                kind=YtLookupKind.VIDEO,
+                value=video_id(1),
+                channel_id=channel_id(1),
+                fetched_at=NOW,
+            )
+        )
+
+    async with database.session() as session:
+        stored = await session.scalar(
+            select(func.count()).select_from(YtRawLookup)
+        )
+    assert stored == 2

@@ -17,12 +17,15 @@ from itgraph.derive.yt_references import (
     Edge,
     Form,
     Known,
+    Link,
+    LinkKind,
     NotFollowed,
     Pending,
     PendingKind,
     Source,
     normalize_handle,
     ranked,
+    read_link,
     read_text,
     resolve,
 )
@@ -215,6 +218,42 @@ def test_a_custom_url() -> None:
     named = read_text("youtube.com/c/FakeCustom")
     assert named.handles == named.legacy_names == ()
     assert named.not_followed == {NotFollowed.CUSTOM_URL: 1}
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://www.youtube.com/c/FakeCustom/videos", "fakecustom"),
+        ("youtube.com/FakeVanity", "fakevanity"),
+    ],
+)
+def test_one_custom_url_keeps_its_name(url: str, expected: str) -> None:
+    """For a caller whose text is not API data — Telegram's posts."""
+    assert read_link(url) == Link(LinkKind.CUSTOM_URL, expected)
+
+
+def test_one_link_of_each_followed_kind() -> None:
+    assert read_link("youtube.com/@Fake-Seed-") == Link(
+        LinkKind.HANDLE, "fake-seed"
+    )
+    assert read_link(f"m.youtube.com/channel/{SEED_ONE}") == Link(
+        LinkKind.CHANNEL, SEED_ONE
+    )
+    assert read_link("youtube.com/user/FakeLegacy") == Link(
+        LinkKind.LEGACY, "fakelegacy"
+    )
+    assert read_link(f"youtu.be/{video_id(2)}?si=fake") == Link(
+        LinkKind.VIDEO, video_id(2)
+    )
+    assert read_link("youtube.com/playlist?list=PLfake") == Link(
+        LinkKind.PLAYLIST, ""
+    )
+
+
+def test_one_link_to_another_host_is_nothing() -> None:
+    assert read_link("notyoutube.com/@fake-seed") is None
+    assert read_link(f"fake-youtube.example/watch?v={video_id(1)}") is None
+    assert read_link("bit.ly/fake-short") is None
 
 
 def test_youtube_s_own_pages_are_neither_followed_nor_counted() -> None:

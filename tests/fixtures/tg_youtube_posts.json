@@ -1,0 +1,361 @@
+{
+  "_about": "Synthetic Telegram posts for the Telegram-links tests, in the shape Telethon's Message.to_dict() stores. Every id, handle, name and link is invented: ids carry 'fake', handles are spelt as fakes, and no post was copied from a real channel. Entity offsets are in UTF-16 units, as Telegram counts them.",
+  "emoji_url": {
+    "_": "Message",
+    "id": 1,
+    "peer_id": {
+      "_": "PeerChannel",
+      "channel_id": 1001
+    },
+    "date": "2026-10-01T09:00:00+00:00",
+    "message": "🔥🔥 Новое видео: youtube.com/@fake-seed-one — смотрите!",
+    "entities": [
+      {
+        "_": "MessageEntityUrl",
+        "offset": 18,
+        "length": 26
+      }
+    ],
+    "media": null,
+    "fwd_from": null
+  },
+  "text_url": {
+    "_": "Message",
+    "id": 2,
+    "peer_id": {
+      "_": "PeerChannel",
+      "channel_id": 1001
+    },
+    "date": "2026-10-02T09:00:00+00:00",
+    "message": "Запись: my talk на конференции",
+    "entities": [
+      {
+        "_": "MessageEntityTextUrl",
+        "offset": 8,
+        "length": 7,
+        "url": "https://youtu.be/fakevid0001"
+      }
+    ],
+    "media": null,
+    "fwd_from": null
+  },
+  "preview_only": {
+    "_": "Message",
+    "id": 3,
+    "peer_id": {
+      "_": "PeerChannel",
+      "channel_id": 1001
+    },
+    "date": "2026-10-03T09:00:00+00:00",
+    "message": "Без ссылки в тексте",
+    "entities": [],
+    "media": {
+      "_": "MessageMediaWebPage",
+      "webpage": {
+        "_": "WebPage",
+        "id": 5551,
+        "url": "https://www.youtube.com/watch?v=fakevid0002",
+        "display_url": "www.youtube.com/watch?v=fakevid0002",
+        "site_name": "YouTube",
+        "title": "Fake Video Two"
+      }
+    },
+    "fwd_from": null
+  },
+  "preview_metadata": {
+    "_": "Message",
+    "id": 4,
+    "peer_id": {
+      "_": "PeerChannel",
+      "channel_id": 1001
+    },
+    "date": "2026-10-04T09:00:00+00:00",
+    "message": "Статья про кеши",
+    "entities": [],
+    "media": {
+      "_": "MessageMediaWebPage",
+      "webpage": {
+        "_": "WebPage",
+        "id": 5551,
+        "url": "https://fake-blog.example/caching",
+        "display_url": "fake-blog.example/caching",
+        "site_name": "Fake Blog",
+        "title": "Watch youtube.com/@fake-preview-author",
+        "description": "More at https://www.youtube.com/@fake-preview-author",
+        "author": "@fake-preview-author"
+      }
+    },
+    "fwd_from": null
+  },
+  "preview_pending": {
+    "_": "Message",
+    "id": 5,
+    "peer_id": {
+      "_": "PeerChannel",
+      "channel_id": 1001
+    },
+    "date": "2026-10-05T09:00:00+00:00",
+    "message": "Превью ещё грузится",
+    "entities": [],
+    "media": {
+      "_": "MessageMediaWebPage",
+      "webpage": {
+        "_": "WebPagePending",
+        "id": 5551
+      }
+    },
+    "fwd_from": null
+  },
+  "preview_duplicate": {
+    "_": "Message",
+    "id": 6,
+    "peer_id": {
+      "_": "PeerChannel",
+      "channel_id": 1001
+    },
+    "date": "2026-10-06T09:00:00+00:00",
+    "message": "Тот же ролик: https://youtu.be/fakevid0003",
+    "entities": [
+      {
+        "_": "MessageEntityUrl",
+        "offset": 14,
+        "length": 28
+      }
+    ],
+    "media": {
+      "_": "MessageMediaWebPage",
+      "webpage": {
+        "_": "WebPage",
+        "id": 5551,
+        "url": "https://www.youtube.com/watch?v=fakevid0003",
+        "display_url": "www.youtube.com/watch?v=fakevid0003"
+      }
+    },
+    "fwd_from": null
+  },
+  "cyrillic_handle": {
+    "_": "Message",
+    "id": 7,
+    "peer_id": {
+      "_": "PeerChannel",
+      "channel_id": 1001
+    },
+    "date": "2026-10-07T09:00:00+00:00",
+    "message": "Канал на русском",
+    "entities": [
+      {
+        "_": "MessageEntityTextUrl",
+        "offset": 0,
+        "length": 5,
+        "url": "https://www.youtube.com/@%D1%84%D0%B5%D0%B9%D0%BA-%D0%BA%D0%B0%D0%BD%D0%B0%D0%BB"
+      }
+    ],
+    "media": null,
+    "fwd_from": null
+  },
+  "look_alike_hosts": {
+    "_": "Message",
+    "id": 8,
+    "peer_id": {
+      "_": "PeerChannel",
+      "channel_id": 1001
+    },
+    "date": "2026-10-08T09:00:00+00:00",
+    "message": "notyoutube.com/@fake-seed-one и fake-youtube.example/watch?v=fakevid0001",
+    "entities": [
+      {
+        "_": "MessageEntityUrl",
+        "offset": 0,
+        "length": 29
+      },
+      {
+        "_": "MessageEntityUrl",
+        "offset": 32,
+        "length": 40
+      }
+    ],
+    "media": null,
+    "fwd_from": null
+  },
+  "trailing_separator": {
+    "_": "Message",
+    "id": 9,
+    "peer_id": {
+      "_": "PeerChannel",
+      "channel_id": 1001
+    },
+    "date": "2026-10-09T09:00:00+00:00",
+    "message": "Подпишитесь: youtube.com/@fake-seed-",
+    "entities": [
+      {
+        "_": "MessageEntityUrl",
+        "offset": 13,
+        "length": 23
+      }
+    ],
+    "media": null,
+    "fwd_from": null
+  },
+  "video_forms": {
+    "_": "Message",
+    "id": 10,
+    "peer_id": {
+      "_": "PeerChannel",
+      "channel_id": 1001
+    },
+    "date": "2026-10-10T09:00:00+00:00",
+    "message": "Все формы: https://www.youtube.com/watch?v=fakevid0004 youtu.be/fakevid0004?si=fake-share-token youtube.com/shorts/fakevid0004 youtube.com/live/fakevid0004 music.youtube.com/watch?v=fakevid0004",
+    "entities": [
+      {
+        "_": "MessageEntityUrl",
+        "offset": 11,
+        "length": 43
+      },
+      {
+        "_": "MessageEntityUrl",
+        "offset": 55,
+        "length": 40
+      },
+      {
+        "_": "MessageEntityUrl",
+        "offset": 96,
+        "length": 30
+      },
+      {
+        "_": "MessageEntityUrl",
+        "offset": 127,
+        "length": 28
+      },
+      {
+        "_": "MessageEntityUrl",
+        "offset": 156,
+        "length": 37
+      }
+    ],
+    "media": null,
+    "fwd_from": null
+  },
+  "counted_forms": {
+    "_": "Message",
+    "id": 11,
+    "peer_id": {
+      "_": "PeerChannel",
+      "channel_id": 1001
+    },
+    "date": "2026-10-11T09:00:00+00:00",
+    "message": "youtube.com/c/FakeCustom youtube.com/fakevanity https://www.youtube.com/playlist?list=PLfake-playlist-0001 bit.ly/fake-short t.me/iv?url=https://youtu.be/fakevid0005",
+    "entities": [
+      {
+        "_": "MessageEntityUrl",
+        "offset": 0,
+        "length": 24
+      },
+      {
+        "_": "MessageEntityUrl",
+        "offset": 25,
+        "length": 22
+      },
+      {
+        "_": "MessageEntityUrl",
+        "offset": 48,
+        "length": 58
+      },
+      {
+        "_": "MessageEntityUrl",
+        "offset": 107,
+        "length": 17
+      },
+      {
+        "_": "MessageEntityUrl",
+        "offset": 125,
+        "length": 40
+      }
+    ],
+    "media": null,
+    "fwd_from": null
+  },
+  "mentions": {
+    "_": "Message",
+    "id": 12,
+    "peer_id": {
+      "_": "PeerChannel",
+      "channel_id": 1001
+    },
+    "date": "2026-10-12T09:00:00+00:00",
+    "message": "Смотрите @fake_tg_channel и @fake-seed-one",
+    "entities": [
+      {
+        "_": "MessageEntityMention",
+        "offset": 9,
+        "length": 16
+      }
+    ],
+    "media": null,
+    "fwd_from": null
+  },
+  "forwarded": {
+    "_": "Message",
+    "id": 13,
+    "peer_id": {
+      "_": "PeerChannel",
+      "channel_id": 1001
+    },
+    "date": "2026-10-13T09:00:00+00:00",
+    "message": "Переслано: youtube.com/@fake-forwarded",
+    "entities": [
+      {
+        "_": "MessageEntityUrl",
+        "offset": 11,
+        "length": 27
+      }
+    ],
+    "media": null,
+    "fwd_from": {
+      "_": "MessageFwdHeader",
+      "date": "2026-09-30T09:00:00+00:00",
+      "from_id": {
+        "_": "PeerChannel",
+        "channel_id": 9001
+      },
+      "channel_post": 77
+    }
+  },
+  "channel_and_legacy": {
+    "_": "Message",
+    "id": 14,
+    "peer_id": {
+      "_": "PeerChannel",
+      "channel_id": 1001
+    },
+    "date": "2026-10-14T09:00:00+00:00",
+    "message": "youtube.com/channel/UCfake_channel_000000007/videos и старая страница",
+    "entities": [
+      {
+        "_": "MessageEntityUrl",
+        "offset": 0,
+        "length": 51
+      },
+      {
+        "_": "MessageEntityTextUrl",
+        "offset": 54,
+        "length": 15,
+        "url": "https://www.youtube.com/user/FakeLegacy"
+      }
+    ],
+    "media": null,
+    "fwd_from": null
+  },
+  "plain_text_link": {
+    "_": "Message",
+    "id": 15,
+    "peer_id": {
+      "_": "PeerChannel",
+      "channel_id": 1001
+    },
+    "date": "2026-10-15T09:00:00+00:00",
+    "message": "Ссылка без разметки: youtube.com/@fake-unmarked",
+    "entities": [],
+    "media": null,
+    "fwd_from": null
+  }
+}

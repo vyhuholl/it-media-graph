@@ -2,6 +2,8 @@
 
 All three are ``channels.list``, one unit a call. Ids go fifty to a call;
 a handle or a legacy name goes alone, because the API takes one of each.
+A lookup asks for a handle's or a legacy name's channel id alone
+(``ID_ONLY_PARTS``, ``ID_ONLY_FIELDS``).
 What comes back is the channel resource as YouTube sent it — storing it
 is the caller's business, and nothing here reads beyond ``id``.
 """
@@ -15,6 +17,8 @@ from itgraph.yt.client import YouTube
 __all__ = [
     "FIELDS",
     "IDS_PER_CALL",
+    "ID_ONLY_FIELDS",
+    "ID_ONLY_PARTS",
     "PARTS",
     "Resource",
     "by_handle",
@@ -42,6 +46,13 @@ FIELDS = (
     "contentDetails/relatedPlaylists/uploads,"
     "statistics(viewCount,subscriberCount,hiddenSubscriberCount,videoCount))"
 )
+
+# A lookup of the channel behind a linked handle or legacy name: its id
+# and nothing else. The channel is usually outside the inventory, and
+# all a lookup needs is which channel it is; should it become a
+# candidate, the refresh fetches its data like any record's.
+ID_ONLY_PARTS = "id"
+ID_ONLY_FIELDS = "items(id)"
 
 # The most `id` takes in one call. `maxResults` is set to the same: it
 # defaults to five, and whether it caps an id lookup is not documented —
@@ -89,17 +100,29 @@ async def by_ids(youtube: YouTube, ids: Sequence[str]) -> dict[str, Resource]:
     return found
 
 
-async def by_handle(youtube: YouTube, handle: str) -> Resource | None:
+async def by_handle(
+    youtube: YouTube,
+    handle: str,
+    *,
+    parts: str = PARTS,
+    fields: str = FIELDS,
+) -> Resource | None:
     """The channel holding this handle, or ``None``."""
     body = await youtube.get(
-        METHOD, {"part": PARTS, "fields": FIELDS, "forHandle": f"@{handle}"}
+        METHOD, {"part": parts, "fields": fields, "forHandle": f"@{handle}"}
     )
     return next(iter(_resources(body).values()), None)
 
 
-async def by_username(youtube: YouTube, name: str) -> Resource | None:
+async def by_username(
+    youtube: YouTube,
+    name: str,
+    *,
+    parts: str = PARTS,
+    fields: str = FIELDS,
+) -> Resource | None:
     """The channel behind a legacy ``/user/`` name, or ``None``."""
     body = await youtube.get(
-        METHOD, {"part": PARTS, "fields": FIELDS, "forUsername": name}
+        METHOD, {"part": parts, "fields": fields, "forUsername": name}
     )
     return next(iter(_resources(body).values()), None)

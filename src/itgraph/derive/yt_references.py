@@ -26,6 +26,11 @@ are people's accounts elsewhere. The rule is ``affiliation/signals.py``'s
 Telegram's ``derive/references.py`` is no use here either way: its
 grammar has no dot and no hyphen, and would read ``@fake.seed.two`` as
 ``fake``, which is somebody else.
+
+:func:`read_link` — one URL into what it names — is public because the
+Telegram seeds' links are read by the same grammar
+(``derive/tg_youtube.py``): there the URL comes from an entity, already
+cut out of its sentence.
 """
 
 import re
@@ -43,6 +48,8 @@ __all__ = [
     "Evidence",
     "Form",
     "Known",
+    "Link",
+    "LinkKind",
     "Named",
     "NotFollowed",
     "Pending",
@@ -51,6 +58,7 @@ __all__ = [
     "Source",
     "normalize_handle",
     "ranked",
+    "read_link",
     "read_text",
     "report",
     "resolve",
@@ -195,6 +203,31 @@ class NotFollowed(StrEnum):
     UNKNOWN_MENTION = "mentions outside the inventory"
 
 
+class LinkKind(StrEnum):
+    """What one YouTube link names, or what it is counted as."""
+
+    CHANNEL = "channel"
+    HANDLE = "handle"
+    LEGACY = "legacy"
+    VIDEO = "video"
+    CUSTOM_URL = "custom URL"
+    PLAYLIST = "playlist"
+
+
+@dataclass(frozen=True, slots=True)
+class Link:
+    """One YouTube link, as :func:`read_link` reads it.
+
+    ``value`` is the channel or video id with its case kept, the
+    normalized handle, the lowercased legacy name — or, for a custom
+    URL, its name, NFC and lowercased: a name to show a person, not
+    something the API can look up. Empty for a playlist page.
+    """
+
+    kind: LinkKind
+    value: str
+
+
 class PendingKind(StrEnum):
     """What a pending target is, and so how change 5 will look it up."""
 
@@ -325,13 +358,18 @@ def normalize_handle(raw: str) -> str | None:
     return handle.lower()
 
 
-def _youtube_link(raw: str) -> tuple[str, str] | NotFollowed | None:
-    """One YouTube link as what it names, what it counts as, or nothing.
+def _custom_name(raw: str) -> str:
+    return unicodedata.normalize("NFC", raw).lower()
 
-    Returns ``(kind, value)`` with kind ``channel``, ``handle``,
-    ``legacy`` or ``video``; a :class:`NotFollowed` for a custom URL or a
-    playlist page; ``None`` for anything else — YouTube's own pages, a
-    link too broken to read.
+
+def read_link(raw: str) -> Link | None:
+    """One YouTube link as what it names or what it counts as, or nothing.
+
+    A channel id, handle, legacy-name or video link names that channel
+    or video; a custom URL (``/c/NAME`` or ``youtube.com/NAME``) and a
+    playlist page are returned to be counted; YouTube's own pages, a
+    link too broken to read and any other host are ``None``. The URL is
+    taken as it is: trailing punctuation is the caller's to strip.
     """
     parts = urlsplit(raw if "://" in raw else f"https://{raw}")
     host = (parts.hostname or "").lower()
@@ -340,10 +378,10 @@ def _youtube_link(raw: str) -> tuple[str, str] | NotFollowed | None:
     second = segments[1] if len(segments) > 1 else ""
 
     if host in _SHORT_HOSTS:
-        return ("video", first) if _VIDEO_ID.match(first) else None
+        return Link(LinkKind.VIDEO, first) if _VIDEO_ID.match(first) else None
     if host in _NOCOOKIE_HOSTS:
         if first.lower() in {"embed", "v"} and _VIDEO_ID.match(second):
-            return ("video", second)
+            return Link(LinkKind.VIDEO, second)
         return None
     if host not in _YOUTUBE_HOSTS or not first:
         return None
@@ -351,25 +389,31 @@ def _youtube_link(raw: str) -> tuple[str, str] | NotFollowed | None:
     lowered = first.lower()
     if first.startswith("@"):
         handle = normalize_handle(first)
-        return ("handle", handle) if handle else None
+        return Link(LinkKind.HANDLE, handle) if handle else None
     if lowered == "channel":
-        return ("channel", second) if _CHANNEL_ID.match(second) else None
+        if _CHANNEL_ID.match(second):
+            return Link(LinkKind.CHANNEL, second)
+        return None
     if lowered == "user":
         name = unicodedata.normalize("NFC", second).lower()
-        return ("legacy", name) if name else None
+        return Link(LinkKind.LEGACY, name) if name else None
     if lowered == "watch":
         found = parse_qs(parts.query).get("v", [])
         video = found[0] if found else ""
-        return ("video", video) if _VIDEO_ID.match(video) else None
+        return Link(LinkKind.VIDEO, video) if _VIDEO_ID.match(video) else None
     if lowered in {"shorts", "live", "embed", "v"}:
-        return ("video", second) if _VIDEO_ID.match(second) else None
+        if _VIDEO_ID.match(second):
+            return Link(LinkKind.VIDEO, second)
+        return None
     if lowered == "playlist":
-        return NotFollowed.PLAYLIST
+        return Link(LinkKind.PLAYLIST, "")
     if lowered == "c":
-        return NotFollowed.CUSTOM_URL if second else None
+        return (
+            Link(LinkKind.CUSTOM_URL, _custom_name(second)) if second else None
+        )
     if lowered in _YOUTUBE_PAGES:
         return None
-    return NotFollowed.CUSTOM_URL
+    return Link(LinkKind.CUSTOM_URL, _custom_name(first))
 
 
 def _mentions(text: str) -> list[str]:
@@ -405,12 +449,16 @@ def read_text(text: str) -> Named:
         "video": [],
     }
     for match in _YOUTUBE_LINK.finditer(text):
-        read = _youtube_link(match.group(0).rstrip(_TRAILING))
-        if isinstance(read, NotFollowed):
-            not_followed[read] += 1
-        elif read is not None:
-            kind, value = read
-            found[kind].append(value)
+        link = read_link(match.group(0).rstrip(_TRAILING))
+        if link is None:
+            continue
+        if link.kind is LinkKind.CUSTOM_URL:
+            # Counted by number: here the name is API data.
+            not_followed[NotFollowed.CUSTOM_URL] += 1
+        elif link.kind is LinkKind.PLAYLIST:
+            not_followed[NotFollowed.PLAYLIST] += 1
+        else:
+            found[link.kind.value].append(link.value)
 
     not_followed[NotFollowed.SHORTENED] += len(_SHORTENED.findall(text))
     not_followed[NotFollowed.TELEGRAM] += len(_TELEGRAM.findall(text))

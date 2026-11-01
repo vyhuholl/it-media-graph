@@ -33,6 +33,7 @@ __all__ = [
     "normalize_username",
     "parse_tme_link",
     "peer_channel_id",
+    "slice_utf16",
 ]
 
 # The hosts a public Telegram link uses. `telegram.dog` is a real alias
@@ -251,7 +252,7 @@ def extract_references(payload: dict[str, Any]) -> list[Reference]:
         kind = entity.get("_")
         if kind == "MessageEntityMention":
             username = normalize_username(
-                _slice_utf16(
+                slice_utf16(
                     text, entity.get("offset", 0), entity.get("length", 0)
                 )
             )
@@ -259,7 +260,7 @@ def extract_references(payload: dict[str, Any]) -> list[Reference]:
                 references.append(Reference(username=username))
         elif kind == "MessageEntityUrl":
             reference = parse_tme_link(
-                _slice_utf16(
+                slice_utf16(
                     text, entity.get("offset", 0), entity.get("length", 0)
                 )
             )
@@ -356,7 +357,7 @@ def _as_datetime(raw: Any) -> datetime | None:
     return datetime.fromisoformat(raw) if isinstance(raw, str) else None
 
 
-def _slice_utf16(text: str, offset: int, length: int) -> str:
+def slice_utf16(text: str, offset: int, length: int) -> str:
     """The substring an entity covers.
 
     Telegram entity offsets and lengths are counted in **UTF-16 code
@@ -365,6 +366,9 @@ def _slice_utf16(text: str, offset: int, length: int) -> str:
     every offset past the first emoji one unit too early and hands back a
     username missing its first letter. Re-encoding to UTF-16 makes the
     units line up with the offsets.
+
+    Public because ``derive/tg_youtube.py`` reads the same entities for
+    their YouTube links, and must not grow a second copy of this.
     """
     units = text.encode("utf-16-le")
     piece = units[offset * 2 : (offset + length) * 2]

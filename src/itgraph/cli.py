@@ -1663,10 +1663,10 @@ app.add_typer(yt_app, name="yt")
 async def _expire_youtube_data() -> None:
     """Delete every piece of YouTube data past its time.
 
-    Channel and video payloads at 30 days, readings at 30 days — or
-    longer, from the acceptance date, once one is recorded. Needs no key
-    and no network: data past its time is a violation whether or not
-    anything was going to read it.
+    Channel and video payloads at 30 days, lookups at 30 days, readings
+    at 30 days — or longer, from the acceptance date, once one is
+    recorded. Needs no key and no network: data past its time is a
+    violation whether or not anything was going to read it.
 
     And, while the history walk is disabled, every walk that ended more
     than 30 days ago: nothing kept its videos, so they have expired, and
@@ -1676,6 +1676,7 @@ async def _expire_youtube_data() -> None:
     from itgraph.db.session import Database
     from itgraph.db.yt_backfill import forget_unkept_walks
     from itgraph.db.yt_channels import purge_expired
+    from itgraph.db.yt_lookups import purge_expired_lookups
     from itgraph.db.yt_videos import purge_expired_videos
 
     database = Database()
@@ -1684,6 +1685,7 @@ async def _expire_youtube_data() -> None:
         async with database.session() as session:
             channels = await purge_expired(session)
             videos, readings = await purge_expired_videos(session)
+            lookups = await purge_expired_lookups(session)
             if not settings.youtube_backfill_enabled:
                 walks = await forget_unkept_walks(
                     session, now=datetime.now(UTC)
@@ -1695,6 +1697,8 @@ async def _expire_youtube_data() -> None:
         log.info("forgot %d history walks nothing kept fresh", walks)
     if channels:
         log.info("removed %d YouTube channel payloads past 30 days", channels)
+    if lookups:
+        log.info("removed %d YouTube lookups past 30 days", lookups)
     if videos or readings:
         log.info(
             "removed %d YouTube videos and %d readings past their time",
@@ -2132,6 +2136,146 @@ def yt_mentions(
             await database.dispose()
         for line in report(references, min_seeds=min_seeds, limit=limit):
             typer.echo(line)
+
+    _run_yt(run())
+
+
+@yt_app.command("tg-lookup")
+def yt_tg_lookup(
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", help="Make at most this many requests."),
+    ] = None,
+) -> None:
+    """Ask YouTube whose the videos and handles the Telegram seeds link are.
+
+    Reads the seeds' own posts already collected — no Telegram session,
+    no Telegram request — and looks up every linked video, handle and
+    legacy name no stored payload and no lookup in date answers: the
+    channel id alone, fifty videos to a unit, a handle or a name a unit
+    each, the names most families link first. Each answer is kept 30
+    days and committed as it arrives, so `--limit` (which counts
+    requests) or a spent pool only pauses it; run it again to go on.
+
+    Spends the general pool with no floor. Prints counts, never names.
+    Then `itgraph yt tg-candidates` ranks what was found.
+    """
+    from itgraph.db.models import YtCommand
+    from itgraph.db.session import Database
+    from itgraph.db.yt_quota import check_not_exhausted
+    from itgraph.yt.client import youtube
+    from itgraph.yt.tg_lookup import run_lookups
+
+    if limit is not None and limit < 1:
+        raise typer.BadParameter("--limit must be at least 1")
+
+    async def run() -> None:
+        database = Database()
+        try:
+            await check_not_exhausted(database)
+            async with youtube(
+                database, YtCommand.TG_LOOKUP, limit=limit
+            ) as client:
+                summary = await run_lookups(client, database)
+        finally:
+            await database.dispose()
+
+        for line in summary.lines():
+            typer.echo(line)
+        if summary.limited is not None:
+            typer.echo(str(summary.limited))
+        if summary.stopped is not None:
+            typer.secho(str(summary.stopped), fg=typer.colors.RED, err=True)
+            raise typer.Exit(1)
+
+    _run_yt(run())
+
+
+@yt_app.command("tg-candidates")
+def yt_tg_candidates(
+    top: Annotated[
+        int,
+        typer.Option(min=1, help="Rows shown, and records --add creates."),
+    ] = 100,
+    min_families: Annotated[
+        int,
+        typer.Option(
+            "--min-families",
+            min=1,
+            help="Rank only channels linked by at least this many families.",
+        ),
+    ] = 2,
+    add: Annotated[
+        bool,
+        typer.Option(
+            "--add",
+            help="Create the shown channels as candidates for review.",
+        ),
+    ] = False,
+) -> None:
+    """YouTube channels the Telegram seeds link to, most families first.
+
+    Worked out from the seeds' own posts and the lookups as they stand,
+    and nothing joined from the two is stored: channels outside the
+    inventory, in any status, ranked by how many distinct seed families
+    link them, then by the newest link. Shows no data read from YouTube.
+    Makes no request and needs no key.
+
+    With `--add`, the shown channels become candidates with discovery
+    source `telegram`, unreviewed and without data; `itgraph yt refresh`
+    fetches it, then `itgraph yt review-export` as usual. Refused while
+    any link still awaits `itgraph yt tg-lookup`, because the cut would
+    then be made on half the evidence.
+
+    Prints what the operator's own subscriptions link to, so it is for a
+    person at a terminal — never a scheduled job.
+    """
+    from itgraph.db.models import YtDiscoverySource
+    from itgraph.db.session import Database
+    from itgraph.db.yt_channels import create_channels
+    from itgraph.db.yt_telegram_links import read_telegram_links
+    from itgraph.derive.tg_youtube import ranking, report
+
+    async def run() -> None:
+        database = Database()
+        try:
+            async with database.session() as session:
+                links = await read_telegram_links(session)
+            inventory = links.known.inventory
+            ranked = ranking(
+                links.reading, inventory, min_families=min_families
+            )
+            for line in report(
+                links.reading, ranked, top=top, inventory=inventory
+            ):
+                typer.echo(line)
+            if not add:
+                return
+            if links.reading.awaiting:
+                typer.secho(
+                    f"not added: {len(links.reading.awaiting)} links still "
+                    "await a lookup; run `itgraph yt tg-lookup` first",
+                    fg=typer.colors.RED,
+                    err=True,
+                )
+                raise typer.Exit(1)
+            async with database.session() as session:
+                created = await create_channels(
+                    session,
+                    [row.channel_id for row in ranked[:top]],
+                    discovered_via=YtDiscoverySource.TELEGRAM,
+                )
+        finally:
+            await database.dispose()
+
+        typer.echo(f"added {len(created)} candidates")
+        for channel_id in created:
+            typer.echo(f"  + {channel_id}")
+        if created:
+            typer.echo(
+                "their data comes with `itgraph yt refresh`; then review "
+                "them with `itgraph yt review-export`"
+            )
 
     _run_yt(run())
 

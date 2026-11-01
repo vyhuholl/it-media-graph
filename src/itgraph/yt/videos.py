@@ -17,7 +17,8 @@ not documented, and one must not cost forty-nine their reading.
 
 Past uploads — what the history walk finds and the refresh keeps — are
 asked for in the same shape less the counters until the derived-metrics
-use case is accepted. Before then nothing may score them, so a count
+use case is accepted. A video linked from elsewhere is asked for its
+channel id alone (``OWNER``). Before then nothing may score them, so a count
 would be kept for nobody; and the same unit buys the same payload
 either way.
 """
@@ -34,6 +35,7 @@ __all__ = [
     "FIELDS",
     "IDS_PER_CALL",
     "LOOP",
+    "OWNER",
     "PARTS",
     "PAST_UPLOADS",
     "Asked",
@@ -74,6 +76,13 @@ PAST_UPLOADS = Asked(
     parts="snippet,contentDetails,liveStreamingDetails",
     fields=f"items(id,{_SNIPPET},contentDetails/duration,{_LIVE})",
 )
+
+
+# A linked video's lookup: which channel it belongs to, and nothing else.
+# The part is the one `channelId` lives in; `fields` keeps the title,
+# description and everything else in it out of the answer, so a video of
+# a channel outside the inventory costs the privacy page two fields.
+OWNER = Asked(parts="snippet", fields="items(id,snippet/channelId)")
 
 
 def for_past_uploads() -> Asked:
