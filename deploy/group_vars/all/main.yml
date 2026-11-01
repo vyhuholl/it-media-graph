@@ -53,11 +53,11 @@ itgraph_yt_refresh_schedule: "0 5 * * *"
 itgraph_yt_backfill_schedule: "30 11 * * *"
 
 # The YouTube history walk: the daily CronJob that walks seeds not yet
-# walked, and the refresh that keeps their past uploads fresh. Off until
-# something reads the history — the mention graph, or acceptance of the
-# derived-metrics use case, whichever comes first. A walk run by hand
-# works either way; with this off, what it stores expires in 30 days.
-youtube_backfill_enabled: false
+# walked, and the refresh that keeps their past uploads fresh. On since
+# the mention graph (change 4), its first reader; before that it was off,
+# so that a year of descriptions was not kept for nobody. Turned off, a
+# walk run by hand still works, and what it stores expires in 30 days.
+youtube_backfill_enabled: true
 
 # The z a post's best metric must pass to raise an alert. Measured: 3.7
 # gives about eight a day after folding, the volume 3.3 gave before

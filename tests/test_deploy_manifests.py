@@ -371,11 +371,27 @@ def test_the_switch_reaches_every_command() -> None:
     )
 
 
-def test_main_yml_leaves_the_walk_off() -> None:
+def test_main_yml_turns_the_walk_on() -> None:
+    # On with the mention graph, the history's first reader.
     path = TEMPLATES.parents[1] / "group_vars" / "all" / "main.yml"
+    enabled = yaml.safe_load(path.read_text())["youtube_backfill_enabled"]
+    assert enabled is True
+    deployed = {**EXAMPLE, "youtube_backfill_enabled": enabled}
+    assert "itgraph-yt-backfill" in _jobs(deployed)
     assert (
-        yaml.safe_load(path.read_text())["youtube_backfill_enabled"] is False
+        secret_data(render_all(deployed))["itgraph-env"][
+            "YOUTUBE_BACKFILL_ENABLED"
+        ]
+        == "true"
     )
+
+
+def test_no_job_runs_the_mentions_report() -> None:
+    # `yt mentions` prints handles read from YouTube, and a job's output
+    # is kept in the cluster's logs: it is run by hand only.
+    for name, pod_spec in pod_specs(render_all(WALK_ON)):
+        for container in containers(pod_spec):
+            assert "mentions" not in container.get("args", []), name
 
 
 def test_every_object_lives_in_the_namespace() -> None:

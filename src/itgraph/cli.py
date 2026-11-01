@@ -2094,6 +2094,48 @@ def yt_backfill_status() -> None:
     _run_yt(run())
 
 
+@yt_app.command("mentions")
+def yt_mentions(
+    min_seeds: Annotated[
+        int,
+        typer.Option(
+            "--min-seeds",
+            min=1,
+            help="List only targets named by at least this many seeds.",
+        ),
+    ] = 1,
+    limit: Annotated[
+        int,
+        typer.Option(min=0, help="Rows per list; 0 lists every one."),
+    ] = 50,
+) -> None:
+    """What the seeds' videos link to and mention, and which seeds do.
+
+    Read from the stored titles and descriptions as they stand now, and
+    nothing is written: known channels, then targets change 5 will look
+    up, most seeds first; then what was counted and not followed. Makes
+    no request and needs no key.
+
+    Prints handles read from YouTube, so it is for a person at a
+    terminal — never a scheduled job, whose output the cluster keeps.
+    """
+    from itgraph.db.session import Database
+    from itgraph.db.yt_references import read_references
+    from itgraph.derive.yt_references import report
+
+    async def run() -> None:
+        database = Database()
+        try:
+            async with database.session() as session:
+                references = await read_references(session)
+        finally:
+            await database.dispose()
+        for line in report(references, min_seeds=min_seeds, limit=limit):
+            typer.echo(line)
+
+    _run_yt(run())
+
+
 def _read_input(source: str) -> str:
     """A file's text, or standard input's when the source is ``-``."""
     import sys

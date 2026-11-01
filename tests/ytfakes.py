@@ -35,6 +35,7 @@ def video_resource(
     published: datetime,
     channel: int = 1,
     title: str | None = None,
+    description: str | None = None,
     views: int | None = 100,
     likes: int | None = 10,
     comments: int | None = 3,
@@ -55,7 +56,11 @@ def video_resource(
             "publishedAt": stamp(published),
             "channelId": channel_id(channel),
             "title": title if title is not None else f"Fake Video {number}",
-            "description": "An invented video for tests.",
+            "description": (
+                description
+                if description is not None
+                else "An invented video for tests."
+            ),
             "liveBroadcastContent": broadcast,
         },
         "contentDetails": {"duration": "PT12M30S"},

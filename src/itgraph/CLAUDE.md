@@ -41,6 +41,7 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `derive/edges.py` | The derivation pass: raw messages → edges; touches no network |
 | `derive/metrics.py` | Pure reading of a payload into the four counters; absent is never zero |
 | `derive/yt_videos.py` | Pure reading of a YouTube video payload: the facts the schedule runs on, and the three counters a reading records; absent is never zero, and no format is inferred |
+| `derive/yt_references.py` | Pure reading of a YouTube video's title and description: channel and video links followed, custom URLs, playlists, shorteners and Telegram counted, bare `@` only against the inventory's handles; then edges and pending targets, one per target per video, no self-references; then the report's lines, ordered by distinct seeds — the only number worked out per target. YouTube's handle grammar, not Telegram's — `derive/references.py` would read `@fake.seed.two` as `fake`. Nothing it returns is ever stored |
 | `derive/` | Deriving graph data from the raw layer |
 | `affiliation/signals.py` | The five signals that suggest two channels share an author; pure functions over mappings. Holds a second, deliberately looser handle pattern — it may not be pointed at `derive/references.py`, and the docstring says why |
 | `affiliation/detect.py` | Merging the signals into one ranked candidate list; the parameters and their validation |
@@ -74,6 +75,7 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `db/yt_channels.py` | The YouTube inventory: records (the operator's, never deleted) and payloads (YouTube's, 30 days at most); creation, expiry, gone and back, what is due for refresh, review, listing |
 | `db/yt_videos.py` | The poll loop's videos: payloads with their schedule, readings appended beside them, what is due, forgetting a video whole, expiry — 30 days, or 36 months for readings once acceptance is recorded in `yt_policy` |
 | `db/yt_watch.py` | The poll loop's own records: listings owed, made and failed, one row per pass, and the lock — an advisory `bigint` key that never meets Telegram's session lease |
+| `db/yt_references.py` | The mention graph read out of the stored payloads in one `REPEATABLE READ` transaction: seeds' videos as sources, every payload's handle, every record's id and every stored video's channel as what is known. Reads and writes nothing — a handle from a description lives only in its payload, so the graph is never stored |
 | `db/yt_backfill.py` | The history walk's own records: who is due, what each walk counted (pages, videos, items out of order, undated, not returned), forgetting a walk whose videos nothing keeps, and the lock — a `bigint` key of its own that meets neither the poll loop's nor Telegram's lease |
 | `db/yt_quota.py` | The YouTube quota ledger: booking before sending, in a transaction that commits first; the pool a command spends from, by table — the poll loop its reserve, everything else the general pool, no borrowing; the journal; exhaustion; the day's report. Units are never returned |
 | `db/backfill.py` | Which channels to walk, how far each got, and why one stopped |
