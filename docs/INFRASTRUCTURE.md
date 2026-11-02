@@ -1,0 +1,75 @@
+# Infrastructure requirements
+
+**Status: target.** Nothing below describes how things stand today. The infrastructure is being reworked towards it, and until that is done the rules in "While this is the target" decide what to do with work that does not meet it. Once the rework is done, this line will say so, and everything here becomes the state to keep.
+
+This file is the same, byte for byte, in every repository it applies to: `docs/INFRASTRUCTURE.md`, or `.claude/constitution/65-infrastructure.md` in the Go projects. A change to it is made in all of them at once. It names no host, no address and no project, because some of those repositories are public.
+
+Terms used below:
+- **The operators** — the two people who run this infrastructure. **The user** is whichever of them the agent is working with.
+- **An infrastructure repository** — one that owns a host's configuration: the host itself, its cluster, its accounts.
+- **The controller** — the one machine production playbooks run on.
+
+## Requirements
+
+Set for every project. Translated, with the server's name replaced by "the shared server"; nothing else is changed.
+
+1. Everything is installed through Ansible only. Whatever is not in Ansible is to be removed.
+2. Every Ansible playbook runs in a test environment first. A local virtual machine, a remote one (on the shared server), whatever — but it is first debugged locally, thoroughly (and autonomously), and only then rolled out to production. Keep the environments carefully isolated, and watch that explicitly at every change.
+3. If it is not clear at first sight why something is here, either it is not needed or it is slop in the infrastructure. Look at it critically and rethink it.
+4. Backups: be able to bring a database up from a backup in a test environment with a single command, and check that the service works (starts without errors).
+5. Databases must be reachable from outside — for example through an SSH tunnel, the way DBeaver does it.
+6. Never log in to the shared server as root — only to a personal account with sudo; service accounts for services, where needed.
+7. Lock down pod permissions — in particular, read-only and no privileged.
+8. Ansible should run on a server, so that the inventory is not shared around. Either on the shared server under a separate account, or on a separate virtual machine (or both).
+9. Add explicit graphs and alerts for every regular job and every daemon.
+
+## Decisions
+
+Made by the operators on top of the requirements. The number in brackets is the requirement a decision reads or extends.
+
+**Scope** (all). The requirements cover every host the operators manage: the shared server, the other servers, the test environments and the controller. On a machine the operators do not own, they cover what the operators install there, not the machine itself.
+
+**Deploying** (1).
+- A project deploys through an Ansible role in its own repository, versioned with its code: a change to its configuration lands in the same commit and the same release as the code that needs it.
+- The infrastructure repository that owns the host says which version runs in which environment. It pins a release tag, with its digest or checksum, per environment in its inventory, and runs the project's role at that tag.
+- The role takes everything about where it runs — host, namespace, addresses, secrets — as inputs. It names neither the host nor the repository that pins it.
+- A deploy is an operator running a playbook, in test as in production. Nothing deploys on a merge or a tag.
+
+**Versioning** (1, 2).
+- A release is a tag in the project's repository, built by its CI. No playbook creates a tag.
+- Moving a pin is one command that names the tag. It resolves the digest or checksum itself, writes the pin into one environment's inventory and commits it. Nobody copies a checksum by hand.
+- A deploy runs only what is pinned. A playbook never picks a version itself, and never "latest": production gets exactly what was tried in test.
+- Promoting to production is the same command against the production inventory, as a commit of its own. Rolling back is reverting the commit that moved the pin.
+
+**Test environments** (2). "Autonomously" means self-contained. A test environment has its own credentials, tokens and databases; it reaches nothing of production, and production reaches nothing of it.
+
+**Restoring** (4). It applies to every database that has backups, wherever they are kept.
+
+**Database access** (5). Each operator reaches a database only through an SSH tunnel to their own account, in test as in production. No database port is open to the internet.
+
+**Accounts** (6). It applies to every host in scope, not only the shared server. Ansible is no exception: it connects through an account and uses sudo.
+
+**Pods** (7).
+- Every namespace the operators deploy into enforces the `restricted` Pod Security Standard.
+- Every container runs with `readOnlyRootFilesystem: true` — `restricted` does not require it.
+- An exception is only for a component that cannot work otherwise, such as the cluster's own system pods, and its reason is written down beside it.
+
+**The controller** (8).
+- One controller serves every infrastructure repository. For now it lives on the shared server, under an account of its own; if a separate virtual machine is approved, it moves there.
+- Production inventories and vaults live only on the controller. Both operators run playbooks there, each through their own account, and neither keeps a copy on their own machine.
+- Each production inventory stays in its private repository, as the controller's off-host copy and its history. Nobody but the controller clones it.
+- A test environment's inventory lives with whoever debugs in it locally.
+
+## While this is the target
+
+1. **Nothing is brought into line on the agent's own initiative**, not even a small thing in passing. Rework comes as items of the plan, one at a time, once the user picks one. There is no test environment yet, so a fix made for one requirement now goes straight to production and breaks requirement 2.
+2. **New and changed work does not move further from the target.** A new pod is read-only and unprivileged, a new service goes in through Ansible, and no new root access appears. When a task cannot be done to the requirements without wider rework, stop and ask; never make a silent exception.
+3. **Where the means to meet a requirement do not exist yet** — no test environment, no alerting — say so plainly. Never present the work as meeting it.
+4. **A violation noticed in what is being touched is named in the reply** — what it is, and which requirement — and not fixed. Until the audit, the list of violations lives in replies; after it, the plan is the list.
+5. **Where this file and another rule of the repository disagree, the other rule describes today.** It is not changed in passing. A new change that would follow it against this file is a question for the user. The audit rewrites those rules.
+
+## Not decided yet
+
+Not covered by the requirements, and not decided by the operators:
+- Where the test environments live: a local virtual machine, a remote one, or both.
+- What draws the graphs and where the alerts go (9).

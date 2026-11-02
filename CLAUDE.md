@@ -3,6 +3,8 @@ Analytics over the IT-media graph: who reposts, mentions and comments on whom. T
 
 Roadmap and phase breakdown live in `docs/PLAN.md`. Read it before proposing architectural changes — most "obvious improvements" are already scheduled for a later phase, or were deliberately rejected.
 
+The infrastructure requirements every project shares are a target for now; this file describes today. Read them before any work: @docs/INFRASTRUCTURE.md
+
 ## Hard rules
 1. **Never run project code via Python directly.** Always `uv run <cmd>` — no bare `python`, no `pip`, no activating a venv. Dependencies change via `uv add` / `uv add --dev`, never by hand-editing `pyproject.toml`. Ansible tooling is also run via `uv run`. Inside the published image there is no uv: its containers run the entry point from the environment CI built with `uv sync --locked --no-dev --no-editable` — the same lock file, which is what this rule protects.
 2. **Run `make validate` after every change that touches code.** Fix what it reports before declaring the task done. Never report success on a red validate.
