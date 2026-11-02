@@ -680,9 +680,12 @@ class Settings(BaseSettings):
 
     # The inventory is small and irreplaceable, so it is kept deep. Full
     # dumps carry the raw layer, which is large and — expensively —
-    # re-fetchable, so fewer are kept.
+    # re-fetchable, so fewer are kept: every one from the last four
+    # weeks, and never fewer than four. By days and not by count,
+    # because the tier also holds the dump each migration takes first.
     backup_keep_inventory: int = 30
     backup_keep_full: int = 4
+    backup_keep_full_days: int = 28
     # Under 24 so a daily rhythm cannot drift later each run until it
     # slips past midnight and skips a day.
     backup_inventory_interval_hours: int = 20

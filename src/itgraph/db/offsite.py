@@ -25,7 +25,8 @@ import logging
 import os
 import subprocess
 import tempfile
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -45,6 +46,8 @@ from itgraph.db.backup import (
 
 __all__ = [
     "CATCH_UP_WINDOW",
+    "FIRST_PAUSE",
+    "UPLOAD_ATTEMPTS",
     "OffsiteError",
     "copy_new_dumps",
     "is_configured",
@@ -66,9 +69,27 @@ TIMEOUT = httpx.Timeout(60.0)
 # How much of a file is held at once, hashing or sending.
 CHUNK = 1024 * 1024
 
+# How many times one dump's upload is tried, and the pause before the
+# second try, doubled before each one after. B2 answers 503 when the
+# storage behind an upload URL is busy or full ("no tomes available")
+# and documents the cure: a new URL from `b2_get_upload_url`, with an
+# exponential backoff. One try was the whole budget until two runs on
+# 2026-11-01 failed on exactly that.
+UPLOAD_ATTEMPTS = 5
+FIRST_PAUSE = 1.0
+
+# Answers that another URL, a little later, may not repeat. A refusal
+# that names the request or the account — `cap_exceeded` above all —
+# answers the same however often it is asked, and fails at once.
+TRANSIENT_STATUSES = frozenset({408, 429, 500, 503})
+
 
 class OffsiteError(RuntimeError):
     """A dump could not be copied off-site."""
+
+
+class _TransientError(OffsiteError):
+    """A failure the upload is tried again after, with a new URL."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,7 +159,12 @@ def _error_detail(response: httpx.Response) -> str:
 def _payload(response: httpx.Response, context: str) -> dict[str, Any]:
     """The JSON of a successful answer; an ``OffsiteError`` for the rest."""
     if response.status_code // 100 != 2:
-        raise OffsiteError(f"{context} failed: {_error_detail(response)}")
+        error = (
+            _TransientError
+            if response.status_code in TRANSIENT_STATUSES
+            else OffsiteError
+        )
+        raise error(f"{context} failed: {_error_detail(response)}")
     try:
         payload: Any = response.json()
     except ValueError as exc:
@@ -233,6 +259,38 @@ def _upload(
     name: str,
     ciphertext: Path,
     checksum: str,
+    sleep: Callable[[float], None],
+) -> None:
+    """Upload the ciphertext, asking for a new URL after a transient failure.
+
+    Each try starts from `b2_get_upload_url`, because the URL is what
+    names the storage that answered 503: asking the same one again asks
+    the same full vault. A failure that is not transient, and the last
+    try's, ends it as before — the dump is named, and the next run
+    catches it up.
+    """
+    pause = FIRST_PAUSE
+    for attempt in range(1, UPLOAD_ATTEMPTS + 1):
+        try:
+            _upload_once(client, session, name, ciphertext, checksum)
+        except _TransientError as exc:
+            if attempt == UPLOAD_ATTEMPTS:
+                raise OffsiteError(
+                    f"{exc} (tried {UPLOAD_ATTEMPTS} times)"
+                ) from exc
+            logger.warning("%s; trying a new upload URL in %.0f s", exc, pause)
+            sleep(pause)
+            pause *= 2
+        else:
+            return
+
+
+def _upload_once(
+    client: httpx.Client,
+    session: _Session,
+    name: str,
+    ciphertext: Path,
+    checksum: str,
 ) -> None:
     """Upload the ciphertext and count it only once the store agrees.
 
@@ -272,6 +330,9 @@ def _upload(
                 "X-Bz-Content-Sha1": checksum,
             },
         )
+    except httpx.TransportError as exc:
+        # A dropped connection or a timeout: the same family as a 503.
+        raise _TransientError(f"uploading {name} to B2: {exc}") from exc
     except httpx.HTTPError as exc:
         raise OffsiteError(f"uploading {name} to B2: {exc}") from exc
     confirmed = _payload(response, f"uploading {name} to B2")
@@ -288,6 +349,7 @@ def _copy_one(
     path: Path,
     kind: BackupKind,
     recipient: str,
+    sleep: Callable[[float], None],
 ) -> str:
     """Encrypt one dump beside it and upload the ciphertext.
 
@@ -323,7 +385,7 @@ def _copy_one(
             detail = result.stderr.decode("utf-8", "replace").strip()
             raise OffsiteError(f"age failed on {path.name}: {detail}")
         name = remote_name(kind, path)
-        _upload(client, session, name, scratch, _sha1_of(scratch))
+        _upload(client, session, name, scratch, _sha1_of(scratch), sleep)
         return name
     finally:
         scratch.unlink(missing_ok=True)
@@ -334,6 +396,7 @@ def copy_new_dumps(
     *,
     now: datetime | None = None,
     transport: httpx.BaseTransport | None = None,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> list[Path]:
     """Copy every local verified dump that has no off-site copy yet.
 
@@ -368,7 +431,7 @@ def copy_new_dumps(
                 if name in remote:
                     continue
                 try:
-                    _copy_one(client, session, path, kind, recipient)
+                    _copy_one(client, session, path, kind, recipient, sleep)
                 except OffsiteError as exc:
                     failures.append(str(exc))
                     continue

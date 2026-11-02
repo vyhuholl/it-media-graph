@@ -123,17 +123,56 @@ def test_a_missed_week_is_caught_up_not_skipped(tmp_path: Path) -> None:
 
 def test_pruning_keeps_the_newest(tmp_path: Path) -> None:
     kept_or_not = [
-        dump_at(tmp_path, "full", "weekly", NOW - timedelta(days=days))
-        for days in range(10)
+        dump_at(tmp_path, "inventory", "daily", NOW - timedelta(days=days))
+        for days in range(40)
     ]
 
-    removed = prune(tmp_path, full_kind())
+    removed = prune(tmp_path, inventory_kind(), now=NOW)
 
+    survivors = sorted(p.name for p in (tmp_path / "daily").iterdir())
+    keep = inventory_kind().keep
+    assert len(survivors) == keep
+    # The newest are the smallest day offsets.
+    assert survivors == sorted(p.name for p in kept_or_not[:keep])
+    assert len(removed) == len(kept_or_not) - keep
+
+
+def test_full_dumps_stay_four_weeks_however_many(tmp_path: Path) -> None:
+    """Migrations share the tier, so a count would measure migrations.
+
+    On 2026-11-01 three migrations in one day left four full dumps, all
+    from that day, and every weekly one gone.
+    """
+    weekly = [
+        dump_at(tmp_path, "full", "weekly", NOW - timedelta(days=days))
+        for days in (7, 14, 21, 27)
+    ]
+    migrations = [
+        dump_at(tmp_path, "full", "weekly", NOW - timedelta(hours=hours))
+        for hours in (3, 9, 15)
+    ]
+    expired = dump_at(tmp_path, "full", "weekly", NOW - timedelta(days=29))
+
+    removed = prune(tmp_path, full_kind(), now=NOW)
+
+    assert removed == [expired]
     survivors = sorted(p.name for p in (tmp_path / "weekly").iterdir())
-    assert len(survivors) == full_kind().keep
-    # The four newest are the four smallest day offsets.
-    assert survivors == sorted(p.name for p in kept_or_not[: full_kind().keep])
-    assert len(removed) == len(kept_or_not) - full_kind().keep
+    assert survivors == sorted(p.name for p in weekly + migrations)
+
+
+def test_the_newest_full_dumps_outlive_their_four_weeks(
+    tmp_path: Path,
+) -> None:
+    """A host whose dumps stopped for a while keeps its last few."""
+    dumps = [
+        dump_at(tmp_path, "full", "weekly", NOW - timedelta(days=days))
+        for days in (0, 40, 47, 54, 61, 68)
+    ]
+
+    removed = prune(tmp_path, full_kind(), now=NOW)
+
+    assert len(dumps) - len(removed) == full_kind().keep
+    assert sorted(removed) == sorted(dumps[full_kind().keep :])
 
 
 def test_the_inventory_dump_names_its_tables(
@@ -439,7 +478,9 @@ def test_pruning_leaves_the_pointer_alone(
     newest = take_backup(
         full_kind(), tmp_path, now=NOW + timedelta(days=7 * 6)
     )
-    prune(tmp_path, full_kind())
+    # A day on, so that only the four newest are inside four weeks and
+    # the count alone decides.
+    prune(tmp_path, full_kind(), now=NOW + timedelta(days=7 * 6 + 1))
 
     link = latest_link(tmp_path / "weekly", full_kind())
     assert link.is_symlink()

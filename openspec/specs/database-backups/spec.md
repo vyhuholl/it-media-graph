@@ -21,6 +21,22 @@ The system SHALL keep dumps on storage that survives the removal and recreation 
 - **WHEN** a scheduled backup runs
 - **THEN** the dump is taken and read back with `pg_restore --list` as before
 
+### Requirement: Full Dumps Stay Four Weeks
+
+The system SHALL keep every local full dump taken in the last 28 days, the dump taken before a migration included, and SHALL keep the four newest whatever their age. A full dump SHALL be pruned only when it is both older than 28 days and not among the four newest.
+
+#### Scenario: A day of migrations
+
+- **GIVEN** weekly full dumps from the last four weeks
+- **WHEN** three migrations in one day each take a full dump first
+- **THEN** every weekly full dump from the last four weeks is still there
+
+#### Scenario: Dumps that stopped
+
+- **GIVEN** no full dump taken for six weeks
+- **WHEN** the next one is taken
+- **THEN** the four newest full dumps remain
+
 ### Requirement: Every Verified Dump Is Copied Off-Site
 
 The system SHALL copy every dump that passed its read-back to an off-site store: inventory and full dumps alike, the dump taken before a migration included. A dump that failed its read-back SHALL NOT be copied. The copy is the same dump, so it carries no YouTube API data.
@@ -45,6 +61,12 @@ The system SHALL copy every dump that passed its read-back to an off-site store:
 - **GIVEN** a verified dump whose upload failed
 - **WHEN** the next backup run starts
 - **THEN** that dump is uploaded before the run reports success
+
+#### Scenario: A busy store is asked again
+
+- **WHEN** the store answers an upload with a transient failure — busy, timed out, rate-limited, or a dropped connection
+- **THEN** the upload is tried again at a new upload URL after a growing pause, a bounded number of times
+- **AND** a refusal that is not transient, such as the spending cap, is not tried again
 
 #### Scenario: A failed upload is a failed run
 

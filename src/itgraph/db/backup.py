@@ -100,6 +100,9 @@ class BackupKind:
     tables: tuple[str, ...] | None  # None means the whole database
     keep: int
     interval: timedelta
+    # Past `keep`, a dump younger than this stays too; None keeps by
+    # count alone.
+    keep_for: timedelta | None = None
 
 
 def inventory_kind() -> BackupKind:
@@ -122,6 +125,7 @@ def full_kind() -> BackupKind:
         tables=None,
         keep=settings.backup_keep_full,
         interval=timedelta(days=settings.backup_full_interval_days),
+        keep_for=timedelta(days=settings.backup_keep_full_days),
     )
 
 
@@ -451,9 +455,27 @@ def _point_latest_at(path: Path, kind: BackupKind) -> None:
         )
 
 
-def prune(root: Path, kind: BackupKind) -> list[Path]:
-    """Delete all but the newest ``kind.keep`` dumps. Returns what went."""
+def prune(
+    root: Path, kind: BackupKind, *, now: datetime | None = None
+) -> list[Path]:
+    """Delete the dumps past both bounds. Returns what went.
+
+    A dump goes once it is not among the newest ``kind.keep`` and, on a
+    tier with ``keep_for``, is older than that as well. The full tier
+    needs the age because it also holds the dump every ``alembic
+    upgrade`` takes first: kept by count alone, three migrations in a
+    day pushed out every weekly dump. The count stays as the floor, so
+    a host whose dumps stopped for a month still has its last few when
+    the next one lands.
+    """
     surplus = existing(root / kind.subdirectory, kind)[kind.keep :]
+    if kind.keep_for is not None:
+        cutoff = (now or datetime.now(UTC)) - kind.keep_for
+        surplus = [
+            path
+            for path in surplus
+            if (taken := _timestamp_of(path)) is not None and taken < cutoff
+        ]
     for path in surplus:
         logger.info("pruning %s", path.name)
         path.unlink(missing_ok=True)
@@ -478,5 +500,5 @@ def run_backup(
     for kind in due:
         backup = take_backup(kind, root, now=now)
         taken.append(backup)
-        prune(root, kind)
+        prune(root, kind, now=now)
     return taken

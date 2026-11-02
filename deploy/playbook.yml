@@ -710,11 +710,10 @@
     # runs the deployed code, not the code of some earlier deploy.
     #
     # Asked before it is done, because `alembic upgrade` is not free on a
-    # working database: env.py takes a full dump first and then prunes
-    # the weekly tier to four, whether or not anything is pending. An
-    # upgrade on every run would let four re-runs in an evening push out
-    # every dump older than the evening. `current` takes no dump — env.py
-    # dumps on `upgrade` only.
+    # working database: env.py takes a full dump first, whether or not
+    # anything is pending, and the weekly tier keeps every one for four
+    # weeks. An upgrade on every run would add a full dump per re-run.
+    # `current` takes no dump — env.py dumps on `upgrade` only.
     #
     # The matched text is alembic's own DatabaseNotAtHead. Anything else —
     # no Secret, Postgres unreachable, a traceback — stops here with its

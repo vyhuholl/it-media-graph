@@ -94,8 +94,8 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `db/yt_backfill.py` | The history walk's own records: who is due, what each walk counted (pages, videos, items out of order, undated, not returned), forgetting a walk whose videos nothing keeps, and the lock — a `bigint` key of its own that meets neither the poll loop's nor Telegram's lease |
 | `db/yt_quota.py` | The YouTube quota ledger: booking before sending, in a transaction that commits first; the pool a command spends from, by table — the poll loop its reserve, search its own pool, everything else the general pool, no borrowing; the bucket each pool is carved from; the journal; exhaustion per bucket and day; the day's report. Units are never returned |
 | `db/backfill.py` | Which channels to walk, how far each got, and why one stopped |
-| `db/backup.py` | Dumps, the schedule that picks which, and the pruning; the PostgreSQL clients run through `docker exec` into the Compose container or, without one, from the image against `DATABASE_URL` |
-| `db/offsite.py` | The off-site pass: every verified dump, `age`-encrypted on the host, uploaded to B2's native API under a name that is never reused; a copy counts only once the store confirms the checksum. Logs names, never keys |
+| `db/backup.py` | Dumps, the schedule that picks which, and the pruning — full dumps by age (four weeks, never fewer than four), because the pre-migration dump shares their tier; the PostgreSQL clients run through `docker exec` into the Compose container or, without one, from the image against `DATABASE_URL` |
+| `db/offsite.py` | The off-site pass: every verified dump, `age`-encrypted on the host, uploaded to B2's native API under a name that is never reused; a transient failure tried again at a new upload URL, with backoff; a copy counts only once the store confirms the checksum. Logs names, never keys |
 | `db/session_lease.py` | The exclusive claim on the session file, as a Postgres advisory lock |
 | `db/guard.py` | Refuses a destructive migration against a non-scratch database |
 | `db/migrations/` | Alembic revisions (async template) |

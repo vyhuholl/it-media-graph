@@ -20,7 +20,13 @@ from pydantic import SecretStr
 from itgraph.config import settings
 from itgraph.db import offsite as offsite_module
 from itgraph.db.backup import STAMP_FORMAT, inventory_kind
-from itgraph.db.offsite import OffsiteError, copy_new_dumps, remote_name
+from itgraph.db.offsite import (
+    FIRST_PAUSE,
+    UPLOAD_ATTEMPTS,
+    OffsiteError,
+    copy_new_dumps,
+    remote_name,
+)
 
 NOW = datetime(2026, 10, 26, 12, 0, tzinfo=UTC)
 
@@ -71,17 +77,25 @@ class FakeB2:
         remote: list[str] = (),
         upload_status: int = 200,
         upload_body: dict[str, Any] | None = None,
+        failing_uploads: int | None = None,
+        dropped_uploads: int = 0,
         confirm_checksum: bool = True,
     ) -> None:
         self.remote = sorted(remote)
         self.upload_status = upload_status
         self.upload_body = upload_body
+        # How many uploads answer `upload_status` before the store
+        # recovers; None is every one.
+        self.failing_uploads = failing_uploads
+        # How many uploads lose their connection before any of that.
+        self.dropped_uploads = dropped_uploads
         self.confirm_checksum = confirm_checksum
         # (name, body, checksum sent) per upload.
         self.uploads: list[tuple[str, bytes, str]] = []
         # (Content-Length, Transfer-Encoding) per upload, as sent.
         self.framing: list[tuple[str | None, str | None]] = []
         self.listings: list[str] = []
+        self.upload_urls_given = 0
         self.transport = httpx.MockTransport(self._handle)
 
     def _handle(self, request: httpx.Request) -> httpx.Response:
@@ -118,6 +132,7 @@ class FakeB2:
                 },
             )
         if request.url.path == "/b2api/v2/b2_get_upload_url":
+            self.upload_urls_given += 1
             return httpx.Response(
                 200,
                 json={
@@ -144,7 +159,12 @@ class FakeB2:
                     request.headers["X-Bz-Content-Sha1"],
                 )
             )
-            if self.upload_status != 200:
+            if self.dropped_uploads > 0:
+                self.dropped_uploads -= 1
+                raise httpx.WriteError("connection reset", request=request)
+            if self.upload_status != 200 and self.failing_uploads != 0:
+                if self.failing_uploads is not None:
+                    self.failing_uploads -= 1
                 return httpx.Response(
                     self.upload_status, json=self.upload_body
                 )
@@ -269,12 +289,79 @@ def test_a_spending_cap_refusal_fails_naming_the_dump(
         },
     )
 
+    pauses: list[float] = []
+
     with pytest.raises(OffsiteError) as caught:
-        copy_new_dumps(tmp_path, now=NOW, transport=b2.transport)
+        copy_new_dumps(
+            tmp_path, now=NOW, transport=b2.transport, sleep=pauses.append
+        )
 
     assert dump.name in str(caught.value)
     assert "cap_exceeded" in str(caught.value)
     assert [p.name for p in (tmp_path / "weekly").iterdir()] == [dump.name]
+    # Asked again, the cap would answer the same: one try, no wait.
+    assert len(b2.uploads) == 1
+    assert pauses == []
+
+
+NO_TOMES = {
+    "status": 503,
+    "code": "service_unavailable",
+    "message": "no tomes available",
+}
+
+
+def test_a_busy_store_is_asked_again_at_a_new_url(
+    tmp_path: Path, configured: None, fake_age: None
+) -> None:
+    """What failed two runs on 2026-11-01, and what B2 says to do."""
+    dump = dump_at(tmp_path, "full", "weekly", NOW - timedelta(hours=2))
+    b2 = FakeB2(upload_status=503, upload_body=NO_TOMES, failing_uploads=2)
+    pauses: list[float] = []
+
+    copied = copy_new_dumps(
+        tmp_path, now=NOW, transport=b2.transport, sleep=pauses.append
+    )
+
+    assert copied == [dump]
+    assert len(b2.uploads) == 3
+    assert b2.upload_urls_given == 3
+    assert pauses == [FIRST_PAUSE, 2 * FIRST_PAUSE]
+
+
+def test_a_dropped_connection_is_asked_again(
+    tmp_path: Path, configured: None, fake_age: None
+) -> None:
+    dump = dump_at(tmp_path, "full", "weekly", NOW - timedelta(hours=2))
+    b2 = FakeB2(dropped_uploads=1)
+    pauses: list[float] = []
+
+    copied = copy_new_dumps(
+        tmp_path, now=NOW, transport=b2.transport, sleep=pauses.append
+    )
+
+    assert copied == [dump]
+    assert b2.upload_urls_given == 2
+    assert pauses == [FIRST_PAUSE]
+
+
+def test_a_store_busy_on_every_try_fails_naming_the_dump(
+    tmp_path: Path, configured: None, fake_age: None
+) -> None:
+    dump = dump_at(tmp_path, "inventory", "daily", NOW - timedelta(hours=2))
+    b2 = FakeB2(upload_status=503, upload_body=NO_TOMES)
+    pauses: list[float] = []
+
+    with pytest.raises(OffsiteError) as caught:
+        copy_new_dumps(
+            tmp_path, now=NOW, transport=b2.transport, sleep=pauses.append
+        )
+
+    assert dump.name in str(caught.value)
+    assert "no tomes available" in str(caught.value)
+    assert len(b2.uploads) == UPLOAD_ATTEMPTS
+    assert len(pauses) == UPLOAD_ATTEMPTS - 1
+    assert [p.name for p in (tmp_path / "daily").iterdir()] == [dump.name]
 
 
 def test_a_broken_store_fails_naming_the_dump(
@@ -291,7 +378,9 @@ def test_a_broken_store_fails_naming_the_dump(
     )
 
     with pytest.raises(OffsiteError) as caught:
-        copy_new_dumps(tmp_path, now=NOW, transport=b2.transport)
+        copy_new_dumps(
+            tmp_path, now=NOW, transport=b2.transport, sleep=lambda _: None
+        )
 
     assert dump.name in str(caught.value)
     assert [p.name for p in (tmp_path / "daily").iterdir()] == [dump.name]
