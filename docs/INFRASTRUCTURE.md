@@ -29,10 +29,13 @@ Made by the operators on top of the requirements. The number in brackets is the 
 
 **Scope** (all). The requirements cover every host the operators manage: the shared server, the other servers, the test environments and the controller. On a machine the operators do not own, they cover what the operators install there, not the machine itself.
 
+**The provider's image** (1, 3). A host starts from the image its provider installs. Ansible declares what it adds to that image and what it removes from it, each removal with its reason; what is left is what the host needs.
+
 **Deploying** (1).
 - A project deploys through an Ansible role in its own repository, versioned with its code: a change to its configuration lands in the same commit and the same release as the code that needs it.
 - The infrastructure repository that owns the host says which version runs in which environment. It pins a release tag, with its digest or checksum, per environment in its inventory, and runs the project's role at that tag.
 - The role takes everything about where it runs — host, namespace, addresses, secrets — as inputs. It names neither the host nor the repository that pins it.
+- Software the operators run but do not develop — with no repository of theirs, or in a fork they do not change — keeps its role in the infrastructure repository that owns the host.
 - A deploy is an operator running a playbook, in test as in production. Nothing deploys on a merge or a tag.
 
 **Versioning** (1, 2).
@@ -42,6 +45,9 @@ Made by the operators on top of the requirements. The number in brackets is the 
 - Promoting to production is the same command against the production inventory, as a commit of its own. Rolling back is reverting the commit that moved the pin.
 
 **Test environments** (2). "Autonomously" means self-contained. A test environment has its own credentials, tokens and databases; it reaches nothing of production, and production reaches nothing of it.
+- Test environments are virtual machines on the shared server, under KVM.
+- Their certificates come from a local CA of their own. So the path through Let's Encrypt is not tried there: a change to it is read with `--check --diff` before production, and watched after.
+- What only runs the test environments — the hypervisor, its network, its storage and the virtual machines — is the one exception to requirement 2: the test environments cannot exist before it, so it goes to production untried. It touches nothing production runs on, except the firewall rules that cut its network off; it is read with `--check --diff` first, and rolled back by removing it.
 
 **Restoring** (4). It applies to every database that has backups, wherever they are kept.
 
@@ -55,21 +61,20 @@ Made by the operators on top of the requirements. The number in brackets is the 
 - An exception is only for a component that cannot work otherwise, such as the cluster's own system pods, and its reason is written down beside it.
 
 **The controller** (8).
-- One controller serves every infrastructure repository. For now it lives on the shared server, under an account of its own; if a separate virtual machine is approved, it moves there.
+- One controller serves every infrastructure repository. It is a virtual machine of its own, not the shared server.
 - Production inventories and vaults live only on the controller. Both operators run playbooks there, each through their own account, and neither keeps a copy on their own machine.
 - Each production inventory stays in its private repository, as the controller's off-host copy and its history. Nobody but the controller clones it.
 - A test environment's inventory lives with whoever debugs in it locally.
+
+**Graphs and alerts** (9).
+- One metrics store and one Grafana serve everything, as part of the shared server's platform. A project writes its metrics there rather than running a store of its own.
+- The graphs are on dashboards of their own, apart from any project's.
+- Alerts go to a Telegram bot of their own, read by both operators, and to no project's bot: a project's bot already says enough of its own.
 
 ## While this is the target
 
 1. **Nothing is brought into line on the agent's own initiative**, not even a small thing in passing. Rework comes as items of the plan, one at a time, once the user picks one. There is no test environment yet, so a fix made for one requirement now goes straight to production and breaks requirement 2.
 2. **New and changed work does not move further from the target.** A new pod is read-only and unprivileged, a new service goes in through Ansible, and no new root access appears. When a task cannot be done to the requirements without wider rework, stop and ask; never make a silent exception.
 3. **Where the means to meet a requirement do not exist yet** — no test environment, no alerting — say so plainly. Never present the work as meeting it.
-4. **A violation noticed in what is being touched is named in the reply** — what it is, and which requirement — and not fixed. Until the audit, the list of violations lives in replies; after it, the plan is the list.
-5. **Where this file and another rule of the repository disagree, the other rule describes today.** It is not changed in passing. A new change that would follow it against this file is a question for the user. The audit rewrites those rules.
-
-## Not decided yet
-
-Not covered by the requirements, and not decided by the operators:
-- Where the test environments live: a local virtual machine, a remote one, or both.
-- What draws the graphs and where the alerts go (9).
+4. **A violation noticed in what is being touched is named in the reply** — what it is, and which requirement — and not fixed. The plan is the list of violations, and it lives in the shared server's infrastructure repository; one that is not on it yet is named all the same.
+5. **Where this file and another rule of the repository disagree, the other rule describes today.** It is not changed in passing. A new change that would follow it against this file is a question for the user. The rework rewrites those rules.
