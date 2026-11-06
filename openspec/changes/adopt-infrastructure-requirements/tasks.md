@@ -93,7 +93,7 @@ Tasks marked **(operator)** reach the server, the controller, Telegram, B2 or th
   Taken by the operator on 2026-11-06. The rules hold no messages yet: item 12's Russian text is written where they land.
 - [x] 12.3 What `/opsx:verify` found on 2026-11-06 is fixed, the operator's answer being «Правь всё», with the database put back by hand and not by a run: a note on an affiliation decision left in restored copies, a YouTube key and an off-site store accepted where collection is off, another role's password stopping the collector, the database neither watched nor covered in the runbook, `VACUUM FULL` missing what a deletion cascades into, the fixed address's password untried, `rollout undo` of a workload with no new template, and the artifacts where they disagreed with the code. Verify: `make validate`; `make test-e2e`.
 
-- [ ] 12.4 The restore's side of `remove-person-ids-from-raw-layer`, as amended above on 2026-11-06: no payload statements in `neutralise.sql`, a read-back by type. The code lands with that change's group 3. Verify: its 3.1 and 3.2.
+- [x] 12.4 The restore's side of `remove-person-ids-from-raw-layer`, as amended above on 2026-11-06: no payload statements in `neutralise.sql`, a read-back by type. The code lands with that change's group 3. Verify: its 3.1 and 3.2.
 
 ## 13. The test environment
 
