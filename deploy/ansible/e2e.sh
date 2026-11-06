@@ -392,6 +392,10 @@ ok 'nothing of it is left behind'
 say 'a dump of seeded rows, as a backup run makes it'
 kubectl -n "$namespace" exec -i statefulset/itgraph-postgres -c postgres -- \
 	psql -X -q -U itgraph -d itgraph -v ON_ERROR_STOP=1 -f - <"$here/e2e_seed.sql"
+# As the previous release left it: the revision that clears people from the raw layer
+# changes no table, so the version one step back is that release's database, and the
+# restore has to run the revision to clear what the seed put there.
+psql_in "$namespace" "UPDATE alembic_version SET version_num = 'b7d2e4f19a30'" >/dev/null
 kubectl -n "$namespace" delete job --all >/dev/null
 kubectl -n "$namespace" create job e2e-dump --from=cronjob/itgraph-backup >/dev/null
 kubectl -n "$namespace" wait --for=condition=complete job/e2e-dump --timeout=180s >/dev/null || {
@@ -472,6 +476,10 @@ payload="$(read_rows "SELECT payload FROM raw_messages WHERE msg_id = 10")"
 case "$payload" in *777000111* | *"A Fake"* | *"Another Fake"*) fail "a person in the copy: $payload" ;; esac
 case "$payload" in *"a public post"*) ;; *) fail 'the text did not come across' ;; esac
 [ "$(read_rows "SELECT payload->'fwd_from'->'from_id'->>'channel_id' FROM raw_messages WHERE msg_id = 11")" = 4 ] || fail 'the graph did not come across'
+[ "$(read_rows "SELECT payload->'reactions'->'top_reactors'->0->'peer_id'->>'channel_id' FROM raw_messages WHERE msg_id = 10")" = 4 ] ||
+	fail 'the paid reactors did not come across as the channel alone'
+[ "$(read_rows "SELECT jsonb_array_length(payload->'reactions'->'top_reactors') FROM raw_messages WHERE msg_id = 10")" = 1 ] ||
+	fail 'a paid reactor who is a person came across'
 ok 'on the real rows, the copy names nobody and holds no API data, and the graph is there'
 
 trial_alerts="$(read_rows 'SELECT count(*) FROM alerts WHERE band = 2147483647')"
@@ -523,7 +531,13 @@ role restore -e itgraph_restore_from="$work/through-age.dump" >"$work/restore3.l
 }
 ok 'a copy through age restores as any other dump'
 
-say 'a dump with API data in it empties the database rather than keeping it'
+say 'a dump with API data in it, or a person at head, empties the database rather than keeping it'
+# A person at head means production holds one: the collector's rule missed a shape,
+# at a path no statement ever named. Dumped while the copy is whole, then taken out.
+psql_in "$namespace" "INSERT INTO raw_messages (channel_id, msg_id, payload) VALUES (4, 12, '{\"_\": \"Message\", \"id\": 12, \"reply_to\": {\"_\": \"MessageReplyHeader\", \"reply_to_peer_id\": {\"_\": \"PeerUser\", \"user_id\": 777000111}}}')" >/dev/null
+kubectl -n "$namespace" exec statefulset/itgraph-postgres -c postgres -- \
+	pg_dump -U itgraph -d itgraph --format=custom >"$work/with-a-person.dump"
+psql_in "$namespace" "DELETE FROM raw_messages WHERE msg_id = 12" >/dev/null
 psql_in "$namespace" "INSERT INTO yt_raw_channels (channel_id, payload, fetched_at) VALUES ('UCfake000000000000000000', '{}', now())" >/dev/null
 kubectl -n "$namespace" exec statefulset/itgraph-postgres -c postgres -- \
 	pg_dump -U itgraph -d itgraph --format=custom >"$work/with-api-data.dump"
@@ -531,6 +545,11 @@ role restore -e itgraph_restore_from="$work/with-api-data.dump" >"$work/restore4
 grep -q 'emptied' "$work/restore4.log" || fail 'the failure did not say the database was emptied'
 [ "$(read_rows "SELECT to_regclass('public.channels') IS NULL")" = t ] || fail 'the database was not emptied'
 ok 'a dump with API data is refused, and leaves the database empty'
+role restore -e itgraph_restore_from="$work/with-a-person.dump" >"$work/restore5.log" 2>&1 && fail 'a dump naming a person at head was restored'
+grep -q 'users in posts: 1' "$work/restore5.log" || fail 'the failure did not name the person it found'
+grep -q 'emptied' "$work/restore5.log" || fail 'the failure did not say the database was emptied'
+[ "$(read_rows "SELECT to_regclass('public.channels') IS NULL")" = t ] || fail 'the database was not emptied'
+ok 'a dump at head naming a person is refused, and leaves the database empty'
 role main >"$work/after.log" 2>&1 || {
 	tail -40 "$work/after.log" >&2
 	fail 'the role could not bring the emptied environment back'

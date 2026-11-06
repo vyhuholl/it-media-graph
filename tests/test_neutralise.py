@@ -3,6 +3,11 @@
 `neutralise.sql` and `readback.sql` run here as the restore runs them, as whole
 scripts over one connection. An empty table proves nothing, so every statement
 has rows to act on, and each removed in turn must fail the read-back.
+
+People in payloads are cleared by the schema's revision, which a restore runs
+before neutralising; `clear_people` stands in for it here, with that revision's
+own statements. The read-back looks for people by type, so a person at a path no
+statement ever named fails it too.
 """
 
 import json
@@ -13,6 +18,7 @@ from typing import Any
 
 import asyncpg
 import pytest
+from people_cases import ALL, CASES, ONE_OF_EACH, Case, newest_rule
 from roleharness import ANSIBLE_DIR
 from sqlalchemy.engine import make_url
 
@@ -31,6 +37,9 @@ CANDIDATE_FROM_SUBSCRIPTIONS = 3
 MANUAL_SEED = 4
 FAKE_USER = 777000111
 FAKE_YT = "UCfake" + "0" * 18
+
+
+RULE = newest_rule()
 
 
 def statements() -> list[str]:
@@ -162,6 +171,17 @@ async def seed(connection: Any) -> None:
     )
 
 
+async def clear_people(connection: Any) -> None:
+    """What the schema's revision does in a restore, before this file runs."""
+    for statement in RULE.FUNCTIONS:
+        await connection.execute(statement)
+    for table in RULE.TABLES:
+        await connection.execute(
+            f"UPDATE {table} SET payload = pg_temp.itgraph_without_people(payload) "
+            f"WHERE jsonb_path_exists(payload, '{RULE.NAMES_SOMEONE}')"
+        )
+
+
 async def payload_of(connection: Any, msg_id: int) -> dict[str, Any]:
     raw = await connection.fetchval(
         "SELECT payload FROM raw_messages WHERE msg_id = $1", msg_id
@@ -189,14 +209,9 @@ async def test_a_seeded_database_fails_the_read_back(
         "notes on affiliation decisions",
         "pending mentions",
         "undelivered alerts",
-        "recent repliers",
-        "recent reactions",
-        "post signatures",
-        "forwarded signatures",
-        "hidden senders' names",
-        "authors who are users",
-        "forwards from users",
-        "mentions by user id",
+        "users in posts: 2",
+        "mentions by id in posts: 2",
+        "names in posts: 1",
     ):
         assert named in message, named
 
@@ -207,6 +222,7 @@ async def test_neutralising_passes_the_read_back_and_keeps_what_it_should(
     connection = await connect(database_url)
     try:
         await seed(connection)
+        await clear_people(connection)
         await connection.execute(NEUTRALISE)
         await connection.execute(READBACK)
 
@@ -268,6 +284,7 @@ async def test_neutralising_twice_changes_nothing_more(
     connection = await connect(database_url)
     try:
         await seed(connection)
+        await clear_people(connection)
         await connection.execute(NEUTRALISE)
         before = await payload_of(connection, 10)
         await connection.execute(NEUTRALISE)
@@ -285,8 +302,87 @@ async def test_each_statement_is_needed(
     connection = await connect(database_url)
     try:
         await seed(connection)
+        await clear_people(connection)
         await connection.execute("BEGIN;\n" + ";\n".join(kept) + ";\nCOMMIT;")
         with pytest.raises(asyncpg.RaiseError):
+            await connection.execute(READBACK)
+    finally:
+        await connection.close()
+
+
+async def test_people_in_payloads_are_not_this_files_to_clear(
+    database: Database, database_url: str
+) -> None:
+    """Neutralising alone leaves them, and the read-back says so."""
+    connection = await connect(database_url)
+    try:
+        await seed(connection)
+        await connection.execute(NEUTRALISE)
+        with pytest.raises(asyncpg.RaiseError, match="users in posts: 2"):
+            await connection.execute(READBACK)
+    finally:
+        await connection.close()
+
+
+async def store(connection: Any, payloads: list[dict[str, Any]]) -> None:
+    await connection.execute(
+        "INSERT INTO channels (tg_id, status, discovered_via) "
+        "VALUES (4, 'seed', 'manual')"
+    )
+    for msg_id, payload in enumerate(payloads, start=1):
+        if payload.get("_") == "messages.ChatFull":
+            await connection.execute(
+                "INSERT INTO raw_channels (channel_id, payload) "
+                "VALUES (4, $1::jsonb)",
+                json.dumps(payload),
+            )
+        else:
+            await connection.execute(
+                "INSERT INTO raw_messages (channel_id, msg_id, payload) "
+                "VALUES (4, $1, $2::jsonb)",
+                msg_id,
+                json.dumps(payload),
+            )
+
+
+async def test_every_case_reads_back_clean_once_cleared(
+    database: Database, database_url: str
+) -> None:
+    connection = await connect(database_url)
+    try:
+        await store(connection, [case.cleared for case in ALL])
+        await connection.execute(READBACK)
+    finally:
+        await connection.close()
+
+
+@pytest.mark.parametrize("case", CASES, ids=[case.name for case in CASES])
+async def test_every_case_fails_the_read_back_as_received(
+    database: Database, database_url: str, case: Case
+) -> None:
+    """Each by type, wherever it sits: the paid reactors and a reply to a user
+    among them, which no list of paths ever named."""
+    connection = await connect(database_url)
+    try:
+        await store(connection, [case.received])
+        with pytest.raises(
+            asyncpg.RaiseError, match="a restored copy still holds"
+        ):
+            await connection.execute(READBACK)
+    finally:
+        await connection.close()
+
+
+@pytest.mark.parametrize(
+    ("kind", "payload"), ONE_OF_EACH, ids=[kind for kind, _ in ONE_OF_EACH]
+)
+async def test_each_type_and_field_alone_fails_the_read_back(
+    database: Database, database_url: str, kind: str, payload: dict[str, Any]
+) -> None:
+    connection = await connect(database_url)
+    try:
+        await store(connection, [payload])
+        with pytest.raises(asyncpg.RaiseError, match="in posts: 1"):
             await connection.execute(READBACK)
     finally:
         await connection.close()
@@ -305,9 +401,18 @@ async def test_a_person_among_a_channels_users_fails_the_read_back(
         await connection.execute(
             "INSERT INTO raw_channels (channel_id, payload) "
             "VALUES (4, $1::jsonb)",
-            json.dumps({"users": [{"id": 1, "bot": True}, {"id": 2}]}),
+            json.dumps(
+                {
+                    "users": [
+                        {"_": "User", "id": 1, "bot": True},
+                        {"_": "User", "id": 2},
+                    ]
+                }
+            ),
         )
-        with pytest.raises(asyncpg.RaiseError, match="channel's users: 1"):
+        with pytest.raises(
+            asyncpg.RaiseError, match="users in channel payloads: 1"
+        ):
             await connection.execute(READBACK)
     finally:
         await connection.close()
@@ -366,4 +471,6 @@ def test_every_table_is_vacuumed() -> None:
 
 
 def test_this_file_is_really_read(tmp_path: Path) -> None:
-    assert len(statements()) >= 14
+    assert len(statements()) >= 9
+    # And it no longer touches a payload: the schema's revision does.
+    assert "raw_messages" not in NEUTRALISE.split("BEGIN;", 1)[1]

@@ -1,6 +1,11 @@
 -- What a restored copy must not hold, one transaction: which channels came from
 -- the operator's own subscriptions, what the operator wrote about any channel,
--- what would act on the restored data, and what in a payload names a person.
+-- and what would act on the restored data.
+--
+-- Not what in a payload names a person: the schema's own revision removes that
+-- (`clear people from the raw layer`), and a restore runs the migrations before
+-- this file. A copy that still names someone at this point holds what production
+-- holds, and readback.sql fails it rather than hide that.
 --
 -- Every value this file removes has a check in readback.sql, and the test suite
 -- removes each statement here in turn and expects that read-back to fail.
@@ -19,30 +24,5 @@ DELETE FROM pending_mentions WHERE true;
 
 -- Whatever was on its way out in production stays there.
 UPDATE alerts SET delivered_at = now(), delivery = 'digest' WHERE delivered_at IS NULL;
-
-UPDATE raw_messages SET payload = payload #- '{replies,recent_repliers}'
-  WHERE jsonb_typeof(payload->'replies'->'recent_repliers') = 'array';
-UPDATE raw_messages SET payload = payload #- '{reactions,recent_reactions}'
-  WHERE jsonb_typeof(payload->'reactions'->'recent_reactions') = 'array';
-UPDATE raw_messages SET payload = payload - 'post_author'
-  WHERE payload->>'post_author' IS NOT NULL;
-UPDATE raw_messages SET payload = payload #- '{fwd_from,post_author}'
-  WHERE payload->'fwd_from'->>'post_author' IS NOT NULL;
-UPDATE raw_messages SET payload = payload #- '{fwd_from,from_name}'
-  WHERE payload->'fwd_from'->>'from_name' IS NOT NULL;
-UPDATE raw_messages SET payload = jsonb_set(payload, '{from_id}', 'null')
-  WHERE payload->'from_id'->>'_' = 'PeerUser';
-UPDATE raw_messages SET payload = jsonb_set(payload, '{fwd_from,from_id}', 'null')
-  WHERE payload->'fwd_from'->'from_id'->>'_' = 'PeerUser';
-UPDATE raw_messages SET payload = jsonb_set(
-    payload,
-    '{entities}',
-    (SELECT coalesce(jsonb_agg(entity), '[]'::jsonb)
-       FROM jsonb_array_elements(payload->'entities') entity
-      WHERE entity->>'_' NOT IN ('MessageEntityMentionName', 'InputMessageEntityMentionName'))
-  )
-  WHERE jsonb_typeof(payload->'entities') = 'array'
-    AND (payload->'entities' @> '[{"_": "MessageEntityMentionName"}]'
-      OR payload->'entities' @> '[{"_": "InputMessageEntityMentionName"}]');
 
 COMMIT;

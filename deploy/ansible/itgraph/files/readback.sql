@@ -1,6 +1,11 @@
--- Reads back, on the real rows, what neutralise.sql removed and what dumps leave
--- out, and fails on any that remains, naming it. An empty answer is the whole point
--- here, so a statement that did not run must show as a number that is not zero.
+-- Reads back, on the real rows, what neutralise.sql removed, what dumps leave out,
+-- and anything in a payload that names a person, and fails on any that remains,
+-- naming it. An empty answer is the whole point here, so a statement that did not
+-- run must show as a number that is not zero.
+--
+-- People are looked for by type, anywhere in a payload, not at a list of paths: a
+-- list of paths missed the paid reactors once. The types are those of the rule in
+-- `tg/payload.py`, which the collector applies, and a test holds them to it.
 DO $readback$
 DECLARE
   found text[] := '{}';
@@ -16,32 +21,23 @@ DECLARE
     ['pending mentions',
      $q$SELECT count(*) FROM pending_mentions$q$],
     ['undelivered alerts',
-     $q$SELECT count(*) FROM alerts WHERE delivered_at IS NULL$q$],
-    ['recent repliers',
-     $q$SELECT count(*) FROM raw_messages WHERE jsonb_typeof(payload->'replies'->'recent_repliers') = 'array'$q$],
-    ['recent reactions',
-     $q$SELECT count(*) FROM raw_messages WHERE jsonb_typeof(payload->'reactions'->'recent_reactions') = 'array'$q$],
-    ['post signatures',
-     $q$SELECT count(*) FROM raw_messages WHERE payload->>'post_author' IS NOT NULL$q$],
-    ['forwarded signatures',
-     $q$SELECT count(*) FROM raw_messages WHERE payload->'fwd_from'->>'post_author' IS NOT NULL$q$],
-    ['hidden senders'' names',
-     $q$SELECT count(*) FROM raw_messages WHERE payload->'fwd_from'->>'from_name' IS NOT NULL$q$],
-    ['authors who are users',
-     $q$SELECT count(*) FROM raw_messages WHERE payload->'from_id'->>'_' = 'PeerUser'$q$],
-    ['forwards from users',
-     $q$SELECT count(*) FROM raw_messages WHERE payload->'fwd_from'->'from_id'->>'_' = 'PeerUser'$q$],
-    ['mentions by user id',
-     $q$SELECT count(*) FROM raw_messages WHERE payload->'entities' @> '[{"_": "MessageEntityMentionName"}]'
-          OR payload->'entities' @> '[{"_": "InputMessageEntityMentionName"}]'$q$],
-    ['people among a channel''s users',
-     $q$SELECT count(*) FROM raw_channels, jsonb_array_elements(
-          CASE WHEN jsonb_typeof(payload->'users') = 'array' THEN payload->'users' ELSE '[]'::jsonb END) person
-        WHERE (person->>'bot')::boolean IS NOT TRUE$q$],
-    ['requesters of a channel',
-     $q$SELECT count(*) FROM raw_channels WHERE jsonb_typeof(payload->'full_chat'->'recent_requesters') = 'array'
-          AND jsonb_array_length(payload->'full_chat'->'recent_requesters') > 0$q$]
+     $q$SELECT count(*) FROM alerts WHERE delivered_at IS NULL$q$]
   ];
+  -- What names a person, by type, in either kind of payload.
+  people constant text[][] := ARRAY[
+    ['users',
+     $p$$.** ? (@."_" == "PeerUser" || @."_" == "InputPeerUser" || @."_" == "InputPeerUserFromMessage"
+        || @."_" == "InputUser" || @."_" == "InputUserFromMessage" || @."_" == "UserEmpty"
+        || (@."_" == "User" && !exists(@.bot ? (@ == true))))$p$],
+    ['mentions by id',
+     $p$$.** ? (@."_" == "MessageEntityMentionName" || @."_" == "InputMessageEntityMentionName")$p$],
+    ['names',
+     $p$$.** ? (@.post_author != null || @.from_name != null || @.saved_from_name != null)$p$],
+    ['lists of user ids',
+     $p$$.** ? ((@.winners.type() == "array" && exists(@.winners[0]))
+        || (@.recent_requesters.type() == "array" && exists(@.recent_requesters[0])))$p$]
+  ];
+  payloads constant text[][] := ARRAY[['posts', 'raw_messages'], ['channel payloads', 'raw_channels']];
   outside text;
   counted bigint;
 BEGIN
@@ -50,6 +46,18 @@ BEGIN
     IF counted > 0 THEN
       found := found || (checks[i][1] || ': ' || counted);
     END IF;
+  END LOOP;
+
+  -- One scan of a table per kind of person: jsonb_path_exists streams, one row at
+  -- a time, which is what a 2 GiB database can afford.
+  FOR t IN 1 .. array_length(payloads, 1) LOOP
+    FOR i IN 1 .. array_length(people, 1) LOOP
+      EXECUTE format('SELECT count(*) FROM %I WHERE jsonb_path_exists(payload, %L)', payloads[t][2], people[i][2])
+        INTO counted;
+      IF counted > 0 THEN
+        found := found || (people[i][1] || ' in ' || payloads[t][1] || ': ' || counted);
+      END IF;
+    END LOOP;
   END LOOP;
 
   -- What dumps leave out holds no row in a copy. By name, so that a table added

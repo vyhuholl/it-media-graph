@@ -348,6 +348,27 @@ class FakeHistoryMessage:
         return payload
 
 
+class FakeMessageWith(FakeHistoryMessage):
+    """A history message whose payload carries some fields of its own.
+
+    How a test puts people into a post: the fields are laid over what
+    ``FakeHistoryMessage`` writes, so counters and dates behave as there.
+    """
+
+    def __init__(
+        self,
+        msg_id: int,
+        date: datetime,
+        fields: dict[str, Any],
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(msg_id, date, f"post {msg_id}", **kwargs)
+        self.fields = fields
+
+    def to_dict(self) -> dict[str, Any]:
+        return {**super().to_dict(), **self.fields}
+
+
 class FakeServiceMessage:
     """A ``MessageService`` — an event, not a post.
 

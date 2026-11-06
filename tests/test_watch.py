@@ -8,6 +8,7 @@ gone every day until somebody reads `flood_events`.
 """
 
 import asyncio
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -15,9 +16,11 @@ import pytest
 from fakes import (
     FakeChannel,
     FakeHistoryMessage,
+    FakeMessageWith,
     FakeServiceMessage,
     FakeTelegramClient,
 )
+from people_cases import fields_naming_people, names_nobody, peer_channel
 from sqlalchemy import text
 from telethon.errors import ChannelPrivateError, FloodWaitError
 
@@ -121,6 +124,37 @@ async def test_a_poll_stores_posts_and_snapshots_them(
     assert stats.stored == 1
     assert stats.snapshots == 1
     assert await snapshots(database) == [(FIRST, 10, 100, 2, None, None)]
+
+
+async def test_a_polled_post_is_stored_naming_nobody(
+    database: Database, caplog: pytest.LogCaptureFixture
+) -> None:
+    await seed(database, FIRST)
+    message = FakeMessageWith(
+        10,
+        datetime.now(UTC) - timedelta(minutes=5),
+        fields_naming_people(),
+    )
+    client = client_for({FIRST: [message]})
+    caplog.set_level(logging.DEBUG)
+
+    stats = await watch(client, database, max_cycles=1)
+
+    assert stats.stored == 1
+    async with database.session() as session:
+        payload = await session.scalar(
+            text(
+                "SELECT payload FROM raw_messages "
+                "WHERE channel_id = :c AND msg_id = 10"
+            ),
+            {"c": FIRST},
+        )
+    assert names_nobody(payload)
+    # What the post is for stays: its comment count and the channel among
+    # the commenters.
+    assert payload["replies"]["replies"] == 4
+    assert payload["replies"]["recent_repliers"] == [peer_channel()]
+    assert names_nobody(caplog.text)
 
 
 async def test_one_request_serves_both_jobs(database: Database) -> None:

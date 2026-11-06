@@ -12,6 +12,7 @@ group, so the bug ships and surfaces the day the alerts are shared.
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 from aiogram import Bot
@@ -312,8 +313,11 @@ async def test_status_does_not_cry_broken_during_quiet_hours(
     """
     from itgraph.config import settings
 
-    monkeypatch.setattr(settings, "alert_quiet_from_hour", 0)
-    monkeypatch.setattr(settings, "alert_quiet_to_hour", 23)
+    # A window of 23 hours from the hour it is now, so the test does not
+    # depend on when it runs: 0-23 left 23:00-23:59 outside, and failed then.
+    hour = datetime.now(ZoneInfo(settings.watch_timezone)).hour
+    monkeypatch.setattr(settings, "alert_quiet_from_hour", hour)
+    monkeypatch.setattr(settings, "alert_quiet_to_hour", (hour + 23) % 24)
     await raise_one(database_url, ago=timedelta(hours=7))
 
     _, replies = await feed(database_url, OPERATOR, text="/status")

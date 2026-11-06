@@ -198,7 +198,8 @@ def test_the_role_can_write_nothing(migrated: URL, statement: str) -> None:
 
 
 def test_the_migration_goes_down_and_up_again(migrated: URL) -> None:
-    down = alembic(migrated, "downgrade", "-1")
+    # By name, not "-1": a later revision sits on top of this one.
+    down = alembic(migrated, "downgrade", "a89cb273f885")
     assert down.returncode == 0, down.stdout + down.stderr
 
     with pytest.raises(DBAPIError):

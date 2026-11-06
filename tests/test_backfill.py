@@ -6,6 +6,7 @@ bookkeeping — which is where a collector loses history quietly.
 """
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
@@ -14,9 +15,11 @@ import pytest
 from fakes import (
     FakeChannel,
     FakeFullChannel,
+    FakeMessageWith,
     FakeTelegramClient,
     history,
 )
+from people_cases import fields_naming_people, names_nobody
 from sqlalchemy import select, text
 from telethon.errors import ChannelPrivateError, FloodWaitError
 
@@ -300,6 +303,31 @@ async def test_messages_are_stored_verbatim(
     assert row.payload["message"] == "post 1000"
     assert row.payload["date"] == "2026-06-01T12:00:00+00:00"
     assert row.fetched_at is not None
+
+
+async def test_a_walked_post_is_stored_naming_nobody(
+    inventory: Database,
+    slept: list[float],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    message = FakeMessageWith(
+        1000, datetime(2026, 6, 1, 12, 0, tzinfo=UTC), fields_naming_people()
+    )
+    telegram = client(histories={NOTES.id: [message]})
+    caplog.set_level(logging.DEBUG)
+
+    await run(inventory, telegram)
+
+    async with inventory.session() as session:
+        row = await session.get(RawMessage, (NOTES.id, 1000))
+    assert row is not None
+    assert names_nobody(row.payload)
+    assert row.payload["post_author"] is None
+    assert [r["count"] for r in row.payload["reactions"]["top_reactors"]] == [
+        7,
+        2,
+    ]
+    assert names_nobody(caplog.text)
 
 
 async def test_re_fetching_does_not_duplicate(

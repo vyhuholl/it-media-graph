@@ -1,7 +1,9 @@
 """The per-channel metadata fetch, and the discussion chat it resolves."""
 
 import base64
+import logging
 from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
 from fakes import (
@@ -10,6 +12,7 @@ from fakes import (
     FakeInputPeer,
     FakeTelegramClient,
 )
+from people_cases import USER, names_nobody
 from sqlalchemy import select
 
 from itgraph.db.channels import DiscoveredChannel, upsert_channels
@@ -82,6 +85,50 @@ async def test_the_payload_is_stored_as_it_arrives(
     photo = row.payload["full_chat"]["chat_photo"]
     assert photo["date"] == "2026-01-09T07:00:00+00:00"
     assert base64.b64decode(photo["file_reference"]) == b"\x00\xc3reference"
+
+
+class FullChannelWithPeople(FakeFullChannel):
+    """The response as a channel with a bot, a person and join requests has it."""
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = super().to_dict()
+        payload["full_chat"]["recent_requesters"] = [USER]
+        payload["users"] = [
+            {
+                "_": "User",
+                "id": 555000001,
+                "bot": True,
+                "first_name": "Fake Bot",
+            },
+            {
+                "_": "User",
+                "id": USER,
+                "bot": None,
+                "first_name": "A Fake Person",
+            },
+        ]
+        return payload
+
+
+async def test_a_channels_payload_is_stored_naming_nobody(
+    inventory: Database, caplog: pytest.LogCaptureFixture
+) -> None:
+    client = FakeTelegramClient(
+        entities={"example_notes": PARENT},
+        full_channels={PARENT.id: FullChannelWithPeople(PARENT)},
+    )
+    caplog.set_level(logging.DEBUG)
+
+    async with inventory.session() as session:
+        await fetch_full_channel(client, session, peer=PARENT_PEER)
+
+    async with inventory.session() as session:
+        row = await session.get(RawChannel, PARENT.id)
+    assert row is not None
+    assert names_nobody(row.payload)
+    assert [user["id"] for user in row.payload["users"]] == [555000001]
+    assert row.payload["full_chat"]["recent_requesters"] == []
+    assert names_nobody(caplog.text)
 
 
 async def test_a_linked_chat_enters_the_inventory(

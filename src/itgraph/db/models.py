@@ -977,10 +977,10 @@ class Edge(Base):
     consider one. Rows are inserted with ``ON CONFLICT DO NOTHING``, so
     re-deriving over unchanged raw data writes nothing.
 
-    Only channel ids appear here. User ids from ``fwd_from`` and signed
-    posts are dropped at the derivation boundary and stay in the raw
-    layer, which is never exported — that is what keeps this table safe to
-    visualize and share.
+    Only channel ids appear here. A user's id is not even in the raw
+    layer: the collector removes it before storing (``tg/payload.py``), and
+    derivation reads channel peers alone — that is what keeps this table
+    safe to visualize and share.
     """
 
     __tablename__ = "edges"

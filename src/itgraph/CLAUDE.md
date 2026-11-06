@@ -18,7 +18,7 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `tg/client.py` | Telethon client lifecycle; the only place a `TelegramClient` is built |
 | `tg/dialogs.py` | The account's own subscriptions → inventory rows |
 | `tg/manual.py` | Channels named by hand → inventory rows; resolves, never joins |
-| `tg/payload.py` | Telethon objects → JSON-safe payloads; the only place that touches payload shape |
+| `tg/payload.py` | Telethon objects → JSON-safe payloads; the only place that touches payload shape, and the one rule for what names a person, removed before anything is stored. Its copy in SQL is in the revision `fb31bd0b6656`; `tests/people_cases.py` holds them, and the restore's read-back, equal |
 | `tg/pacing.py` | How long to wait before a request; the only random source in the project |
 | `tg/floods.py` | Which method a rate limit named, and writing it down without endangering the run |
 | `tg/full_channel.py` | One channel's extended information, and the linked chat it resolves |

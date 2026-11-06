@@ -1,5 +1,6 @@
 -- Rows of every shape the restore neutralises, none of them real. An empty table
--- proves nothing.
+-- proves nothing. The people in the payloads are for the revision that clears them,
+-- which the restore runs: the suite dumps this as the previous release left it.
 INSERT INTO channels (tg_id, username, status, discovered_via, kind, kind_note, reject_reason, reject_note) VALUES
   (1, 'fake_seed_mine', 'seed', 'own_subscriptions', 'personal', 'a fake note', NULL, NULL),
   (2, 'fake_rejected_mine', 'rejected', 'own_subscriptions', NULL, NULL, 'not_it', 'a fake reason'),
@@ -13,7 +14,9 @@ INSERT INTO pending_mentions (username) VALUES ('fake_person');
 INSERT INTO raw_messages (channel_id, msg_id, payload) VALUES
   (4, 10, '{"id": 10, "_": "Message", "date": "2026-11-05T09:00:00+00:00", "message": "a public post", "views": 123,
     "replies": {"replies": 4, "recent_repliers": [{"_": "PeerUser", "user_id": 777000111}]},
-    "reactions": {"results": [], "recent_reactions": [{"peer_id": {"_": "PeerUser", "user_id": 777000111}}]},
+    "reactions": {"results": [], "recent_reactions": [{"peer_id": {"_": "PeerUser", "user_id": 777000111}}],
+                  "top_reactors": [{"_": "MessageReactor", "count": 10, "peer_id": {"_": "PeerUser", "user_id": 777000111}},
+                                   {"_": "MessageReactor", "count": 7, "peer_id": {"_": "PeerChannel", "channel_id": 4}}]},
     "post_author": "A Fake Author",
     "from_id": {"_": "PeerUser", "user_id": 777000111},
     "entities": [{"_": "MessageEntityMentionName", "offset": 0, "length": 1, "user_id": 777000111},

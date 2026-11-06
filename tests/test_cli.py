@@ -1,8 +1,10 @@
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
+from zoneinfo import ZoneInfo
 
 import pytest
 from fakes import (
@@ -1529,8 +1531,11 @@ def test_watch_status_says_when_it_is_paused(
 
     use_test_database(monkeypatch, database_url)
     seed_seed_channel(database_url, 1000000001, "example")
-    monkeypatch.setattr(live_settings, "watch_quiet_from_hour", 0)
-    monkeypatch.setattr(live_settings, "watch_quiet_to_hour", 23)
+    # A window of 23 hours from the hour it is now, so the test does not
+    # depend on when it runs: 0-23 left 23:00-23:59 outside, and failed then.
+    hour = datetime.now(ZoneInfo(live_settings.watch_timezone)).hour
+    monkeypatch.setattr(live_settings, "watch_quiet_from_hour", hour)
+    monkeypatch.setattr(live_settings, "watch_quiet_to_hour", (hour + 23) % 24)
 
     result = runner.invoke(app, ["watch-status"])
 
