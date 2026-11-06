@@ -28,7 +28,7 @@ What sets this pass apart from the projects before it is a live collector on the
 
 **Out of scope:**
 
-- **Commenter ids in the raw layer.** `raw_messages.payload` holds 62,110 distinct user ids under `replies.recent_repliers`, unhashed, and other fields naming people. Removing them from production and from what is collected is a change of its own, after this one. This pass only keeps them out of restored copies. The privacy page's sentence about readers stays wrong until that change.
+- **People in the raw layer.** Removing them from what is collected and from production's raw layer is `remove-person-ids-from-raw-layer`, which lands before this pass's first release, so that its first deploy runs both. The restore's read-back is specified here, and relies on that change's migration (Decision 13).
 - **Alerts on comments.** Comments are measured and do not alert, by decision (`docs/PLAN.md`, "Comments are measured but do not alert"). Measured on 2026-11-06 over 14 days, enabling them at the current threshold would raise 2 alerts against 87 from the other metrics: the model needs replacing, and that is its own change.
 - **A session backup.** It is left out of off-site copies on purpose, and stays out.
 
@@ -59,7 +59,7 @@ What sets this pass apart from the projects before it is a live collector on the
 - **Dependencies:** none in the application. `k3d` and `promtool` on the operator's machine for the end-to-end suite and for trying the proposed rules.
 - **Scheduled work:** one CronJob fewer, one Deployment replaced by another. Idle cost is in `design.md`.
 - **The server:** a request to the infrastructure repository (`design.md`, Decision 16), and a migration in place with a gap of about five minutes, started inside the collector's quiet hours so that no reading is lost.
-- **Personal data:** a restored copy holds no commenter id and no trace of the operator's subscriptions. Production's raw layer is unchanged by this pass.
+- **Personal data:** a restored copy names no person and holds no trace of the operator's subscriptions. Production's raw layer is cleared by `remove-person-ids-from-raw-layer`, in the same first deploy.
 
 ## Decision record
 
@@ -86,7 +86,7 @@ So these, marked "not covered by the requirements" until then, are confirmed as 
 9. An exporter of its own with a read-only role.
 10. A `dir` key and a name prefix in the restore's sources; the off-site copy tried in this pass and after any change to the off-site code.
 11. Neutralising channels' provenance, notes, undelivered alerts and the person fields in payloads.
-12. Commenter ids handled by a later change.
+12. Commenter ids handled by a later change. On the same date the operator moved it before the first tag: `remove-person-ids-from-raw-layer`, with its own decision record.
 13. `docs/privacy.html` changed in this change.
 14. A single YouTube timeout left to raise the shared alert; the noise to be read for a week.
 15. The session's old copy on the operator's machine kept until the pass ends, then deleted.

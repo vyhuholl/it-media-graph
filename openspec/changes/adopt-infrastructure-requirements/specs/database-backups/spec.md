@@ -75,14 +75,20 @@ After a restore, nothing in the copy SHALL cause a message to anyone but the env
 
 ### Requirement: A Restored Copy Names Nobody
 
-After a restore, the copy SHALL hold no user id or person's name in a message payload's fields that carry one, no trace of which channels came from the operator's own subscriptions, and no note the operator wrote. The restore SHALL read this back on the real rows and fail if any remains.
+After a restore, the copy SHALL hold nothing that names a person anywhere in a message's or a channel's payload (personal-data, "What Names A Person"), no trace of which channels came from the operator's own subscriptions, and no note the operator wrote. The restore SHALL read this back on the real rows, by type and not by path, and fail if any remains.
 
 #### Scenario: Person fields in payloads
 
-- **GIVEN** seeded messages with recent repliers, a user as author, a post signature, a forward from a user, a hidden sender's name, recent reactions, and a mention by user id
+- **GIVEN** a dump of the revision before people were cleared, with seeded messages naming people in every way the rule names, paid reactors and commenters among them, and a channel among each
 - **WHEN** the restore finishes
-- **THEN** none of those values is left in `raw_messages`
-- **AND** a forward from a channel, the message's text and its counters are unchanged
+- **THEN** no payload names a person
+- **AND** the channels among the commenters and the reactors, a forward from a channel, the message's text and its counters are unchanged
+
+#### Scenario: A person in a dump at head
+
+- **GIVEN** a dump of the current revision in which a payload names a person, at a path no earlier rule named
+- **WHEN** the restore reads back
+- **THEN** it fails, naming what it found, and the database is left empty
 
 #### Scenario: The operator's subscriptions
 

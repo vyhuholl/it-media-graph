@@ -32,7 +32,7 @@ See `proposal.md`, Why, and its decision record. The requirements are in `specs/
 
 **Non-Goals:**
 
-- Commenter ids in production's raw layer, and the privacy page's sentence about readers (a later change).
+- People in production's raw layer, and the privacy page's sentence about readers: `remove-person-ids-from-raw-layer`, deployed with this pass's first release.
 - Alerting on comments, which needs a different model.
 - A Prometheus client library, a Pushgateway, or rules and dashboards in this repository.
 - Changing Postgres's major version or its flags.
@@ -279,14 +279,13 @@ A failure from step 4 until step 7 has finished drops and re-creates the databas
 | `affiliation_candidates` | null `decision_note`; the decision stays |
 | `pending_mention_sources`, `pending_mentions` | delete: they are handles, many of them people's, and only `resolve` reads them |
 | `alerts` | mark every undelivered one delivered |
-| `raw_messages.payload` | remove `replies.recent_repliers`, `reactions.recent_reactions`, `post_author`, `fwd_from.post_author`, `fwd_from.from_name`; null `from_id` and `fwd_from.from_id` where they are `PeerUser`; drop `MessageEntityMentionName` and `InputMessageEntityMentionName` from `entities` |
 
-- A forward from a channel keeps its `from_id`, which is the graph. Text stays: these are public posts.
-- `raw_channels` holds bots alone in `users` and no `recent_requesters`, measured on 2026-11-06; `files/readback.sql` asserts it stays so, and fails if a non-bot appears.
-- **Proof.** `files/readback.sql` counts each field on the real rows and fails above zero. e2e seeds synthetic rows of every shape, and each statement removed in turn must fail the read-back: an empty table proves nothing.
+- **Payloads are not neutralised here.** A list of paths missed the paid reactors, 6,341 people on production. What names a person is removed by the migration of `remove-person-ids-from-raw-layer`, which every restore runs before this file, so a dump taken before that revision arrives here cleared. One taken after it that names someone means production does too, and the restore fails rather than hide it.
+- **The read-back looks by type,** for every type and field that change's rule names, anywhere in `raw_messages` and `raw_channels`, and fails naming what it found. A forward from a channel keeps its `from_id`, which is the graph; text stays, since these are public posts.
+- **Proof.** `files/readback.sql` counts on the real rows and fails above zero. e2e seeds synthetic rows of every shape, and each statement removed in turn must fail the read-back: an empty table proves nothing.
 - **Not cleared:** old values in WAL segments kept for reuse on the test VM. Only the two operators can reach them, and they can reach production anyway. This limit is stated in the runbook. `wal_recycle=off` would change a production flag for it, and is not taken.
 - **A column named as a note** fails a test until the restore clears and reads it back, which is how the suite keeps up with the schema here. Nothing can do the same for a field naming a person, so:
-- **A change that adds a field naming a person** names the restore in its design. The later change removing these from production keeps the read-back.
+- **A change that adds a field naming a person** names the restore in its design. The read-back by type catches a tagged one by itself.
 
 ### 14. The exporter
 
@@ -407,7 +406,7 @@ The old path stays in `HEAD` until the soak ends: nothing can run it, as root's 
 - **[A single YouTube timeout raises a critical alert]** for up to ten minutes, about once in five days → accepted, by decision; read the noise for a week. The code that would change cannot be tried in test.
 - **[`ItgraphCollectionStalled` during a session command]** → the rule looks at replicas, so a loop stopped by hand does not fire it, and `ItgraphCollectorStopped` says so after a day.
 - **[Neutralising falls behind the schema]** A later change adds a field naming a person → the read-back lives beside the schema; a change adding such data names the restore in its design.
-- **[The privacy page's sentence about readers stays wrong until the later change]** → recorded in the proposal; the later change fixes both.
+- **[The privacy page's sentence about readers stays wrong until production runs the migration]** → `remove-person-ids-from-raw-layer` changes the page once it has, since the page is published from `master`.
 - **[The vault's ciphertext stays in a public history]** → the bot token, the YouTube key and the B2 key are rotated; the database and SOCKS passwords are replaced. The api hash and the VPN credential remain as they were in that ciphertext. The password protects them, and is deleted everywhere at the end.
 - **[A lost age identity]** makes every off-site copy unreadable → it stays in the password manager, and the off-site restore proves it opens.
 
@@ -423,7 +422,7 @@ Who does what, in order. **Irreversible steps are in bold.**
 6. **Operator:** `restore` from production's newest full dump; the same from the off-site copy, the age identity pasted at the prompt. Read the neutralised counts and the five-minute watch. Fire one rule on purpose to the test group. See the test bot deliver the synthetic alert.
 7. **Operator:** rehearse the takeover in test: delete the namespace's workloads, apply today's templates with a root-started Postgres on a loaded dump, then run the role on top. Measure the gap.
 8. **Operator:** on the controller, move the values to production's vault, printing none. Snapshot the namespace's non-Secret objects there.
-9. **Operator:** at about 06:15 Moscow time, inside quiet hours: promote the pins, flag on, run the main playbook. The role stops writers, restarts Postgres as uid 999, migrates (which takes a full dump first), brings up the bot, the exporter and the collector, deletes the console, the two merged CronJobs and the old Secret, and applies the label.
+9. **Operator:** at about 06:15 Moscow time, inside quiet hours: promote the pins, flag on, run the main playbook. The role stops writers, restarts Postgres as uid 999, migrates (which takes a full dump first, then runs this pass's revision and the one that clears people from the raw layer), brings up the bot, the exporter and the collector, deletes the console, the two merged CronJobs and the old Secret, and applies the label.
 10. **Operator:** verify at about 07:05, when polls have resumed: `itgraph_telegram_last_poll_timestamp_seconds` advancing, a YouTube pass complete, the route line, the tunnel to the fixed address, the series scraped.
 11. **Operator: rotate the bot token, the YouTube key and the B2 key.** **The old values are revoked for good.** Keep the session and the api hash. Reissue the VPN credential only if the provider can do it on the same server.
 12. **Operator:** soak. The next backup with its off-site copy; one restore of a dump taken under the role; one off-site restore.

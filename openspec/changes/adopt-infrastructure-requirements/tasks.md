@@ -93,6 +93,8 @@ Tasks marked **(operator)** reach the server, the controller, Telegram, B2 or th
   Taken by the operator on 2026-11-06. The rules hold no messages yet: item 12's Russian text is written where they land.
 - [x] 12.3 What `/opsx:verify` found on 2026-11-06 is fixed, the operator's answer being «Правь всё», with the database put back by hand and not by a run: a note on an affiliation decision left in restored copies, a YouTube key and an off-site store accepted where collection is off, another role's password stopping the collector, the database neither watched nor covered in the runbook, `VACUUM FULL` missing what a deletion cascades into, the fixed address's password untried, `rollout undo` of a workload with no new template, and the artifacts where they disagreed with the code. Verify: `make validate`; `make test-e2e`.
 
+- [ ] 12.4 The restore's side of `remove-person-ids-from-raw-layer`, as amended above on 2026-11-06: no payload statements in `neutralise.sql`, a read-back by type. The code lands with that change's group 3. Verify: its 3.1 and 3.2.
+
 ## 13. The test environment
 
 - [ ] 13.1 **(operator)** A test bot from BotFather; a test group; values into the test vault. Verify: `/status` answers in that group after 13.5.
@@ -100,7 +102,7 @@ Tasks marked **(operator)** reach the server, the controller, Telegram, B2 or th
 - [ ] 13.3 **(operator)** Push `master`, wait for the image, tag `v0.1.0`. Verify: the release holds the archive and its sum, and the image's tag has the commit's digest.
 - [ ] 13.4 **(operator)** Pin in test. Verify: the commit in the test inventory.
 - [ ] 13.5 **(operator)** The main playbook on a fresh volume, twice. Verify: green, the second run restarting nothing, the namespace enforcing `restricted`, and the failing collector pod's report.
-- [ ] 13.6 **(operator)** `restore` from production's newest full dump. Verify: counts match, the read-back's zeroes, the synthetic alert in the test group, a new baseline run, no container restarting in five minutes.
+- [ ] 13.6 **(operator)** `restore` from production's newest full dump. Verify: counts match, the read-back's zeroes, the synthetic alert in the test group, a new baseline run, no container restarting in five minutes; the duration of the revision clearing people, recorded in `remove-person-ids-from-raw-layer`, 5.3.
 - [ ] 13.7 **(operator)** `restore` from the off-site copy, the age identity pasted at the prompt. Verify: as 13.6, and no copy left on the controller or the test host.
 - [ ] 13.8 **(operator)** One rule fired on purpose to the test group. Verify: seen there, and resolved.
 - [ ] 13.9 **(operator)** The takeover rehearsed in test (Migration Plan, step 7). Verify: Postgres up as uid 999 on files a root-started image wrote; the gap measured, and recorded here.
@@ -122,5 +124,5 @@ Tasks marked **(operator)** reach the server, the controller, Telegram, B2 or th
 ## Workflow follow-up
 
 - `/opsx:verify`, then `/opsx:archive`.
-- A later change removes commenter ids and other person fields from what is collected and from production's raw layer, and corrects the privacy page's sentence about readers. It needs a stated exception to "the raw layer is immutable".
+- `remove-person-ids-from-raw-layer` removes people from what is collected and from production's raw layer, before the first tag, and corrects the privacy page's sentence about readers after production runs it.
 - A possible later change gives comments a model of their own, if alerts on them are wanted. The present score cannot do it: on 14 days at 3.7 it would raise 2.
