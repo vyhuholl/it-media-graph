@@ -617,6 +617,19 @@ UNTOUCHED: tuple[Case, ...] = tuple(
         ),
         ("a post that names nobody", post()),
         (
+            "a contact the channel posted",
+            post(
+                media={
+                    "_": "MessageMediaContact",
+                    "phone_number": "fake-phone-number",
+                    "first_name": "A Fake Contact",
+                    "last_name": "",
+                    "vcard": "",
+                    "user_id": USER,
+                }
+            ),
+        ),
+        (
             "a service message",
             {
                 "_": "MessageService",

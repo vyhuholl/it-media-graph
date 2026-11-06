@@ -112,7 +112,8 @@ def without_people(value: Any) -> Any:
     JSON values, and has no branch that raises.
 
     The migration that cleared what was stored before holds a copy of
-    this in SQL, and ``tests/test_people.py`` holds the two equal.
+    this in SQL, and ``tests/test_people_migration.py`` holds the two
+    equal, over the cases of ``tests/people_cases.py``.
     """
     if isinstance(value, dict):
         if _is_user(value):

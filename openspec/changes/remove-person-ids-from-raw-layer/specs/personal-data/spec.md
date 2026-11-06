@@ -8,7 +8,7 @@ What names a person in the payloads Telegram returns, and that the system keeps 
 
 ### Requirement: What Names A Person
 
-A value names a person when it is a user's account, a mention of a user by id, an entry that identifies a user through its peer, a name signed under a post or carried by a forward, or a list of user ids. Removing it SHALL make it null where it is a field and drop it where it is an item of a list. A channel, a bot, a post's text and counters and a linked page's content SHALL stay as received.
+A value names a person when it is a user's account, a mention of a user by id, an entry that identifies a user through its peer, a name signed under a post or carried by a forward, or a list of user ids. Removing it SHALL make it null where it is a field and drop it where it is an item of a list. A channel, a bot, a post's text and counters, a linked page's content and a contact the channel posted SHALL stay as received.
 
 #### Scenario: A post's latest commenters
 
@@ -60,6 +60,12 @@ A value names a person when it is a user's account, a mention of a user by id, a
 - **GIVEN** a post linking a web page whose preview names its author
 - **WHEN** what names a person is removed
 - **THEN** the preview is unchanged
+
+#### Scenario: A contact the channel posted
+
+- **GIVEN** a post whose media is a contact card, with a user id, a phone number and names
+- **WHEN** what names a person is removed
+- **THEN** the card is unchanged: it is what the channel chose to publish
 
 #### Scenario: Removing twice
 

@@ -35,6 +35,7 @@ See `proposal.md`, Why; what counts as a person is `specs/personal-data`. What s
 
 - A complete model of Telegram's schema. The rule is generic by type; a person's id as a bare integer under a key it does not name is its limit, stated below.
 - Deleting old backups early.
+- A contact a channel posts (`MessageMediaContact`: a user id, a phone number, names). It is content the channel chose to publish, like its text, and stays; none was seen on production. Decided by the operator on 2026-11-07.
 
 ## Decisions
 
@@ -78,7 +79,7 @@ One revision, revising `b7d2e4f19a30`:
 
 - **A dump taken before this revision** is cleared by the revision itself, which every restore runs before neutralising.
 - **A dump taken after it that names someone** means production does too: the collector's rule missed a shape. The restore fails, and the database is emptied as for any read-back failure, rather than neutralising what production keeps. The weekly test restore becomes an audit of production.
-- **The end-to-end suite** gets a dump of the previous revision by seeding at head, then setting `alembic_version` back one revision before the backup run: the revision changes no schema, so that is the database the previous release would have left. It also seeds a person at head into a second dump, which the restore must refuse.
+- **The end-to-end suite** gets a dump of the previous revision for real: a database of its own, brought by Alembic to the revision before this one, seeded, and dumped by the backup job pointed at it. Setting the version back on a database at head would stop working at the first later revision that changes the schema. It also seeds a person at head into a second dump, which the restore must refuse.
 - Specified in `adopt-infrastructure-requirements`' `database-backups` delta, which still holds the restore's requirements. Its tasks point here.
 
 ### 5. Text and docs
@@ -104,7 +105,7 @@ One revision, revising `b7d2e4f19a30`:
 2. **Operator:** the tag `v0.1.0`, as that change's tasks say.
 3. **Operator:** the test environment's restore of production's newest full dump runs this revision on real data. Read its duration and the read-back.
 4. **Operator:** production's first run, inside quiet hours. Its migration step takes a full dump, then runs both pending revisions.
-5. **Operator, then agent:** the words for `docs/privacy.html`, with the run's date; the agent edits the page and the plan's note, and the operator commits.
+5. **Done on 2026-11-07, before production, by the operator's decision:** the agent wrote `docs/privacy.html`'s paragraph and the plan's note, describing what the version does. They go live with the push of `master`, whenever the operator makes it.
 6. **Nobody:** the dumps that hold people are gone 28 days after step 4 on the host, a day later off-site. The operator's machine's old dumps go in `adopt-infrastructure-requirements`' 15.3.
 
 **Rollback:** reverting the pin restores the previous collector; the removed values do not come back, and nothing needs them. The downgrade does nothing.

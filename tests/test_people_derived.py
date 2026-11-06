@@ -3,7 +3,8 @@
 The same posts are derived from twice — as Telegram sent them and with what
 names a person removed — and everything derived from them must agree:
 references, readings, YouTube links, and the edges and pending mentions the
-derivation pass writes.
+derivation pass writes. Alerts are not compared on their own: they are worked
+out from edges and readings, and those are.
 """
 
 import json

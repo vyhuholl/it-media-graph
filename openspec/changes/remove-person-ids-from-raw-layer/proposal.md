@@ -16,7 +16,7 @@ The raw layer stores Telegram's objects verbatim, and with them people who never
 **Out of scope:**
 
 - Hashing. Nothing reads these ids, an unkeyed hash of a Telegram id is reversed by enumerating ids, and a keyed one is still personal data with a key to keep. The comments phase in `docs/PLAN.md` designs its own.
-- Post text, and the author names on linked web pages: public content, kept as published. Handles found in text (`pending_mentions`) are derived from it.
+- Post text, the author names on linked web pages and a contact a channel posts: public content the channel chose to publish, kept as published. Handles found in text (`pending_mentions`) are derived from it.
 - Comments themselves, and alerts on them.
 
 ## Capabilities
@@ -49,5 +49,6 @@ Brought as questions in the explore session of 2026-11-06, each with a recommend
 7. `docs/privacy.html` says what was removed, with the date; its exact words are the operator's. On 2026-11-07 the operator left the words to the agent and moved the edit before production (`tasks.md`, 5.1).
 8. Author names of linked web pages kept.
 9. The restore's side specified in `adopt-infrastructure-requirements`, the rest here, both before the first tag.
+10. A contact a channel posts kept as content, on 2026-11-07, by the operator's answer to `/opsx:verify` («Да, правь всё»).
 
 Nothing here is still uncovered by the requirements.

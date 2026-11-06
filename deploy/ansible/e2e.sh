@@ -389,20 +389,61 @@ ok 'nothing of it is left behind'
 
 # --- restoring -------------------------------------------------------------------
 
-say 'a dump of seeded rows, as a backup run makes it'
+say 'a dump of seeded rows, as a backup run of the previous release makes it'
+# The previous release's database, made for real: one of its own, brought by Alembic to
+# the revision before the one that clears people from the raw layer, seeded, and dumped
+# by the backup job pointed at it. The restore then has to run that revision. Setting
+# the version back on a database at head would stop working at the first later
+# revision that changes the schema.
+clearing="$root/src/itgraph/db/migrations/versions/fb31bd0b6656_clear_people_from_the_raw_layer.py"
+previous="$(sed -n 's/^down_revision: .* = "\(.*\)"$/\1/p' "$clearing")"
+[ -n "$previous" ] || fail 'the revision before the one that clears people could not be read'
+kubectl -n "$namespace" exec statefulset/itgraph-postgres -c postgres -- \
+	psql -X -q -U itgraph -d postgres -v ON_ERROR_STOP=1 \
+	-c 'DROP DATABASE IF EXISTS itgraph_previous' -c 'CREATE DATABASE itgraph_previous OWNER itgraph' >/dev/null
+owner_url="$(kubectl -n "$namespace" get secret itgraph-database -o jsonpath='{.data.DATABASE_URL}' | base64 -d)"
+previous_url="${owner_url%/*}/itgraph_previous"
+jq -n --arg ns "$namespace" --arg image "$image" --arg url "$previous_url" --arg revision "$previous" '
+	{apiVersion: "v1", kind: "Pod",
+	 metadata: {name: "e2e-previous", namespace: $ns, labels: {"itgraph/database": "true"}},
+	 spec: {restartPolicy: "Never", activeDeadlineSeconds: 300, automountServiceAccountToken: false,
+	   securityContext: {runAsNonRoot: true, runAsUser: 3000, runAsGroup: 3000, seccompProfile: {type: "RuntimeDefault"}},
+	   initContainers: [{name: "settle", image: $image, command: ["sleep", "3"],
+	     securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}}}],
+	   containers: [{name: "itgraph", image: $image, command: ["alembic", "upgrade", $revision],
+	     env: [{name: "DATABASE_URL", value: $url}, {name: "ITGRAPH_SKIP_BACKUP", value: "1"}],
+	     envFrom: [{configMapRef: {name: "itgraph-config"}}],
+	     securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}},
+	     volumeMounts: [{name: "tmp", mountPath: "/tmp"}]}],
+	   volumes: [{name: "tmp", emptyDir: {}}]}}' |
+	kubectl create -f - >/dev/null
+tries=0
+until phase="$(kubectl -n "$namespace" get pod e2e-previous -o jsonpath='{.status.phase}')" &&
+	{ [ "$phase" = Succeeded ] || [ "$phase" = Failed ]; }; do
+	tries=$((tries + 1))
+	[ "$tries" -lt 150 ] || fail 'the previous release'\''s schema never came'
+	sleep 2
+done
+[ "$phase" = Succeeded ] || {
+	kubectl -n "$namespace" logs pod/e2e-previous --all-containers >&2 || true
+	fail 'the previous release'\''s schema could not be made'
+}
+kubectl -n "$namespace" delete pod e2e-previous --wait=false >/dev/null
 kubectl -n "$namespace" exec -i statefulset/itgraph-postgres -c postgres -- \
-	psql -X -q -U itgraph -d itgraph -v ON_ERROR_STOP=1 -f - <"$here/e2e_seed.sql"
-# As the previous release left it: the revision that clears people from the raw layer
-# changes no table, so the version one step back is that release's database, and the
-# restore has to run the revision to clear what the seed put there.
-psql_in "$namespace" "UPDATE alembic_version SET version_num = 'b7d2e4f19a30'" >/dev/null
+	psql -X -q -U itgraph -d itgraph_previous -v ON_ERROR_STOP=1 -f - <"$here/e2e_seed.sql"
 kubectl -n "$namespace" delete job --all >/dev/null
-kubectl -n "$namespace" create job e2e-dump --from=cronjob/itgraph-backup >/dev/null
+kubectl -n "$namespace" get cronjob itgraph-backup -o json |
+	jq --arg url "$previous_url" '{apiVersion: "batch/v1", kind: "Job",
+		metadata: {name: "e2e-dump", namespace: .metadata.namespace},
+		spec: (.spec.jobTemplate.spec | .template.spec.containers[0].env = [{name: "DATABASE_URL", value: $url}])}' |
+	kubectl create -f - >/dev/null
 kubectl -n "$namespace" wait --for=condition=complete job/e2e-dump --timeout=180s >/dev/null || {
 	kubectl -n "$namespace" logs job/e2e-dump >&2 || true
 	fail 'the backup did not complete'
 }
 kubectl -n "$namespace" delete job e2e-dump >/dev/null
+kubectl -n "$namespace" exec statefulset/itgraph-postgres -c postgres -- \
+	psql -X -q -U itgraph -d postgres -c 'DROP DATABASE itgraph_previous WITH (FORCE)' >/dev/null
 dump_from_claim() { # <file on this machine>
 	kubectl -n "$namespace" delete pod e2e-cat --ignore-not-found >/dev/null
 	jq -n --arg ns "$namespace" --arg image "$image" '
