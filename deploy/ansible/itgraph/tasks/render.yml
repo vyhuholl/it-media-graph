@@ -1,0 +1,35 @@
+---
+# The objects, rendered on the machine the role runs on, as the streams a run
+# applies in turn. Nothing reaches a cluster here.
+
+- name: Sum what each long-running workload reads
+  ansible.builtin.set_fact:
+    __itgraph_checksums:
+      watch: >-
+        {{ (__itgraph_config | to_json
+            ~ __itgraph_all_secrets['itgraph-database'] | to_json
+            ~ __itgraph_all_secrets['itgraph-telegram'] | to_json) | hash('sha256') }}
+      bot: >-
+        {{ (__itgraph_config | to_json ~ __itgraph_all_secrets['itgraph-bot'] | to_json) | hash('sha256') }}
+      metrics: >-
+        {{ (__itgraph_config | to_json ~ __itgraph_all_secrets['itgraph-metrics'] | to_json) | hash('sha256') }}
+      proxy: "{{ __itgraph_proxy_config | to_json | hash('sha256') }}"
+  no_log: true
+
+# no_log here and on each apply: a failure shows the line it failed on, and these
+# lines are the secrets.
+- name: Render the streams
+  ansible.builtin.set_fact:
+    __itgraph_streams:
+      namespace: "{{ lookup('ansible.builtin.template', 'namespace.yaml.j2') }}"
+      foundation: >-
+        {{ query('ansible.builtin.template', 'storage.yaml.j2', 'network-policies.yaml.j2', 'config.yaml.j2', 'console.yaml.j2')
+           | join(__itgraph_document_separator) }}
+      secrets: "{{ lookup('ansible.builtin.template', 'secrets.yaml.j2') }}"
+      proxy: "{{ lookup('ansible.builtin.template', 'proxy.yaml.j2') }}"
+      postgres: "{{ lookup('ansible.builtin.template', 'postgres.yaml.j2') }}"
+      bot: "{{ lookup('ansible.builtin.template', 'bot.yaml.j2') }}"
+      metrics: "{{ lookup('ansible.builtin.template', 'metrics.yaml.j2') }}"
+      watch: "{{ lookup('ansible.builtin.template', 'watch.yaml.j2') }}"
+      cronjobs: "{{ lookup('ansible.builtin.template', 'cronjobs.yaml.j2') }}"
+  no_log: true

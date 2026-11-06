@@ -62,10 +62,38 @@ def test_database_url_must_be_postgres(env: pytest.MonkeyPatch) -> None:
         build()
 
 
-def test_missing_credentials_fail_loudly(env: pytest.MonkeyPatch) -> None:
+def test_half_a_pair_of_credentials_fails_loudly(
+    env: pytest.MonkeyPatch,
+) -> None:
     env.delenv("TELEGRAM_API_HASH")
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="needed together"):
         build()
+
+
+def test_a_workload_without_telegram_credentials_loads(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """The bot, the exporter and the analysis passes never connect."""
+    env.delenv("TELEGRAM_API_ID")
+    env.delenv("TELEGRAM_API_HASH")
+
+    settings = build()
+
+    assert settings.telegram_api_id is None
+    assert settings.telegram_api_hash is None
+
+
+def test_blank_credentials_are_no_credentials(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """`.env.example` writes both lines with nothing after them."""
+    env.setenv("TELEGRAM_API_ID", "")
+    env.setenv("TELEGRAM_API_HASH", "")
+
+    settings = build()
+
+    assert settings.telegram_api_id is None
+    assert settings.telegram_api_hash is None
 
 
 def test_a_sample_outside_the_horizon_is_refused(

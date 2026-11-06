@@ -1,0 +1,41 @@
+---
+# The namespace's lock, a Lease: a run waits while another holds it, and takes over
+# one older than any run could last, which a run that died left. Two runs that find
+# it free at the same moment race on its creation, and the one that loses fails
+# before it changes anything.
+
+- name: Wait while another run holds the lock, unless it is too old to be alive
+  ansible.builtin.command:
+    argv: >-
+      {{ __itgraph_in_namespace + ['get', 'lease', 'itgraph-deploy',
+         '-o', 'jsonpath={.spec.acquireTime}', '--ignore-not-found'] }}
+  register: __itgraph_lease
+  changed_when: false
+  until: >-
+    __itgraph_lease.stdout | trim | length == 0
+    or ((__itgraph_lock_now | to_datetime('%Y-%m-%dT%H:%M:%S.%fZ'))
+        - (__itgraph_lease.stdout | trim | to_datetime('%Y-%m-%dT%H:%M:%S.%fZ'))).total_seconds()
+       >= __itgraph_lock_life
+  retries: "{{ (__itgraph_lock_life / [__itgraph_lock_poll, 1] | max) | int + 1 }}"
+  delay: "{{ __itgraph_lock_poll }}"
+
+- name: Take over the lock a run that died left
+  ansible.builtin.command:
+    argv: "{{ __itgraph_in_namespace + ['delete', 'lease', 'itgraph-deploy', '--ignore-not-found'] }}"
+  when: __itgraph_lease.stdout | trim | length > 0
+  changed_when: false
+
+- name: Take the lock
+  ansible.builtin.command:
+    argv: "{{ itgraph_kubectl + ['create', '-f', '-'] }}"
+    stdin: |-
+      apiVersion: coordination.k8s.io/v1
+      kind: Lease
+      metadata:
+        name: itgraph-deploy
+        namespace: {{ itgraph_namespace | to_json }}
+      spec:
+        holderIdentity: itgraph
+        leaseDurationSeconds: {{ __itgraph_lock_life }}
+        acquireTime: {{ __itgraph_lock_now | to_json }}
+  changed_when: false

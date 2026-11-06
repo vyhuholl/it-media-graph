@@ -16,16 +16,44 @@ from typing import Any
 import pytest
 from aiogram import Bot
 from aiogram.client.session.base import BaseSession
+from aiogram.client.telegram import PRODUCTION
 from aiogram.dispatcher.event.bases import UNHANDLED
 from aiogram.methods import TelegramMethod
 from aiogram.types import Chat, Message, MessageEntity, Update, User
+from pydantic import HttpUrl
 
-from itgraph.bot.handlers import build_dispatcher, verdict_keyboard
+from itgraph.bot import handlers
+from itgraph.bot.handlers import build_bot, build_dispatcher, verdict_keyboard
 from itgraph.db.session import Database
 
 OPERATOR = 4242
 STRANGER = 9999
 BOT_NAME = "itgraph_alerts_bot"
+
+
+TOKEN = "42:test-bot-token"
+
+
+def test_the_bot_api_is_telegrams_own_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(handlers.settings, "telegram_bot_api_url", None)
+
+    assert build_bot(TOKEN).session.api == PRODUCTION
+
+
+def test_a_given_address_reaches_the_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        handlers.settings,
+        "telegram_bot_api_url",
+        HttpUrl("http://stub.invalid:8081/"),
+    )
+
+    api = build_bot(TOKEN).session.api
+
+    assert api.base == "http://stub.invalid:8081/bot{token}/{method}"
 
 
 def test_the_keyboard_carries_the_alert_it_answers_for() -> None:

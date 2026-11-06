@@ -10,6 +10,7 @@ from typing import Self
 
 from pydantic import (
     Field,
+    HttpUrl,
     PostgresDsn,
     SecretStr,
     field_validator,
@@ -62,8 +63,13 @@ class Settings(BaseSettings):
     )
 
     database_url: PostgresDsn
-    telegram_api_id: int
-    telegram_api_hash: SecretStr
+
+    # Optional, because each workload holds only its own secrets: the
+    # bot, the exporter and the analysis passes never build a Telegram
+    # client, so they are not handed what one needs. `build_client`
+    # refuses without them, naming both, before anything connects.
+    telegram_api_id: int | None = None
+    telegram_api_hash: SecretStr | None = None
 
     # A session file is full account access: keep it out of the repo.
     telegram_session: Path = Path("itgraph.session")
@@ -544,6 +550,12 @@ class Settings(BaseSettings):
     # the unhardened state is visible rather than assumed.
     bot_database_url: PostgresDsn | None = None
 
+    # Where the bot finds the Bot API. Unset is Telegram's own, which is
+    # the only address a deployed bot is ever given; the end-to-end suite
+    # points it at a stub in the cluster, so that nothing it checks
+    # depends on Telegram.
+    telegram_bot_api_url: HttpUrl | None = None
+
     # --- YouTube ------------------------------------------------------
     #
     # Everything YouTube is read with one API key against one daily
@@ -808,6 +820,33 @@ class Settings(BaseSettings):
                 "the off-site pass needs b2_key_id, b2_application_key, "
                 "b2_bucket_name and backup_age_recipient all set — or all "
                 "unset, meaning no off-site pass"
+            )
+        return self
+
+    @field_validator("telegram_api_id", "telegram_api_hash", mode="before")
+    @classmethod
+    def _a_blank_credential_is_no_credential(cls, value: object) -> object:
+        """Read ``TELEGRAM_API_ID=`` as unset, as `.env.example` writes it.
+
+        Before validation, because a blank id is not an integer and would
+        otherwise fail as one, on a machine that runs nothing needing it.
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def _telegram_is_complete_or_absent(self) -> Self:
+        """Refuse half a pair, the way the proxy and the off-site do.
+
+        Absent is a deliberate state of a workload that never connects.
+        One of the two is a mistake in its configuration, and the place
+        to say so is here rather than in the first command to connect.
+        """
+        if (self.telegram_api_id is None) != (self.telegram_api_hash is None):
+            raise ValueError(
+                "telegram_api_id and telegram_api_hash are needed together "
+                "— set both, or neither on a workload that never connects"
             )
         return self
 

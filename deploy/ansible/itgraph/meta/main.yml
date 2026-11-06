@@ -1,0 +1,13 @@
+---
+galaxy_info:
+  author: itgraph
+  description: >-
+    Deploys itgraph's collection, analysis and alert bot into a namespace of a
+    k3s cluster, and restores a dump into a test environment.
+  license: MIT
+  min_ansible_version: "2.19"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - all
+dependencies: []

@@ -1,0 +1,24 @@
+---
+# The k3d cluster of e2e.sh, which does not collect: no key, nothing leaves. e2e.sh
+# gives the images it pushes, by digest, and the Bot API it runs, on the command line.
+# Every value here is fake, and spelled so.
+itgraph_namespace: itgraph
+itgraph_storage_class: e2e-retaining
+itgraph_postgres_access_ip: 10.43.0.250
+itgraph_scraper_namespace: monitoring
+itgraph_scraper_labels:
+  app.kubernetes.io/name: prometheus
+itgraph_telegram_collection: false
+itgraph_telegram_api_id: 30507090
+itgraph_telegram_api_hash: fakeApiHashSetE
+itgraph_bot_token: "333:fakeBotTokenSetE"
+itgraph_alert_chat_id: 100000003
+itgraph_postgres_password: fakeOwnerPasswordSetEeeee
+itgraph_bot_postgres_password: fakeBotPasswordSetEeeeeee
+itgraph_metrics_postgres_password: fakeMetricsPasswordSetEee
+itgraph_proxy_password: fakeProxyPasswordSetEeeee
+itgraph_proxy_outbound:
+  protocol: blackhole
+itgraph_youtube_api_key: ""
+itgraph_backup_offsite: none
+itgraph_restore_allowed: true

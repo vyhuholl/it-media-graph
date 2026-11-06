@@ -1,0 +1,360 @@
+---
+# How long the namespace's lock holds before a run takes it over, in seconds:
+# well above the longest run, a restore with its trials included.
+__itgraph_lock_life: 3600
+
+# How often a run waiting on that lock looks again, in seconds.
+__itgraph_lock_poll: 10
+
+# The clock the lock reads, in the Lease's own format. Read anew at each use; a
+# test gives it a fixed moment, so the lock's boundary is checked exactly.
+__itgraph_lock_now: "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%S.%fZ') }}"
+
+# In a variable: a `\n` written inside a block scalar's Jinja stays a backslash.
+__itgraph_document_separator: "\n---\n"
+
+# The server-side apply every object goes through, and its diff. The same
+# manager as the path this role replaced, so its first run is an update.
+__itgraph_apply: "{{ itgraph_kubectl + ['apply', '--server-side', '--field-manager=itgraph', '--force-conflicts', '-f', '-'] }}"
+__itgraph_diff: "{{ itgraph_kubectl + ['diff', '--server-side', '--field-manager=itgraph', '--force-conflicts', '-f', '-'] }}"
+__itgraph_in_namespace: "{{ itgraph_kubectl + ['-n', itgraph_namespace] }}"
+
+# psql in the database's pod, over its local socket, where local connections are
+# trusted: nothing here passes a password. C tools are safe to exec into a pod.
+__itgraph_psql: >-
+  {{ __itgraph_in_namespace + ['exec', '-i', 'statefulset/itgraph-postgres', '-c', 'postgres', '--',
+     'psql', '-X', '-U', itgraph_db_user, '-d', itgraph_db_name, '-v', 'ON_ERROR_STOP=1'] }}
+__itgraph_psql_query: "{{ __itgraph_psql + ['-tA', '-c'] }}"
+
+# A script in the database's pod, given on the command line, with what the task
+# redirects on its stdin. Takes a local connection: no secret passes through here.
+__itgraph_in_database: >-
+  {{ itgraph_kubectl | map('quote') | join(' ') }} -n {{ itgraph_namespace | quote }}
+  exec -i statefulset/itgraph-postgres -c postgres -- bash -euo pipefail -c
+
+# The Deployments a run follows, and where each says which template it is at.
+__itgraph_deployments: [itgraph-watch, itgraph-bot, itgraph-metrics, itgraph-proxy]
+__itgraph_revision_key: deployment.kubernetes.io/revision
+
+__itgraph_database_host: itgraph-postgres
+__itgraph_proxy_host: itgraph-proxy
+
+# Each role's password, marked on the database's Secret once it is set: a hash,
+# of 64 random characters, and never the value.
+__itgraph_passwords:
+  - key: owner
+    role: "{{ itgraph_db_user }}"
+    password: "{{ itgraph_postgres_password }}"
+  - key: bot
+    role: itgraph_bot
+    password: "{{ itgraph_bot_postgres_password }}"
+  - key: metrics
+    role: itgraph_metrics
+    password: "{{ itgraph_metrics_postgres_password }}"
+
+__itgraph_database_url: >-
+  postgresql+asyncpg://{{ itgraph_db_user }}:{{ itgraph_postgres_password }}@{{ __itgraph_database_host }}:5432/{{ itgraph_db_name }}
+
+# Not secret, and read by every application pod.
+__itgraph_config: >-
+  {{ {
+       'TZ': itgraph_timezone,
+       'WATCH_TIMEZONE': itgraph_timezone,
+       'ALERT_SPIKE_Z': itgraph_alert_spike_z | string,
+       'BACKUP_DIR': '/backups',
+       'POSTGRES_CONTAINER': '',
+       'TELEGRAM_SESSION': itgraph_session_path,
+       'YOUTUBE_BACKFILL_ENABLED': itgraph_youtube_backfill_enabled | bool | string | lower,
+     } | combine({'TELEGRAM_BOT_API_URL': itgraph_telegram_api} if itgraph_telegram_api | length > 0 else {}) }}
+
+# Each Secret's keys, read by what names it. Each workload holds only its own.
+__itgraph_secrets:
+  itgraph-database:
+    DATABASE_URL: "{{ __itgraph_database_url }}"
+  itgraph-telegram:
+    TELEGRAM_API_ID: "{{ itgraph_telegram_api_id | string }}"
+    TELEGRAM_API_HASH: "{{ itgraph_telegram_api_hash }}"
+    PROXY_TYPE: socks5
+    PROXY_HOST: "{{ __itgraph_proxy_host }}"
+    PROXY_PORT: "1080"
+    PROXY_USERNAME: itgraph
+    PROXY_PASSWORD: "{{ itgraph_proxy_password }}"
+  # DATABASE_URL, and no other: this pod's one URL is its own role's.
+  itgraph-bot:
+    DATABASE_URL: >-
+      postgresql+asyncpg://itgraph_bot:{{ itgraph_bot_postgres_password }}@{{ __itgraph_database_host }}:5432/{{ itgraph_db_name }}
+    TELEGRAM_BOT_TOKEN: "{{ itgraph_bot_token }}"
+    ALERT_CHAT_ID: "{{ itgraph_alert_chat_id | string }}"
+  itgraph-metrics:
+    DATABASE_URL: >-
+      postgresql+asyncpg://itgraph_metrics:{{ itgraph_metrics_postgres_password }}@{{ __itgraph_database_host }}:5432/{{ itgraph_db_name }}
+  itgraph-postgres:
+    POSTGRES_USER: "{{ itgraph_db_user }}"
+    POSTGRES_PASSWORD: "{{ itgraph_postgres_password }}"
+    POSTGRES_DB: "{{ itgraph_db_name }}"
+__itgraph_offsite_secret:
+  itgraph-offsite:
+    B2_KEY_ID: "{{ itgraph_b2_key_id }}"
+    B2_APPLICATION_KEY: "{{ itgraph_b2_application_key }}"
+    B2_BUCKET_NAME: "{{ itgraph_b2_bucket_name }}"
+    BACKUP_AGE_RECIPIENT: "{{ itgraph_backup_age_recipient }}"
+__itgraph_youtube_secret:
+  itgraph-youtube:
+    YOUTUBE_API_KEY: "{{ itgraph_youtube_api_key }}"
+__itgraph_has_youtube: "{{ itgraph_youtube_api_key | length > 0 }}"
+__itgraph_has_offsite: "{{ itgraph_backup_offsite == 'b2' }}"
+__itgraph_all_secrets: >-
+  {{ __itgraph_secrets
+     | combine(__itgraph_offsite_secret if __itgraph_has_offsite | bool else {})
+     | combine(__itgraph_youtube_secret if __itgraph_has_youtube | bool else {}) }}
+
+# The proxy's whole configuration. Exactly one outbound and no routing section:
+# whatever is not sent through it has nowhere to go, so an unreachable exit fails
+# the connection instead of leaving from the host's own address.
+__itgraph_proxy_config:
+  log:
+    loglevel: warning
+  inbounds:
+    - listen: 0.0.0.0
+      port: 1080
+      protocol: socks
+      settings:
+        auth: password
+        udp: false
+        accounts:
+          - user: itgraph
+            pass: "{{ itgraph_proxy_password }}"
+  outbounds:
+    - "{{ itgraph_proxy_outbound }}"
+
+# What restricted asks of a pod and of each container. readOnlyRootFilesystem is
+# not among what it asks, and every container sets it all the same.
+__itgraph_pod_security:
+  runAsNonRoot: true
+  runAsUser: 3000
+  runAsGroup: 3000
+  fsGroup: 3000
+  seccompProfile:
+    type: RuntimeDefault
+__itgraph_container_security:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+
+__itgraph_from_config: {configMapRef: {name: itgraph-config}}
+__itgraph_from_database: {secretRef: {name: itgraph-database}}
+__itgraph_from_telegram: {secretRef: {name: itgraph-telegram}}
+__itgraph_from_bot: {secretRef: {name: itgraph-bot}}
+__itgraph_from_metrics: {secretRef: {name: itgraph-metrics}}
+__itgraph_from_offsite: {secretRef: {name: itgraph-offsite}}
+__itgraph_from_youtube: {secretRef: {name: itgraph-youtube}}
+
+__itgraph_tmp_mount: {name: tmp, mountPath: /tmp}
+__itgraph_tmp_volume: {name: tmp, emptyDir: {sizeLimit: 1Gi}}
+__itgraph_session_mount: {name: session, mountPath: /session}
+__itgraph_session_volume: {name: session, persistentVolumeClaim: {claimName: itgraph-session}}
+__itgraph_backups_mount: {name: backups, mountPath: /backups}
+__itgraph_backups_volume: {name: backups, persistentVolumeClaim: {claimName: itgraph-backups}}
+
+# What a pod may reach, by label: database, telegram, internet. Nothing else
+# leaves a pod but DNS (templates/network-policies.yaml.j2).
+__itgraph_may_reach_database: {"itgraph/database": "true"}
+__itgraph_may_reach_proxy: {"itgraph/telegram": "true"}
+__itgraph_may_reach_internet: {"itgraph/internet": "true"}
+
+# The collector's pod, the one the Deployment runs and the one tried where
+# collection is off: one definition, so that what is tried is what would run.
+__itgraph_watch_labels: "{{ {'app': 'itgraph-watch'} | combine(__itgraph_may_reach_database, __itgraph_may_reach_proxy) }}"
+__itgraph_watch_spec:
+  terminationGracePeriodSeconds: 90
+  automountServiceAccountToken: false
+  securityContext: "{{ __itgraph_pod_security }}"
+  containers:
+    - name: itgraph
+      image: "{{ itgraph_image }}"
+      args: [watch]
+      envFrom:
+        - "{{ __itgraph_from_config }}"
+        - "{{ __itgraph_from_database }}"
+        - "{{ __itgraph_from_telegram }}"
+      securityContext: "{{ __itgraph_container_security }}"
+      resources:
+        requests: {cpu: 50m, memory: 256Mi}
+        limits: {memory: 512Mi}
+      volumeMounts:
+        - "{{ __itgraph_session_mount }}"
+        - "{{ __itgraph_tmp_mount }}"
+  volumes:
+    - "{{ __itgraph_session_volume }}"
+    - "{{ __itgraph_tmp_volume }}"
+
+__itgraph_bot_labels: "{{ {'app': 'itgraph-bot'} | combine(__itgraph_may_reach_database, __itgraph_may_reach_internet) }}"
+__itgraph_bot_spec:
+  automountServiceAccountToken: false
+  securityContext: "{{ __itgraph_pod_security }}"
+  containers:
+    - name: itgraph
+      image: "{{ itgraph_image }}"
+      args: [bot]
+      envFrom:
+        - "{{ __itgraph_from_config }}"
+        - "{{ __itgraph_from_bot }}"
+      securityContext: "{{ __itgraph_container_security }}"
+      resources:
+        requests: {cpu: 20m, memory: 256Mi}
+        limits: {memory: 512Mi}
+      volumeMounts:
+        - "{{ __itgraph_tmp_mount }}"
+  volumes:
+    - "{{ __itgraph_tmp_volume }}"
+
+__itgraph_metrics_labels: "{{ {'app': 'itgraph-metrics'} | combine(__itgraph_may_reach_database) }}"
+__itgraph_metrics_spec:
+  automountServiceAccountToken: false
+  securityContext: "{{ __itgraph_pod_security }}"
+  containers:
+    - name: itgraph
+      image: "{{ itgraph_image }}"
+      args: [metrics]
+      envFrom:
+        - "{{ __itgraph_from_config }}"
+        - "{{ __itgraph_from_metrics }}"
+      ports:
+        - {name: metrics, containerPort: 9090}
+      readinessProbe:
+        tcpSocket: {port: metrics}
+      securityContext: "{{ __itgraph_container_security }}"
+      resources:
+        requests: {cpu: 10m, memory: 96Mi}
+        limits: {memory: 256Mi}
+      volumeMounts:
+        - "{{ __itgraph_tmp_mount }}"
+  volumes:
+    - "{{ __itgraph_tmp_volume }}"
+
+__itgraph_job_resources:
+  requests: {cpu: 100m, memory: 256Mi}
+  limits: {memory: 1Gi}
+__itgraph_heavy_job_resources:
+  requests: {cpu: 100m, memory: 256Mi}
+  limits: {memory: 2Gi}
+
+# Each scheduled pass. Every job: this time zone, Forbid, no retry, since a failed
+# run is retried by the next firing, and a deadline that ends a stuck run, so
+# Forbid cannot block every later one. The daily deadlines let a run missed while
+# the node was down start when it is back, the same day.
+#
+# Detection is one job of two sibling containers: `alerts` never runs on edges a
+# failed `derive` would have left stale, and `score`, which reads no edge, does
+# not stop when `derive` fails. The job fails if either does.
+__itgraph_cronjobs_always:
+  - name: itgraph-detect
+    schedule: "{{ itgraph_detect_schedule }}"
+    starting_deadline: 600
+    active_deadline: 3000
+    labels: "{{ __itgraph_may_reach_database }}"
+    containers:
+      - name: alerts
+        command: [sh, -c, itgraph derive && itgraph alerts]
+        env_from: ["{{ __itgraph_from_config }}", "{{ __itgraph_from_database }}"]
+        resources: "{{ __itgraph_job_resources }}"
+      - name: score
+        args: [score]
+        env_from: ["{{ __itgraph_from_config }}", "{{ __itgraph_from_database }}"]
+        resources: "{{ __itgraph_job_resources }}"
+    mounts: []
+    volumes: []
+  - name: itgraph-baselines
+    schedule: "{{ itgraph_baselines_schedule }}"
+    starting_deadline: 82800
+    active_deadline: 10800
+    labels: "{{ __itgraph_may_reach_database }}"
+    containers:
+      - name: itgraph
+        args: [baselines]
+        env_from: ["{{ __itgraph_from_config }}", "{{ __itgraph_from_database }}"]
+        # The heaviest pass: the fit holds every channel's history at once.
+        resources: "{{ __itgraph_heavy_job_resources }}"
+    mounts: []
+    volumes: []
+  - name: itgraph-backup
+    schedule: "{{ itgraph_backup_schedule }}"
+    starting_deadline: 10800
+    active_deadline: 7200
+    labels: >-
+      {{ __itgraph_may_reach_database
+         | combine(__itgraph_may_reach_internet if __itgraph_has_offsite | bool else {}) }}
+    containers:
+      - name: itgraph
+        args: [backup]
+        env_from: >-
+          {{ [__itgraph_from_config, __itgraph_from_database]
+             + ([__itgraph_from_offsite] if __itgraph_has_offsite | bool else []) }}
+        resources: "{{ __itgraph_job_resources }}"
+    mounts: ["{{ __itgraph_backups_mount }}"]
+    volumes: ["{{ __itgraph_backups_volume }}"]
+__itgraph_youtube_labels: "{{ __itgraph_may_reach_database | combine(__itgraph_may_reach_internet) }}"
+__itgraph_youtube_env: ["{{ __itgraph_from_config }}", "{{ __itgraph_from_database }}", "{{ __itgraph_from_youtube }}"]
+__itgraph_cronjobs_youtube:
+  - name: itgraph-yt-watch
+    schedule: "{{ itgraph_yt_watch_schedule }}"
+    starting_deadline: 600
+    # Ten minutes: a pass is minutes of work at most, and under Forbid a stuck
+    # one left for fifty would cost the three passes after it.
+    active_deadline: 600
+    labels: "{{ __itgraph_youtube_labels }}"
+    containers:
+      - name: itgraph
+        args: [yt, watch]
+        env_from: "{{ __itgraph_youtube_env }}"
+        resources: "{{ __itgraph_job_resources }}"
+    mounts: []
+    volumes: []
+  - name: itgraph-yt-refresh
+    schedule: "{{ itgraph_yt_refresh_schedule }}"
+    starting_deadline: 82800
+    active_deadline: 10800
+    labels: "{{ __itgraph_youtube_labels }}"
+    containers:
+      - name: itgraph
+        args: [yt, refresh]
+        env_from: "{{ __itgraph_youtube_env }}"
+        resources: "{{ __itgraph_job_resources }}"
+    mounts: []
+    volumes: []
+__itgraph_cronjobs_walk:
+  - name: itgraph-yt-backfill
+    schedule: "{{ itgraph_yt_backfill_schedule }}"
+    starting_deadline: 82800
+    # Fifty minutes: a walk of 500 channels is estimated at 11 to 21.
+    active_deadline: 3000
+    labels: "{{ __itgraph_youtube_labels }}"
+    containers:
+      - name: itgraph
+        args: [yt, backfill]
+        env_from: "{{ __itgraph_youtube_env }}"
+        resources: "{{ __itgraph_job_resources }}"
+    mounts: []
+    volumes: []
+__itgraph_cronjobs: >-
+  {{ __itgraph_cronjobs_always
+     + (__itgraph_cronjobs_youtube if __itgraph_has_youtube | bool else [])
+     + (__itgraph_cronjobs_walk
+        if __itgraph_has_youtube | bool and itgraph_youtube_backfill_enabled | bool else []) }}
+
+# What the path this role replaced left, and any object that has since left the
+# templates: deleted by name, never by pruning, since pruning is one label mistake
+# away from deleting a volume claim.
+__itgraph_retired:
+  - [deployment, itgraph-console]
+  - [cronjob, itgraph-alerts]
+  - [cronjob, itgraph-score]
+  - [secret, itgraph-env]
+  - [networkpolicy, deny-all-ingress]
+__itgraph_retired_youtube: >-
+  {{ ([['cronjob', 'itgraph-yt-watch'], ['cronjob', 'itgraph-yt-refresh'], ['secret', 'itgraph-youtube']]
+      if not (__itgraph_has_youtube | bool) else [])
+     + ([['cronjob', 'itgraph-yt-backfill']]
+        if not (__itgraph_has_youtube | bool and itgraph_youtube_backfill_enabled | bool) else [])
+     + ([['secret', 'itgraph-offsite']] if not (__itgraph_has_offsite | bool) else []) }}

@@ -1,0 +1,202 @@
+# What the path the role replaced left in a namespace, in the shape that matters to a
+# takeover: the same names, selectors and claims, the same field manager, a database
+# started as root with a writable root, and workloads without the role's labels. The
+# collector and the bot only sleep here, since nothing about what they do is at stake.
+# NAMESPACE, CLASS, IMAGE and POSTGRES_IMAGE are filled in by e2e.sh. Nothing is real.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: NAMESPACE
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-all-ingress
+  namespace: NAMESPACE
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: itgraph-postgres
+  namespace: NAMESPACE
+spec:
+  podSelector:
+    matchLabels: {app: itgraph-postgres}
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{podSelector: {}}]
+      ports: [{protocol: TCP, port: 5432}]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: itgraph-database, namespace: NAMESPACE}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: CLASS
+  resources: {requests: {storage: 20Gi}}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: itgraph-backups, namespace: NAMESPACE}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: CLASS
+  resources: {requests: {storage: 20Gi}}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: itgraph-session, namespace: NAMESPACE}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: CLASS
+  resources: {requests: {storage: 1Gi}}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: itgraph-postgres, namespace: NAMESPACE}
+type: Opaque
+stringData:
+  POSTGRES_USER: itgraph
+  POSTGRES_PASSWORD: fakeOldOwnerPassword
+  POSTGRES_DB: itgraph
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: itgraph-env, namespace: NAMESPACE}
+type: Opaque
+stringData:
+  DATABASE_URL: postgresql+asyncpg://itgraph:fakeOldOwnerPassword@itgraph-postgres:5432/itgraph
+  POSTGRES_CONTAINER: ""
+  BACKUP_DIR: /backups
+  TZ: Europe/Moscow
+  TELEGRAM_API_ID: "30507090"
+  TELEGRAM_API_HASH: fakeApiHashSetE
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: itgraph-postgres, namespace: NAMESPACE}
+spec:
+  serviceName: itgraph-postgres
+  replicas: 1
+  selector:
+    matchLabels: {app: itgraph-postgres}
+  template:
+    metadata:
+      labels: {app: itgraph-postgres}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: postgres
+          image: POSTGRES_IMAGE
+          env:
+            - {name: TZ, value: Europe/Moscow}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+          envFrom: [{secretRef: {name: itgraph-postgres}}]
+          args: [postgres, -c, shared_buffers=512MB]
+          readinessProbe:
+            exec: {command: [pg_isready, -U, itgraph, -d, itgraph]}
+            periodSeconds: 5
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: itgraph-database}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: itgraph-postgres, namespace: NAMESPACE}
+spec:
+  type: ClusterIP
+  selector: {app: itgraph-postgres}
+  ports: [{port: 5432, targetPort: 5432}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: itgraph-watch, namespace: NAMESPACE}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: itgraph-watch}
+  template:
+    metadata:
+      labels: {app: itgraph-watch, itgraph/telegram: "true"}
+    spec:
+      terminationGracePeriodSeconds: 90
+      automountServiceAccountToken: false
+      containers:
+        - {name: itgraph, image: IMAGE, command: [sleep, infinity]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: itgraph-bot, namespace: NAMESPACE}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: itgraph-bot}
+  template:
+    metadata:
+      labels: {app: itgraph-bot}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - {name: itgraph, image: IMAGE, command: [sleep, infinity]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: itgraph-console, namespace: NAMESPACE}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: itgraph-console}
+  template:
+    metadata:
+      labels: {app: itgraph-console, itgraph/telegram: "true"}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: itgraph
+          image: IMAGE
+          command: [sleep, infinity]
+          envFrom: [{secretRef: {name: itgraph-env}}]
+          volumeMounts:
+            - {name: session, mountPath: /session}
+            - {name: backups, mountPath: /backups}
+      volumes:
+        - name: session
+          persistentVolumeClaim: {claimName: itgraph-session}
+        - name: backups
+          persistentVolumeClaim: {claimName: itgraph-backups}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: itgraph-alerts, namespace: NAMESPACE}
+spec:
+  schedule: "2-59/15 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - {name: itgraph, image: IMAGE, command: [sleep, "1"]}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: itgraph-score, namespace: NAMESPACE}
+spec:
+  schedule: "8-59/15 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - {name: itgraph, image: IMAGE, command: [sleep, "1"]}

@@ -1,0 +1,48 @@
+---
+# Whether the collector is really collecting: a poll newer than its start, which only
+# working MTProto through the exit can produce. Inside quiet hours it polls nothing, so
+# this cannot be known, and the report says so rather than passing it.
+
+- name: Work out whether these are quiet hours
+  ansible.builtin.set_fact:
+    __itgraph_hour_here: "{{ __itgraph_now_hour | default(lookup('ansible.builtin.pipe', 'TZ=' ~ itgraph_timezone ~ ' date +%H')) | int }}"
+
+- name: Note that polls could not be checked
+  ansible.builtin.set_fact:
+    __itgraph_polls_report: "could not be checked: quiet hours until {{ itgraph_quiet_to_hour }}:00 {{ itgraph_timezone }}"
+  when: __itgraph_hour_here | int >= itgraph_quiet_from_hour and __itgraph_hour_here | int < itgraph_quiet_to_hour
+
+- name: See polls advance
+  when: __itgraph_hour_here | int < itgraph_quiet_from_hour or __itgraph_hour_here | int >= itgraph_quiet_to_hour
+  block:
+    - name: Read when the collector started
+      ansible.builtin.command:
+        argv: >-
+          {{ __itgraph_in_namespace + ['get', 'pods', '-l', 'app=itgraph-watch',
+             '-o', 'jsonpath={.items[0].status.containerStatuses[0].state.running.startedAt}'] }}
+      register: __itgraph_watch_started
+      changed_when: false
+
+    - name: Wait for a poll newer than its start
+      ansible.builtin.command:
+        argv: >-
+          {{ __itgraph_psql_query + ["SELECT count(*) FROM poll_state WHERE last_polled_at > '"
+             ~ __itgraph_watch_started.stdout | trim ~ "'::timestamptz"] }}
+      register: __itgraph_polls_newer
+      until: __itgraph_polls_newer.stdout | trim | int > 0
+      retries: "{{ __itgraph_polls_retries | default(30) }}"
+      delay: "{{ __itgraph_polls_delay | default(10) }}"
+      changed_when: false
+      failed_when: false
+
+    - name: Assert polls advance
+      ansible.builtin.assert:
+        that: __itgraph_polls_newer.stdout | trim | int > 0
+        fail_msg: >-
+          The collector has concluded no poll since it started, five minutes ago, outside quiet hours. Its log:
+          `kubectl -n {{ itgraph_namespace }} logs deployment/itgraph-watch`.
+        quiet: true
+
+    - name: Note that polls advance
+      ansible.builtin.set_fact:
+        __itgraph_polls_report: advancing

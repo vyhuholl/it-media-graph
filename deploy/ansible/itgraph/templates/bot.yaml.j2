@@ -1,0 +1,20 @@
+# The alert bot. Recreate, like the collector: one poller per bot token. No session
+# volume and no way to the proxy: it speaks the Bot API, from the host's address.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: itgraph-bot
+  namespace: {{ itgraph_namespace | to_json }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: itgraph-bot
+  template:
+    metadata:
+      labels: {{ __itgraph_bot_labels | to_json }}
+      annotations:
+        itgraph/config-checksum: {{ __itgraph_checksums.bot | to_json }}
+    spec: {{ __itgraph_bot_spec | to_json }}

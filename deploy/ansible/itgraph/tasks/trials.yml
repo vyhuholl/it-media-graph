@@ -1,0 +1,134 @@
+---
+# Real writes through the running service, under its read-only root, each read back by
+# rows: a route answering proves nothing, and a pass over an empty table less.
+
+- name: Count the baseline runs
+  ansible.builtin.command:
+    argv: "{{ __itgraph_psql_query + ['SELECT count(*) FROM baseline_runs WHERE completed_at IS NOT NULL'] }}"
+  register: __itgraph_runs_before
+  changed_when: false
+
+- name: Run a baseline refresh
+  ansible.builtin.include_tasks: one_shot.yml
+  vars:
+    __itgraph_shot:
+      name: itgraph-trial-baselines
+      labels: "{{ __itgraph_may_reach_database }}"
+      spec:
+        restartPolicy: Never
+        activeDeadlineSeconds: 3600
+        automountServiceAccountToken: false
+        securityContext: "{{ __itgraph_pod_security }}"
+        containers:
+          - name: itgraph
+            image: "{{ itgraph_image }}"
+            args: [baselines]
+            envFrom:
+              - "{{ __itgraph_from_config }}"
+              - "{{ __itgraph_from_database }}"
+            securityContext: "{{ __itgraph_container_security }}"
+            resources: "{{ __itgraph_heavy_job_resources }}"
+            volumeMounts: ["{{ __itgraph_tmp_mount }}"]
+        volumes: ["{{ __itgraph_tmp_volume }}"]
+
+- name: Keep how the refresh ended
+  ansible.builtin.set_fact:
+    __itgraph_baseline_trial: "{{ __itgraph_shot_result }}"
+
+- name: Count the baseline runs again
+  ansible.builtin.command:
+    argv: "{{ __itgraph_psql_query + ['SELECT count(*) FROM baseline_runs WHERE completed_at IS NOT NULL'] }}"
+  register: __itgraph_runs_after
+  changed_when: false
+
+- name: Assert the refresh wrote its run
+  ansible.builtin.assert:
+    that:
+      - __itgraph_baseline_trial.phase == 'Succeeded'
+      - __itgraph_runs_after.stdout | trim | int == (__itgraph_runs_before.stdout | trim | int) + 1
+    fail_msg: "The baseline refresh wrote no run on the restored data: {{ __itgraph_baseline_trial.logs | truncate(800) }}"
+    quiet: true
+
+- name: Run a full dump
+  ansible.builtin.include_tasks: one_shot.yml
+  vars:
+    __itgraph_shot:
+      name: itgraph-trial-backup
+      labels: "{{ __itgraph_may_reach_database }}"
+      spec:
+        restartPolicy: Never
+        activeDeadlineSeconds: 3600
+        automountServiceAccountToken: false
+        securityContext: "{{ __itgraph_pod_security }}"
+        containers:
+          - name: itgraph
+            image: "{{ itgraph_image }}"
+            args: [backup, --full]
+            envFrom:
+              - "{{ __itgraph_from_config }}"
+              - "{{ __itgraph_from_database }}"
+            securityContext: "{{ __itgraph_container_security }}"
+            resources: "{{ __itgraph_job_resources }}"
+            volumeMounts:
+              - "{{ __itgraph_tmp_mount }}"
+              - "{{ __itgraph_backups_mount }}"
+        volumes:
+          - "{{ __itgraph_tmp_volume }}"
+          - "{{ __itgraph_backups_volume }}"
+
+- name: Assert the dump was made and read back
+  ansible.builtin.assert:
+    that:
+      - __itgraph_shot_result.phase == 'Succeeded'
+      - __itgraph_shot_result.logs is search('full-[0-9TZ]+[.]dump')
+    fail_msg: "No dump was made of the restored data: {{ __itgraph_shot_result.logs | truncate(800) }}"
+    quiet: true
+
+- name: Work out whether the bot may speak now
+  ansible.builtin.set_fact:
+    __itgraph_hour_here: "{{ __itgraph_now_hour | default(lookup('ansible.builtin.pipe', 'TZ=' ~ itgraph_timezone ~ ' date +%H')) | int }}"
+
+- name: Note that the alert could not be proven
+  ansible.builtin.set_fact:
+    __itgraph_alert_report: "could not be proven: the bot holds alerts until {{ itgraph_quiet_to_hour }}:00 {{ itgraph_timezone }}"
+  when: __itgraph_hour_here | int >= itgraph_quiet_from_hour and __itgraph_hour_here | int < itgraph_quiet_to_hour
+
+- name: Deliver an alert through the bot
+  when: __itgraph_hour_here | int < itgraph_quiet_from_hour or __itgraph_hour_here | int >= itgraph_quiet_to_hour
+  block:
+    - name: Raise a synthetic alert on the newest post of a seed
+      ansible.builtin.command:
+        argv: "{{ __itgraph_psql_query + [__itgraph_raise_alert] }}"
+      vars:
+        __itgraph_raise_alert: >-
+          INSERT INTO alerts (kind, channel_id, msg_id, band, value, raised_at)
+          SELECT 'views_spike', r.channel_id, r.msg_id, 2147483647, 9.9, now()
+          FROM raw_messages r JOIN channels c ON c.tg_id = r.channel_id
+          WHERE c.status = 'seed' AND c.username IS NOT NULL
+          ORDER BY r.fetched_at DESC LIMIT 1
+          ON CONFLICT DO NOTHING RETURNING id
+      register: __itgraph_trial_alert
+      changed_when: true
+
+    - name: Wait for the bot to deliver it
+      ansible.builtin.command:
+        argv: >-
+          {{ __itgraph_psql_query + ['SELECT count(*) FROM alerts WHERE band = 2147483647 AND delivered_at IS NOT NULL'] }}
+      register: __itgraph_trial_delivered
+      until: __itgraph_trial_delivered.stdout | trim | int > 0
+      retries: "{{ __itgraph_trial_retries | default(30) }}"
+      delay: "{{ __itgraph_trial_delay | default(10) }}"
+      changed_when: false
+      failed_when: false
+
+    - name: Assert it was delivered
+      ansible.builtin.assert:
+        that: __itgraph_trial_delivered.stdout | trim | int > 0
+        fail_msg: >-
+          The bot delivered no alert in five minutes. Its log: `kubectl -n {{ itgraph_namespace }} logs
+          deployment/itgraph-bot`; its token and chat are this environment's own.
+        quiet: true
+
+    - name: Note the delivery
+      ansible.builtin.set_fact:
+        __itgraph_alert_report: an alert, to this environment's own chat

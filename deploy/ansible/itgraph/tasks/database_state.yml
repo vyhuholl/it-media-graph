@@ -1,0 +1,129 @@
+---
+# What the database holds, and what the deployed image would have it hold, asked
+# before anything changes. Each query fails on an error rather than reading it as an
+# empty answer: zero channels must never be a conclusion from a probe that could not
+# see them. Only a missing table counts as empty.
+
+- name: Look for the database
+  ansible.builtin.command:
+    argv: "{{ __itgraph_in_namespace + ['get', 'statefulset', 'itgraph-postgres', '-o', 'name', '--ignore-not-found'] }}"
+  register: __itgraph_database_found
+  changed_when: false
+
+- name: Read the database's state
+  when: __itgraph_database_found.stdout | length > 0
+  block:
+    - name: Is there a channels table
+      ansible.builtin.command:
+        argv: "{{ __itgraph_psql_query + [\"SELECT to_regclass('public.channels') IS NULL\"] }}"
+      register: __itgraph_channels_missing
+      changed_when: false
+      failed_when: __itgraph_channels_missing.rc != 0 or __itgraph_channels_missing.stdout | trim not in ['t', 'f']
+
+    - name: How many channels are here
+      ansible.builtin.command:
+        argv: "{{ __itgraph_psql_query + ['SELECT count(*) FROM channels'] }}"
+      register: __itgraph_channels_counted
+      changed_when: false
+      when: __itgraph_channels_missing.stdout | trim == 'f'
+
+    # An interrupted restore leaves columns pointing at types that no longer exist,
+    # and every query touching one fails with a message naming nothing useful.
+    - name: Do columns reference a type that is gone
+      ansible.builtin.command:
+        argv: "{{ __itgraph_psql_query + [__itgraph_dangling_query] }}"
+      vars:
+        __itgraph_dangling_query: >-
+          SELECT count(*) FROM pg_attribute a
+          JOIN pg_class c ON c.oid = a.attrelid AND c.relkind = 'r'
+          JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = 'public'
+          WHERE a.attnum > 0 AND NOT a.attisdropped
+          AND NOT EXISTS (SELECT 1 FROM pg_type t WHERE t.oid = a.atttypid)
+      register: __itgraph_dangling
+      changed_when: false
+
+    - name: Keep how many channels are here
+      ansible.builtin.set_fact:
+        __itgraph_channel_count: >-
+          {{ 0 if __itgraph_channels_missing.stdout | trim == 't'
+             else __itgraph_channels_counted.stdout | trim | int }}
+
+    - name: Assert the database is whole
+      ansible.builtin.assert:
+        that: __itgraph_channel_count | int == 0 or __itgraph_dangling.stdout | trim | int == 0
+        fail_msg: >-
+          {{ __itgraph_dangling.stdout | trim }} column(s) reference a type that no longer exists, in a
+          database holding {{ __itgraph_channel_count }} channels: the sign of a restore that did not
+          finish. Nothing has been migrated or restarted. Restore from this host's own backups by hand:
+          deploy/runbook.md.
+        quiet: true
+
+    - name: Is there a schema version
+      ansible.builtin.command:
+        argv: "{{ __itgraph_psql_query + [\"SELECT to_regclass('public.alembic_version') IS NULL\"] }}"
+      register: __itgraph_version_missing
+      changed_when: false
+      failed_when: __itgraph_version_missing.rc != 0 or __itgraph_version_missing.stdout | trim not in ['t', 'f']
+
+    - name: Which schema version is it
+      ansible.builtin.command:
+        argv: "{{ __itgraph_psql_query + ['SELECT version_num FROM alembic_version'] }}"
+      register: __itgraph_version_read
+      changed_when: false
+      when: __itgraph_version_missing.stdout | trim == 'f'
+
+- name: Keep what was read
+  ansible.builtin.set_fact:
+    __itgraph_database_exists: "{{ __itgraph_database_found.stdout | length > 0 }}"
+    __itgraph_schema_current: >-
+      {{ (__itgraph_version_read.stdout | default('') | trim)
+         if __itgraph_database_found.stdout | length > 0 and __itgraph_version_missing.stdout | trim == 'f'
+         else '' }}
+    __itgraph_channel_count: "{{ __itgraph_channel_count | default(0) }}"
+
+# The image knows its own revisions. Asked of a pod of the deployed image, which
+# needs no database for this and is given none. It is also the first pull of a new
+# image, ahead of anything being stopped.
+- name: Ask the image for its revisions
+  ansible.builtin.include_tasks: one_shot.yml
+  vars:
+    __itgraph_shot:
+      name: itgraph-check-revisions
+      spec:
+        restartPolicy: Never
+        activeDeadlineSeconds: 300
+        automountServiceAccountToken: false
+        securityContext: "{{ __itgraph_pod_security }}"
+        containers:
+          - name: itgraph
+            image: "{{ itgraph_image }}"
+            command: [alembic, history]
+            securityContext: "{{ __itgraph_container_security }}"
+            resources: "{{ __itgraph_job_resources }}"
+            volumeMounts: ["{{ __itgraph_tmp_mount }}"]
+        volumes: ["{{ __itgraph_tmp_volume }}"]
+
+- name: Assert the image answered
+  ansible.builtin.assert:
+    that:
+      - __itgraph_shot_result.phase == 'Succeeded'
+      - __itgraph_shot_result.logs is search('[(]head[)]')
+    fail_msg: "The image did not name its revisions: {{ __itgraph_shot_result.logs | truncate(400) }}"
+    quiet: true
+
+- name: Keep the image's revisions
+  ansible.builtin.set_fact:
+    __itgraph_schema_head: "{{ __itgraph_shot_result.logs | regex_search('-> ([0-9A-Za-z_]+) [(]head[)]', '\\1') | first }}"
+    __itgraph_schema_known: "{{ __itgraph_shot_result.logs | regex_findall('-> ([0-9A-Za-z_]+)') }}"
+
+- name: Assert the schema is not ahead of the image
+  ansible.builtin.assert:
+    that: __itgraph_schema_current | length == 0 or __itgraph_schema_current in __itgraph_schema_known
+    fail_msg: >-
+      The schema is at {{ __itgraph_schema_current }}, which the deployed image, at
+      {{ __itgraph_schema_head }}, does not know. Nothing has been changed: deploy a release that does.
+    quiet: true
+
+- name: Decide whether the schema is behind
+  ansible.builtin.set_fact:
+    __itgraph_schema_behind: "{{ __itgraph_schema_current != __itgraph_schema_head }}"

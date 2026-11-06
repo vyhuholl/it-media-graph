@@ -1,0 +1,60 @@
+---
+# A rollout reported complete only means a pod exists: a crash-looping one counts as
+# available. So the pods are read before a settling minute and after it, and a restart
+# during it fails the run, here, where the name and the exit are still on the screen.
+# A restart from before this run does not: the collector exits on purpose when it stops
+# making progress, and one such restart last week must not fail every run after it.
+
+- name: Read restarts before settling
+  ansible.builtin.command:
+    argv: "{{ __itgraph_in_namespace + ['get', 'pods', '-l', 'app=' ~ item, '-o', 'json'] }}"
+  register: __itgraph_restarts_before
+  changed_when: false
+  loop: "{{ __itgraph_long_running }}"
+
+- name: Let them settle
+  ansible.builtin.pause:
+    seconds: "{{ __itgraph_settle_seconds | default(60) }}"
+
+- name: Read restarts after settling
+  ansible.builtin.command:
+    argv: "{{ __itgraph_in_namespace + ['get', 'pods', '-l', 'app=' ~ item, '-o', 'json'] }}"
+  register: __itgraph_restarts_after
+  changed_when: false
+  loop: "{{ __itgraph_long_running }}"
+
+- name: Work out what restarted
+  ansible.builtin.set_fact:
+    __itgraph_restless: >-
+      {%- set out = [] -%}
+      {%- for read in __itgraph_restarts_after.results -%}
+      {%-   set before = {} -%}
+      {%-   for pod in (__itgraph_restarts_before.results[loop.index0].stdout | from_json)['items'] -%}
+      {%-     set _ = before.update({pod.metadata.name: (pod.status.containerStatuses | default([{}]))[0].restartCount | default(0)}) -%}
+      {%-   endfor -%}
+      {%-   for pod in (read.stdout | from_json)['items'] -%}
+      {%-     set status = (pod.status.containerStatuses | default([{}]))[0] -%}
+      {%-     set exit = status.lastState.terminated.reason | default('') ~ ' ' ~ status.lastState.terminated.exitCode | default('') -%}
+      {%-     if status.restartCount | default(0) > before.get(pod.metadata.name, 0) -%}
+      {%-       set _ = out.append({'workload': read.item, 'why': pod.metadata.name ~ ' restarted, last exit ' ~ exit}) -%}
+      {%-     elif not status.ready | default(false) -%}
+      {%-       set _ = out.append({'workload': read.item, 'why': pod.metadata.name ~ ' is not ready, last exit ' ~ exit}) -%}
+      {%-     endif -%}
+      {%-   endfor -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Put back what kept restarting, if this run gave it a new template
+  ansible.builtin.command:
+    argv: "{{ __itgraph_in_namespace + ['rollout', 'undo', 'deployment/' ~ item] }}"
+  loop: "{{ __itgraph_restless | map(attribute='workload') | unique | select('in', __itgraph_new_templates | default([])) | list }}"
+  changed_when: true
+  failed_when: false
+
+- name: Assert none of them restarted
+  ansible.builtin.assert:
+    that: __itgraph_restless | length == 0
+    fail_msg: >-
+      {{ __itgraph_restless | map(attribute='why') | join('; ') }}. A rollout reported complete is not proof
+      that it runs: `kubectl -n {{ itgraph_namespace }} logs <pod> --previous` says why.
+    quiet: true

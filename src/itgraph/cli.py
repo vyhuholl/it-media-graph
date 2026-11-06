@@ -856,10 +856,8 @@ def bot() -> None:
     """
     import signal
 
-    from aiogram import Bot
-
     from itgraph.bot.app import run_bot, supervise
-    from itgraph.bot.handlers import BotSender, build_dispatcher
+    from itgraph.bot.handlers import BotSender, build_bot, build_dispatcher
 
     # Inside the body, like every other import that reads the
     # environment: `itgraph --help` has to work on a machine that has no
@@ -892,7 +890,7 @@ def bot() -> None:
 
     async def run() -> None:
         database = Database(url)
-        telegram = Bot(token=token)
+        telegram = build_bot(token)
         stop = asyncio.Event()
         dispatcher = build_dispatcher(database, chat_id)
         try:
@@ -934,6 +932,34 @@ def bot() -> None:
             await telegram.session.close()
             await database.dispose()
         typer.echo(stats.line())
+
+    _run(run())
+
+
+@app.command()
+def metrics() -> None:
+    """Serve the series the shared monitoring reads, on a port of its own.
+
+    Read-only, from what the database already records, so that a stopped
+    collector is measured the same as a working one. Connect it with the
+    `itgraph_metrics` role, which can read nothing else.
+    """
+    import signal
+
+    from itgraph.db.session import Database
+    from itgraph.metrics.serve import serve
+
+    async def run() -> None:
+        database = Database()
+        stop = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for received in (signal.SIGINT, signal.SIGTERM):
+            with suppress(NotImplementedError):
+                loop.add_signal_handler(received, stop.set)
+        try:
+            await serve(database, stop=stop)
+        finally:
+            await database.dispose()
 
     _run(run())
 

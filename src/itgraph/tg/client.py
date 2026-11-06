@@ -60,7 +60,21 @@ def _proxy() -> dict[str, object] | None:
 
 
 def build_client() -> TelegramClient:
-    """Construct the client. Does not connect and does not authorize."""
+    """Construct the client. Does not connect and does not authorize.
+
+    Refuses when the API credentials are absent, which is every workload
+    that holds no Telegram secrets: the sentence names what is missing,
+    where Telethon's own error would name neither setting.
+    """
+    api_id = settings.telegram_api_id
+    api_hash = settings.telegram_api_hash
+    if api_id is None or api_hash is None:
+        raise NotAuthorizedError(
+            "TELEGRAM_API_ID and TELEGRAM_API_HASH are not set, so nothing "
+            "here can connect to Telegram. A workload that holds no Telegram "
+            "credentials is meant not to."
+        )
+
     proxy = _proxy()
     if proxy is None:
         logger.info("Telegram route: direct, no proxy configured")
@@ -80,8 +94,8 @@ def build_client() -> TelegramClient:
 
     return TelegramClient(
         str(settings.telegram_session),
-        settings.telegram_api_id,
-        settings.telegram_api_hash.get_secret_value(),
+        api_id,
+        api_hash.get_secret_value(),
         device_model=settings.device_model,
         system_version=settings.system_version,
         app_version=settings.app_version,

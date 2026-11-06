@@ -1,0 +1,17 @@
+---
+# A check creates nothing, and kubectl diff cannot compare what lies in a namespace
+# that does not exist: a check stops at the namespace there.
+
+- name: Say what a check on a new namespace leaves out
+  ansible.builtin.debug:
+    msg: The namespace {{ itgraph_namespace }} does not exist yet; a run would create it and everything in it, which a check cannot compare.
+  when: __itgraph_namespace_found.stdout | length == 0
+
+- name: Compare each stream
+  ansible.builtin.include_tasks: apply.yml
+  vars:
+    __itgraph_what: "{{ item }}"
+    __itgraph_stream: "{{ __itgraph_streams[item] }}"
+    __itgraph_secret: "{{ item == 'secrets' or item == 'proxy' }}"
+  loop: [foundation, secrets, proxy, postgres, bot, metrics, watch, cronjobs]
+  when: __itgraph_namespace_found.stdout | length > 0

@@ -1,0 +1,51 @@
+---
+# Configuration tied to this repository's code, which moves in the same commit
+# as what needs it. Everything about where the role runs is an input with no
+# default (meta/argument_specs.yml).
+
+itgraph_kubectl: [/usr/local/bin/k3s, kubectl]
+itgraph_rollout_timeout: 300
+itgraph_restore_allowed: false
+
+# The Bot API's address; empty is Telegram's own.
+itgraph_telegram_api: ""
+
+# The off-site store's settings, with itgraph_backup_offsite: b2.
+itgraph_b2_key_id: ""
+itgraph_b2_application_key: ""
+itgraph_b2_bucket_name: ""
+itgraph_backup_age_recipient: ""
+
+itgraph_db_name: itgraph
+itgraph_db_user: itgraph
+itgraph_timezone: Europe/Moscow
+
+# The session's name inside its volume.
+itgraph_session_path: /session/itgraph.session
+
+# The collector's quiet hours, in itgraph_timezone: when it polls nothing, so a
+# run cannot see polls advance. A test holds these to the settings' defaults.
+itgraph_quiet_from_hour: 2
+itgraph_quiet_to_hour: 7
+
+# The z a post's best metric must pass to raise an alert. Measured against this
+# code's scoring: 3.7 gives about eight a day after folding. Here so that it can
+# be moved after `itgraph score --replay --threshold N` says what that would cost.
+itgraph_alert_spike_z: 3.7
+
+# The history walk, on since the mention graph, its first reader. Turned off, a
+# walk run by hand still works, and what it stores expires in 30 days.
+itgraph_youtube_backfill_enabled: true
+
+# The schedules, in itgraph_timezone. A test holds them to the table in the
+# change's design, so a hand edit fails `make validate`.
+itgraph_detect_schedule: "2-59/15 * * * *"
+itgraph_yt_watch_schedule: "*/15 * * * *"
+# Four-hourly, though dumps fall due daily and weekly: a run with nothing due
+# takes four seconds, and it catches up a failed upload within hours.
+itgraph_backup_schedule: "40 */4 * * *"
+itgraph_baselines_schedule: "30 4 * * *"
+itgraph_yt_refresh_schedule: "0 5 * * *"
+# After the Pacific midnight in either season: 10:00 here in summer and 11:00 in
+# winter, so 11:30 is always early in a fresh quota day.
+itgraph_yt_backfill_schedule: "30 11 * * *"

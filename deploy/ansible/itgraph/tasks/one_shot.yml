@@ -1,0 +1,42 @@
+---
+# Runs one pod to its end, reads its logs and deletes it, leaving the outcome in
+# __itgraph_shot_result. Given __itgraph_shot: a name, labels and a pod spec. The
+# spec is bounded by its own activeDeadlineSeconds, so the wait below always ends.
+
+- name: "Clear what a killed run left - {{ __itgraph_shot.name }}"
+  ansible.builtin.command:
+    argv: "{{ __itgraph_in_namespace + ['delete', 'pod', __itgraph_shot.name, '--ignore-not-found'] }}"
+  changed_when: false
+
+- name: "Start the pod - {{ __itgraph_shot.name }}"
+  ansible.builtin.command:
+    argv: "{{ itgraph_kubectl + ['create', '-f', '-'] }}"
+    stdin: "{{ lookup('ansible.builtin.template', 'pod.yaml.j2') }}"
+  changed_when: true
+
+- name: "Wait for it to end - {{ __itgraph_shot.name }}"
+  ansible.builtin.command:
+    argv: "{{ __itgraph_in_namespace + ['get', 'pod', __itgraph_shot.name, '-o', 'jsonpath={.status.phase}'] }}"
+  register: __itgraph_shot_phase
+  until: __itgraph_shot_phase.stdout in ['Succeeded', 'Failed']
+  retries: "{{ (((__itgraph_shot.spec.activeDeadlineSeconds + 30) / [__itgraph_shot_poll | default(2), 1] | max) | int) + 1 }}"
+  delay: "{{ __itgraph_shot_poll | default(2) }}"
+  changed_when: false
+
+- name: "Read what it logged - {{ __itgraph_shot.name }}"
+  ansible.builtin.command:
+    argv: "{{ __itgraph_in_namespace + ['logs', 'pod/' ~ __itgraph_shot.name, '--all-containers'] }}"
+  register: __itgraph_shot_logs
+  changed_when: false
+  failed_when: false
+
+- name: "Delete it - {{ __itgraph_shot.name }}"
+  ansible.builtin.command:
+    argv: "{{ __itgraph_in_namespace + ['delete', 'pod', __itgraph_shot.name, '--ignore-not-found'] }}"
+  changed_when: false
+
+- name: "Keep what came of it - {{ __itgraph_shot.name }}"
+  ansible.builtin.set_fact:
+    __itgraph_shot_result:
+      phase: "{{ __itgraph_shot_phase.stdout }}"
+      logs: "{{ __itgraph_shot_logs.stdout | default('') }}"

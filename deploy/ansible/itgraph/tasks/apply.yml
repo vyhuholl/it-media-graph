@@ -1,0 +1,33 @@
+---
+# Applies one stream of objects when its diff finds a change: a stream unchanged is
+# not applied, and restarts nothing. In check mode only the diff runs, and --diff
+# shows it, the Secrets' aside. Everything reaches kubectl on stdin, so no value is
+# ever an argument, and pipelining keeps it out of a file on the host.
+
+- name: "Diff {{ __itgraph_what }}"
+  ansible.builtin.command:
+    argv: "{{ __itgraph_diff }}"
+    stdin: "{{ __itgraph_stream }}"
+  register: __itgraph_diffed
+  changed_when: __itgraph_diffed.rc == 1
+  failed_when: __itgraph_diffed.rc > 1
+  check_mode: false
+  no_log: "{{ __itgraph_secret }}"
+
+- name: "Show the diff of {{ __itgraph_what }}"
+  ansible.builtin.debug:
+    msg: "{{ __itgraph_diffed.stdout_lines }}"
+  when: ansible_diff_mode and __itgraph_diffed.rc == 1 and not (__itgraph_secret | bool)
+
+- name: "Apply {{ __itgraph_what }}"
+  ansible.builtin.command:
+    argv: "{{ __itgraph_apply }}"
+    stdin: "{{ __itgraph_stream }}"
+  when: __itgraph_diffed.rc == 1
+  changed_when: true
+  no_log: "{{ __itgraph_secret }}"
+
+- name: "Note the change - {{ __itgraph_what }}"
+  ansible.builtin.set_fact:
+    __itgraph_changed: "{{ __itgraph_changed | default([]) + [__itgraph_what] }}"
+  when: __itgraph_diffed.rc == 1

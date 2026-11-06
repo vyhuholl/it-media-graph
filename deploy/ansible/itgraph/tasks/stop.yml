@@ -1,0 +1,31 @@
+---
+- name: "Read whether it exists - {{ __itgraph_stopping }}"
+  ansible.builtin.command:
+    argv: "{{ __itgraph_in_namespace + ['get', 'deployment', __itgraph_stopping, '-o', 'name', '--ignore-not-found'] }}"
+  register: __itgraph_stopping_found
+  changed_when: false
+
+- name: "Stop it, and mark who stopped it - {{ __itgraph_stopping }}"
+  when: __itgraph_stopping_found.stdout | length > 0
+  block:
+    - name: "Mark it as stopped by the run - {{ __itgraph_stopping }}"
+      ansible.builtin.command:
+        argv: >-
+          {{ __itgraph_in_namespace + ['annotate', 'deployment', __itgraph_stopping, '--overwrite',
+             'itgraph/stopped-by-run=true'] }}
+      changed_when: false
+
+    - name: "Scale it to zero - {{ __itgraph_stopping }}"
+      ansible.builtin.command:
+        argv: "{{ __itgraph_in_namespace + ['scale', 'deployment', __itgraph_stopping, '--replicas=0'] }}"
+      changed_when: true
+
+    # Longer than the collector's 90 seconds of grace, which a poll in flight may take.
+    - name: "Wait for its pods to go - {{ __itgraph_stopping }}"
+      ansible.builtin.command:
+        argv: "{{ __itgraph_in_namespace + ['get', 'pods', '-l', 'app=' ~ __itgraph_stopping, '-o', 'name'] }}"
+      register: __itgraph_stopping_pods
+      until: __itgraph_stopping_pods.stdout | length == 0
+      retries: "{{ __itgraph_stop_retries | default(60) }}"
+      delay: "{{ __itgraph_stop_delay | default(3) }}"
+      changed_when: false

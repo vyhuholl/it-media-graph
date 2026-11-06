@@ -1,0 +1,32 @@
+---
+# Renders the role's objects for one input set into a directory, touching no
+# cluster, for the tests:
+#
+#   ansible-playbook deploy/ansible/render.yml -e inputs=<a set> -e out=<dir>
+
+- name: Render itgraph's objects into a directory
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - "{{ inputs }}"
+  tasks:
+    - name: Check the inputs
+      ansible.builtin.include_role:
+        name: itgraph
+        tasks_from: inputs
+
+    - name: Render the objects
+      ansible.builtin.include_role:
+        name: itgraph
+        tasks_from: render
+
+    - name: Write them out
+      ansible.builtin.copy:
+        content: "{{ item.value }}"
+        dest: "{{ out }}/{{ item.key }}.yaml"
+        mode: "0600"
+      loop: "{{ __itgraph_streams | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      no_log: true

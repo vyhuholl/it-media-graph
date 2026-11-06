@@ -1,0 +1,5 @@
+---
+- name: Release the lock
+  ansible.builtin.command:
+    argv: "{{ __itgraph_in_namespace + ['delete', 'lease', 'itgraph-deploy', '--ignore-not-found'] }}"
+  changed_when: false

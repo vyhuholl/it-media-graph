@@ -1,0 +1,89 @@
+---
+# The address the internet sees, directly and through the proxy, from two pods: the
+# proxy's side cannot go direct, by its labels. This is what catches a proxy that
+# accepts connections and sends them out from the host's own address, in which state
+# the collector's own route line is correct. No address is printed: the exit's is the
+# one the collector's traffic is known to come from.
+
+- name: Read the address direct
+  ansible.builtin.include_tasks: one_shot.yml
+  when: itgraph_telegram_collection | bool
+  vars:
+    __itgraph_shot:
+      name: itgraph-check-direct
+      labels: "{{ __itgraph_may_reach_internet }}"
+      spec:
+        restartPolicy: Never
+        activeDeadlineSeconds: 120
+        automountServiceAccountToken: false
+        securityContext: "{{ __itgraph_pod_security }}"
+        containers:
+          - name: itgraph
+            image: "{{ itgraph_image }}"
+            command: [curl, -fsS, --max-time, "20", "https://api.ipify.org"]
+            securityContext: "{{ __itgraph_container_security }}"
+            resources: "{{ __itgraph_job_resources }}"
+
+- name: Keep the direct reading
+  ansible.builtin.set_fact:
+    __itgraph_direct_address: "{{ __itgraph_shot_result }}"
+  when: itgraph_telegram_collection | bool
+  no_log: true
+
+# The password is expanded by the pod's shell from its environment: never an
+# argument, which a process listing would show.
+- name: Read the address through the proxy
+  ansible.builtin.include_tasks: one_shot.yml
+  vars:
+    __itgraph_shot:
+      name: itgraph-check-proxied
+      labels: "{{ __itgraph_may_reach_proxy }}"
+      spec:
+        restartPolicy: Never
+        activeDeadlineSeconds: 120
+        automountServiceAccountToken: false
+        securityContext: "{{ __itgraph_pod_security }}"
+        containers:
+          - name: itgraph
+            image: "{{ itgraph_image }}"
+            command:
+              - sh
+              - -c
+              - >-
+                ALL_PROXY="socks5://${PROXY_USERNAME}:${PROXY_PASSWORD}@${PROXY_HOST}:${PROXY_PORT}"
+                curl -fsS --max-time 20 https://api.ipify.org
+            envFrom:
+              - "{{ __itgraph_from_telegram }}"
+            securityContext: "{{ __itgraph_container_security }}"
+            resources: "{{ __itgraph_job_resources }}"
+
+- name: Keep the proxied reading
+  ansible.builtin.set_fact:
+    __itgraph_proxied_address: "{{ __itgraph_shot_result }}"
+  no_log: true
+
+- name: Assert the exit is the VPN's
+  ansible.builtin.assert:
+    that:
+      - __itgraph_direct_address.phase == 'Succeeded'
+      - __itgraph_proxied_address.phase == 'Succeeded'
+      - __itgraph_direct_address.logs | trim | length > 0
+      - __itgraph_proxied_address.logs | trim | length > 0
+      - __itgraph_direct_address.logs | trim != __itgraph_proxied_address.logs | trim
+    fail_msg: >-
+      {% if __itgraph_direct_address.phase != 'Succeeded' or __itgraph_proxied_address.phase != 'Succeeded' %}The
+      two readings must both answer: direct {{ __itgraph_direct_address.phase }}, through the proxy
+      {{ __itgraph_proxied_address.phase }}.{% else %}The address seen through the proxy is the host's own: it
+      accepts connections and sends them out directly, the one state the collector's route line cannot
+      catch. Check itgraph_proxy_outbound.{% endif %}
+    quiet: true
+  when: itgraph_telegram_collection | bool
+
+- name: Assert nothing leaves where this environment does not collect
+  ansible.builtin.assert:
+    that: __itgraph_proxied_address.phase == 'Failed'
+    fail_msg: >-
+      A connection through the proxy succeeded, in an environment whose proxy should close every one. Stop
+      and read itgraph_proxy_outbound.
+    quiet: true
+  when: not (itgraph_telegram_collection | bool)

@@ -71,6 +71,9 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `bot/app.py` | Delivery: claim, send, mark. The poll is correctness, the notification is speed |
 | `bot/handlers.py` | The aiogram binding — the only module that imports aiogram or holds the token |
 | `bot/` | Telling the operator. Bot API only: no session, no lease, no collection writes |
+| `metrics/series.py` | What the shared monitoring reads, worked out at scrape time from what is recorded: never a counter in another process, never the big tables, never API data; label values are constants and enums alone |
+| `metrics/serve.py` | The exporter's listener: `GET /metrics` on 9090 and nothing else, with no framework; 503 when the database does not answer |
+| `metrics/` | Telling the shared monitoring how collection is doing. Read-only, under a role that can read nothing else |
 | `db/session.py` | `Database`: engine + session factory |
 | `db/models.py` | SQLAlchemy models, `Base` |
 | `db/channels.py` | The channel inventory: upsert, review, listing, resolution state, and the only place a family is confirmed, rejected or withdrawn |

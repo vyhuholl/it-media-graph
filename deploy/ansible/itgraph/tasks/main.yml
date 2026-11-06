@@ -1,0 +1,32 @@
+---
+# Deploys itgraph into its namespace, or brings it up to date: the one command
+# for both. It never restores data and never writes a Telegram session. In check
+# mode it only shows what it would change.
+
+- name: Check the inputs
+  ansible.builtin.import_tasks: inputs.yml
+
+- name: Render the objects
+  ansible.builtin.import_tasks: render.yml
+
+- name: Apply the namespace
+  ansible.builtin.include_tasks: apply.yml
+  vars:
+    __itgraph_what: the namespace
+    __itgraph_stream: "{{ __itgraph_streams.namespace }}"
+    __itgraph_secret: false
+
+- name: Look for the namespace
+  ansible.builtin.command:
+    argv: "{{ itgraph_kubectl + ['get', 'namespace', itgraph_namespace, '-o', 'name', '--ignore-not-found'] }}"
+  register: __itgraph_namespace_found
+  check_mode: false
+  changed_when: false
+
+- name: Show what a run would change
+  ansible.builtin.include_tasks: check.yml
+  when: ansible_check_mode
+
+- name: Deploy
+  ansible.builtin.include_tasks: deploy.yml
+  when: not ansible_check_mode

@@ -1,0 +1,16 @@
+{% for claim, size in {'itgraph-database': '20Gi', 'itgraph-backups': '20Gi', 'itgraph-session': '1Gi'}.items() %}
+---
+# Never deleted by the deploy: deleting a workload does not touch its claim, and
+# nothing here prunes. A claim can be grown by editing it, never shrunk.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ claim }}
+  namespace: {{ itgraph_namespace | to_json }}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: {{ itgraph_storage_class | to_json }}
+  resources:
+    requests:
+      storage: {{ size }}
+{% endfor %}

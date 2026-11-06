@@ -1,0 +1,32 @@
+# The series the shared monitoring reads, from what the database records, through a
+# role that can read nothing else. On a port no route leads to.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: itgraph-metrics
+  namespace: {{ itgraph_namespace | to_json }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: itgraph-metrics
+  template:
+    metadata:
+      labels: {{ __itgraph_metrics_labels | to_json }}
+      annotations:
+        itgraph/config-checksum: {{ __itgraph_checksums.metrics | to_json }}
+    spec: {{ __itgraph_metrics_spec | to_json }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: itgraph-metrics
+  namespace: {{ itgraph_namespace | to_json }}
+spec:
+  type: ClusterIP
+  selector:
+    app: itgraph-metrics
+  ports:
+    - {name: metrics, port: 9090, targetPort: metrics}

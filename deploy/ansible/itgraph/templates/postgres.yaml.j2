@@ -1,0 +1,112 @@
+# The database, on the claim made once and never touched by a deploy. As uid 999,
+# which already owns everything on the volume, with a read-only root: it writes
+# only below its mount, its socket and lock, and scratch in /tmp.
+#
+# PGDATA is a subdirectory of the mount: the entrypoint refuses to initialize in a
+# non-empty directory, and a mounted filesystem is never empty. Fixed from the
+# first start: moved later, it would leave the cluster behind at the old path and
+# initialize an empty one beside it.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: itgraph-postgres
+  namespace: {{ itgraph_namespace | to_json }}
+spec:
+  serviceName: itgraph-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: itgraph-postgres
+  template:
+    metadata:
+      labels:
+        app: itgraph-postgres
+    spec:
+      # 512 MiB of buffers to write out; the default 30 s risks a kill, and a
+      # crash recovery at the next start.
+      terminationGracePeriodSeconds: 120
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: {{ itgraph_postgres_image | to_json }}
+          env:
+            - name: TZ
+              value: {{ itgraph_timezone | to_json }}
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          envFrom:
+            - secretRef:
+                name: itgraph-postgres
+          args:
+            - postgres
+            - -c
+            - shared_buffers=512MB
+            - -c
+            - work_mem=64MB
+            - -c
+            - maintenance_work_mem=512MB
+            - -c
+            - max_wal_size=4GB
+          ports:
+            - {name: postgres, containerPort: 5432}
+          # Over TCP on the pod's own loopback. While the image initializes a fresh
+          # volume, a temporary server listens on the socket alone, and a probe of
+          # the socket would call that ready, for workloads it would then refuse.
+          readinessProbe:
+            exec:
+              command: [pg_isready, -h, 127.0.0.1, -U, {{ itgraph_db_user | to_json }}, -d, {{ itgraph_db_name | to_json }}]
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 10
+          securityContext: {{ __itgraph_container_security | to_json }}
+          resources:
+            requests: {cpu: 100m, memory: 1Gi}
+            limits: {memory: 2Gi}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+            - {name: run, mountPath: /var/run/postgresql}
+            - {name: tmp, mountPath: /tmp}
+            # Dynamic shared memory is POSIX here: parallel queries use it, and
+            # the runtime's default size is what this was added to avoid.
+            - {name: shm, mountPath: /dev/shm}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: itgraph-database
+        - {name: run, emptyDir: {sizeLimit: 16Mi}}
+        - {name: tmp, emptyDir: {sizeLimit: 1Gi}}
+        - {name: shm, emptyDir: {medium: Memory, sizeLimit: 256Mi}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: itgraph-postgres
+  namespace: {{ itgraph_namespace | to_json }}
+spec:
+  type: ClusterIP
+  selector:
+    app: itgraph-postgres
+  ports:
+    - {port: 5432, targetPort: 5432}
+---
+# The database at a fixed address, where an operator's SSH tunnel ends. The tunnel
+# ends on the node, and Kubernetes admits a pod's own node whatever the policies.
+apiVersion: v1
+kind: Service
+metadata:
+  name: itgraph-postgres-access
+  namespace: {{ itgraph_namespace | to_json }}
+spec:
+  type: ClusterIP
+  clusterIP: {{ itgraph_postgres_access_ip | to_json }}
+  selector:
+    app: itgraph-postgres
+  ports:
+    - {name: postgres, port: 5432, targetPort: 5432}

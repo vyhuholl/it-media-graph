@@ -1,0 +1,42 @@
+---
+# Whether the session is there, without reading it: a pod mounting its volume
+# read-only, which only tests the file. Copied, never created, and nothing here writes
+# it. A session made by `itgraph login` has an empty entity cache, and every seed would
+# be skipped for want of a cached peer.
+
+- name: Look at the session's file
+  ansible.builtin.include_tasks: one_shot.yml
+  vars:
+    __itgraph_shot:
+      name: itgraph-check-session
+      spec:
+        restartPolicy: Never
+        activeDeadlineSeconds: 120
+        automountServiceAccountToken: false
+        securityContext: "{{ __itgraph_pod_security }}"
+        containers:
+          - name: itgraph
+            image: "{{ itgraph_image }}"
+            command:
+              - sh
+              - -c
+              - test -f "$0" && test -s "$0"
+              - "{{ itgraph_session_path }}"
+            securityContext: "{{ __itgraph_container_security }}"
+            resources: "{{ __itgraph_job_resources }}"
+            volumeMounts:
+              - name: session
+                mountPath: /session
+                readOnly: true
+        volumes:
+          - "{{ __itgraph_session_volume }}"
+
+- name: Assert the session is there
+  ansible.builtin.assert:
+    that: __itgraph_shot_result.phase == 'Succeeded'
+    fail_msg: >-
+      No session at {{ itgraph_session_path }} in the session's volume, or it is empty, or not a regular
+      file, and nothing here creates or replaces one. Bring it from where it was collecting, by
+      deploy/runbook.md. Do not create one with `itgraph login`: a new session has an empty entity cache,
+      and every seed channel would be skipped.
+    quiet: true

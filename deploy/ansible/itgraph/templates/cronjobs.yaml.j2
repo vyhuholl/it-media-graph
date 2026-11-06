@@ -1,0 +1,41 @@
+{% for job in __itgraph_cronjobs %}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ job.name }}
+  namespace: {{ itgraph_namespace | to_json }}
+spec:
+  schedule: {{ job.schedule | to_json }}
+  timeZone: {{ itgraph_timezone | to_json }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: {{ job.starting_deadline }}
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: {{ job.active_deadline }}
+      template:
+        metadata:
+          labels: {{ ({'app': job.name} | combine(job.labels)) | to_json }}
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext: {{ __itgraph_pod_security | to_json }}
+          containers:
+{% for container in job.containers %}
+            - name: {{ container.name }}
+              image: {{ itgraph_image | to_json }}
+{% if container.command is defined %}
+              command: {{ container.command | to_json }}
+{% else %}
+              args: {{ container.args | to_json }}
+{% endif %}
+              envFrom: {{ container.env_from | to_json }}
+              securityContext: {{ __itgraph_container_security | to_json }}
+              resources: {{ container.resources | to_json }}
+              volumeMounts: {{ ([__itgraph_tmp_mount] + job.mounts) | to_json }}
+{% endfor %}
+          volumes: {{ ([__itgraph_tmp_volume] + job.volumes) | to_json }}
+{% endfor %}

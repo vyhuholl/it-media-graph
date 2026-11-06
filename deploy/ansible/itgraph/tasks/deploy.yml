@@ -1,0 +1,304 @@
+---
+# A run on a namespace that exists: the order of the change's design, Decision 3.
+
+- name: Take the namespace's lock
+  ansible.builtin.import_tasks: lock.yml
+
+- name: Deploy, holding the lock
+  block:
+    - name: Read whether the collector or the bot was stopped by hand
+      ansible.builtin.command:
+        argv: >-
+          {{ __itgraph_in_namespace + ['get', 'deployment'] + __itgraph_deployments + ['--ignore-not-found', '-o', 'json'] }}
+      register: __itgraph_stopped
+      changed_when: false
+
+    # A new template makes a new revision and scaling does not, so this tells a workload
+    # this run changed from one it only stopped and started: `rollout undo` of the latter
+    # would go to an older template than the one it ran.
+    - name: Keep which revision each workload is at
+      ansible.builtin.set_fact:
+        __itgraph_revisions_before: >-
+          {%- set out = {} -%}
+          {%- for found in (__itgraph_stopped.stdout | default('{"items": []}', true) | from_json)['items'] -%}
+          {%-   set _ = out.update({found.metadata.name: (found.metadata.annotations | default({})).get(__itgraph_revision_key, '')}) -%}
+          {%- endfor -%}
+          {{ out }}
+
+    # Stopped for a command that needs the session. A run must not start it behind the
+    # operator's back: the command holds the lease, and the collector would only crash-loop.
+    - name: Assert neither was stopped by hand
+      ansible.builtin.assert:
+        that: __itgraph_by_hand | length == 0
+        fail_msg: >-
+          {{ __itgraph_by_hand | join(', ') }} scaled to zero by hand. Let the command that needs the session
+          finish, then `scripts/on-host.sh --loop start`, and run again.
+        quiet: true
+      vars:
+        __itgraph_found: "{{ (__itgraph_stopped.stdout | default('{\"items\": []}', true) | from_json)['items'] }}"
+        __itgraph_by_hand: >-
+          {{ __itgraph_found | selectattr('metadata.name', 'in', ['itgraph-watch', 'itgraph-bot'])
+             | selectattr('spec.replicas', 'eq', 0)
+             | rejectattr('metadata.annotations.itgraph/stopped-by-run', 'defined')
+             | map(attribute='metadata.name')
+             | reject('eq', 'itgraph-watch' if not (itgraph_telegram_collection | bool) else '')
+             | list }}
+
+    - name: Read what the storage class does with a released volume
+      ansible.builtin.command:
+        argv: "{{ itgraph_kubectl + ['get', 'storageclass', itgraph_storage_class, '-o', 'jsonpath={.reclaimPolicy}'] }}"
+      register: __itgraph_reclaim
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the storage class keeps a volume's data
+      ansible.builtin.assert:
+        that:
+          - __itgraph_reclaim.rc == 0
+          - __itgraph_reclaim.stdout | trim == 'Retain'
+        fail_msg: >-
+          Storage class {{ itgraph_storage_class }}
+          {{ ('reclaims with ' ~ (__itgraph_reclaim.stdout | trim | default('?', true))) if __itgraph_reclaim.rc == 0
+             else 'could not be read' }}: the database, the session and the dumps need Retain, so that a deleted
+          claim does not take its data with it.
+        quiet: true
+
+    - name: Read the database's state
+      ansible.builtin.import_tasks: database_state.yml
+
+    - name: Compare the database's objects
+      ansible.builtin.command:
+        argv: "{{ __itgraph_diff }}"
+        stdin: "{{ __itgraph_streams.postgres }}"
+      register: __itgraph_postgres_diffed
+      changed_when: false
+      failed_when: __itgraph_postgres_diffed.rc > 1
+
+    - name: Read which passwords are set
+      ansible.builtin.command:
+        argv: "{{ __itgraph_in_namespace + ['get', 'secret', 'itgraph-postgres', '-o', 'json', '--ignore-not-found'] }}"
+      register: __itgraph_password_marks
+      changed_when: false
+      no_log: true
+
+    # The owner's password, and no other role's: everything that writes connects as the
+    # owner, whereas the bot's or the exporter's reaches the one workload that reads it,
+    # which its own template's checksum restarts.
+    - name: Decide whether writers must stop
+      ansible.builtin.set_fact:
+        __itgraph_must_stop: >-
+          {{ __itgraph_database_exists | bool and (
+               __itgraph_postgres_diffed.rc == 1
+               or __itgraph_schema_behind | bool
+               or __itgraph_owner_mark != (itgraph_postgres_password | hash('sha256'))) }}
+      vars:
+        __itgraph_marks_read: >-
+          {{ (__itgraph_password_marks.stdout | default('{}', true) | from_json).metadata.annotations | default({}) }}
+        __itgraph_owner_mark: "{{ __itgraph_marks_read.get('itgraph/password-owner', '') }}"
+      no_log: true
+
+    - name: Stop what writes
+      ansible.builtin.include_tasks: quiesce.yml
+      when: __itgraph_must_stop | bool
+
+    - name: Apply the claims, the policies and the configuration
+      ansible.builtin.include_tasks: apply.yml
+      vars:
+        __itgraph_what: foundation
+        __itgraph_stream: "{{ __itgraph_streams.foundation }}"
+        __itgraph_secret: false
+
+    - name: Apply the Secrets
+      ansible.builtin.include_tasks: apply.yml
+      vars:
+        __itgraph_what: secrets
+        __itgraph_stream: "{{ __itgraph_streams.secrets }}"
+        __itgraph_secret: true
+
+    - name: Apply the proxy
+      ansible.builtin.include_tasks: apply.yml
+      vars:
+        __itgraph_what: proxy
+        __itgraph_stream: "{{ __itgraph_streams.proxy }}"
+        __itgraph_secret: true
+
+    - name: Follow the proxy
+      ansible.builtin.include_tasks: rollout.yml
+      vars:
+        __itgraph_workload: deployment/itgraph-proxy
+
+    - name: Check the exit
+      ansible.builtin.import_tasks: exit_check.yml
+
+    - name: Apply the database
+      ansible.builtin.include_tasks: apply.yml
+      vars:
+        __itgraph_what: postgres
+        __itgraph_stream: "{{ __itgraph_streams.postgres }}"
+        __itgraph_secret: false
+
+    - name: Wait for the database to answer
+      ansible.builtin.command:
+        argv: >-
+          {{ __itgraph_in_namespace + ['rollout', 'status', 'statefulset/itgraph-postgres',
+             '--timeout=' ~ itgraph_rollout_timeout ~ 's'] }}
+      register: __itgraph_database_rolled
+      changed_when: false
+      failed_when: false
+
+    # Not put back from here: a StatefulSet's undo leaves a stuck pod in place, and what
+    # is wrong with a database is for a person to read before anything else touches it.
+    - name: Stop when the database did not come up
+      ansible.builtin.fail:
+        msg: >-
+          The database did not come up in {{ itgraph_rollout_timeout }} seconds, and this run does not put it
+          back. Until it answers, a run stops at reading its state: deploy/runbook.md, «База не поднялась».
+      when: __itgraph_database_rolled.rc != 0
+
+    - name: Set the owner's password
+      ansible.builtin.include_tasks: password.yml
+      vars:
+        __itgraph_role: "{{ __itgraph_passwords[0] }}"
+
+    - name: Bring the schema to head
+      ansible.builtin.import_tasks: migrate.yml
+
+    - name: Set the other roles' passwords
+      ansible.builtin.include_tasks: password.yml
+      loop: "{{ __itgraph_passwords[1:] }}"
+      loop_control:
+        loop_var: __itgraph_role
+        label: "{{ __itgraph_role.key }}"
+
+    - name: Apply the bot
+      ansible.builtin.include_tasks: apply.yml
+      vars:
+        __itgraph_what: bot
+        __itgraph_stream: "{{ __itgraph_streams.bot }}"
+        __itgraph_secret: false
+
+    - name: Follow the bot
+      ansible.builtin.include_tasks: rollout.yml
+      vars:
+        __itgraph_workload: deployment/itgraph-bot
+
+    - name: Apply the exporter
+      ansible.builtin.include_tasks: apply.yml
+      vars:
+        __itgraph_what: metrics
+        __itgraph_stream: "{{ __itgraph_streams.metrics }}"
+        __itgraph_secret: false
+
+    - name: Follow the exporter
+      ansible.builtin.include_tasks: rollout.yml
+      vars:
+        __itgraph_workload: deployment/itgraph-metrics
+
+    - name: Check the session
+      ansible.builtin.include_tasks: session_gate.yml
+      when: itgraph_telegram_collection | bool
+
+    - name: Apply the collector
+      ansible.builtin.include_tasks: apply.yml
+      vars:
+        __itgraph_what: watch
+        __itgraph_stream: "{{ __itgraph_streams.watch }}"
+        __itgraph_secret: false
+
+    - name: Follow the collector
+      ansible.builtin.include_tasks: rollout.yml
+      when: itgraph_telegram_collection | bool
+      vars:
+        __itgraph_workload: deployment/itgraph-watch
+
+    - name: Clear the marks of a run's stopping them
+      ansible.builtin.command:
+        argv: "{{ __itgraph_in_namespace + ['annotate', 'deployment', item, 'itgraph/stopped-by-run-'] }}"
+      loop: [itgraph-watch, itgraph-bot]
+      changed_when: false
+
+    - name: Note that the workloads are up
+      ansible.builtin.set_fact:
+        __itgraph_workloads_up: true
+
+    - name: Apply the schedules
+      ansible.builtin.include_tasks: apply.yml
+      vars:
+        __itgraph_what: cronjobs
+        __itgraph_stream: "{{ __itgraph_streams.cronjobs }}"
+        __itgraph_secret: false
+
+    # By name, one by one, never a claim.
+    - name: Delete what has left the templates
+      ansible.builtin.command:
+        argv: "{{ __itgraph_in_namespace + ['delete', item[0], item[1], '--ignore-not-found'] }}"
+      loop: "{{ __itgraph_retired + __itgraph_retired_youtube }}"
+      register: __itgraph_deleted
+      changed_when: "'deleted' in __itgraph_deleted.stdout"
+
+    - name: Read the workloads as they now are
+      ansible.builtin.command:
+        argv: "{{ __itgraph_in_namespace + ['get', 'deployment'] + __itgraph_deployments + ['--ignore-not-found', '-o', 'json'] }}"
+      register: __itgraph_deployed_now
+      changed_when: false
+
+    - name: Keep which workloads this run rolled, and which it gave a new template
+      ansible.builtin.set_fact:
+        __itgraph_rolled_here: >-
+          {{ (__itgraph_changed | default([])) | select('in', ['watch', 'bot', 'metrics', 'proxy'])
+             | map('regex_replace', '^', 'itgraph-') | list }}
+        __itgraph_new_templates: >-
+          {%- set out = [] -%}
+          {%- for found in (__itgraph_deployed_now.stdout | default('{"items": []}', true) | from_json)['items'] -%}
+          {%-   set now = (found.metadata.annotations | default({})).get(__itgraph_revision_key, '') -%}
+          {%-   if __itgraph_revisions_before.get(found.metadata.name, '') != now -%}
+          {%-     set _ = out.append(found.metadata.name) -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{ out }}
+        __itgraph_long_running: >-
+          {{ ['itgraph-postgres', 'itgraph-bot', 'itgraph-metrics', 'itgraph-proxy']
+             + (['itgraph-watch'] if itgraph_telegram_collection | bool else []) }}
+
+    - name: Watch them settle
+      ansible.builtin.import_tasks: settle.yml
+
+    - name: Check the collector's route and polls
+      when: itgraph_telegram_collection | bool
+      block:
+        - name: Check its route
+          ansible.builtin.include_tasks: route.yml
+
+        - name: Check its polls
+          ansible.builtin.include_tasks: polls.yml
+
+    - name: Try the collector's spec where this environment does not collect
+      ansible.builtin.include_tasks: collector_spec.yml
+      when: not (itgraph_telegram_collection | bool)
+
+    # Last, and not with the namespace: a first run on a live namespace can then still go
+    # back to a template that would not be admitted. Applied by itself, it is not a field
+    # server-side apply owns, which can therefore never take it away.
+    - name: Enforce the restricted standard
+      ansible.builtin.command:
+        argv: >-
+          {{ itgraph_kubectl + ['label', 'namespace', itgraph_namespace, '--overwrite',
+             'pod-security.kubernetes.io/enforce=restricted'] }}
+      register: __itgraph_labelled
+      changed_when: "'not labeled' not in __itgraph_labelled.stdout"
+      failed_when: __itgraph_labelled.rc != 0 or 'Warning' in __itgraph_labelled.stderr
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          {{ itgraph_image }} · {{ itgraph_postgres_image }} · {{ itgraph_proxy_image }} ·
+          {{ __itgraph_channel_count }} channels · nothing restored ·
+          migration: {{ __itgraph_migration_report | default('none needed') }} ·
+          restarted: {{ __itgraph_rolled_here | join(', ') or 'none' }} ·
+          polls: {{ __itgraph_polls_report | default('not collecting here') }}
+  always:
+    - name: Put the schedules back
+      ansible.builtin.include_tasks: resume.yml
+
+    - name: Release the namespace's lock
+      ansible.builtin.include_tasks: unlock.yml

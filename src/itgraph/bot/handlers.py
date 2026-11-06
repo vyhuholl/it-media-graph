@@ -19,6 +19,8 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
 from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
@@ -41,7 +43,7 @@ from itgraph.db.poll import queue_lag
 from itgraph.db.session import Database
 from itgraph.schedule import quiet_until
 
-__all__ = ["BotSender", "build_dispatcher", "verdict_keyboard"]
+__all__ = ["BotSender", "build_bot", "build_dispatcher", "verdict_keyboard"]
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +51,15 @@ USEFUL = "useful"
 BORING = "boring"
 
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+
+
+def build_bot(token: str) -> Bot:
+    """The Bot API client, at the configured address or Telegram's own."""
+    url = settings.telegram_bot_api_url
+    if url is None:
+        return Bot(token=token)
+    server = TelegramAPIServer.from_base(str(url).rstrip("/"))
+    return Bot(token=token, session=AiohttpSession(api=server))
 
 
 def verdict_keyboard(alert_id: int) -> InlineKeyboardMarkup:

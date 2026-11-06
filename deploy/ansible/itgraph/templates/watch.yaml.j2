@@ -1,0 +1,21 @@
+# The collector. Recreate, so the old pod is gone before the new one starts: one
+# poller per session. The 90 s grace lets the poll in flight finish and the lease
+# be released on SIGTERM. At zero replicas where this environment does not collect.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: itgraph-watch
+  namespace: {{ itgraph_namespace | to_json }}
+spec:
+  replicas: {{ 1 if itgraph_telegram_collection | bool else 0 }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: itgraph-watch
+  template:
+    metadata:
+      labels: {{ __itgraph_watch_labels | to_json }}
+      annotations:
+        itgraph/config-checksum: {{ __itgraph_checksums.watch | to_json }}
+    spec: {{ __itgraph_watch_spec | to_json }}

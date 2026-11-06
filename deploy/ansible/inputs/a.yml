@@ -1,0 +1,33 @@
+---
+# A synthetic environment that collects, with a YouTube key and off-site copies.
+# Every value here is fake, and spelled so.
+itgraph_namespace: itgraph
+itgraph_storage_class: example-retaining-class
+itgraph_postgres_access_ip: 192.0.2.53
+itgraph_scraper_namespace: monitoring
+itgraph_scraper_labels:
+  app.kubernetes.io/name: prometheus
+itgraph_image: "ghcr.io/example/it-media-graph:v0.0.1@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+itgraph_postgres_image: "docker.io/library/postgres:16.15@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+itgraph_proxy_image: "ghcr.io/example/xray-core:0.0.1@sha256:3333333333333333333333333333333333333333333333333333333333333333"
+itgraph_telegram_collection: true
+itgraph_telegram_api_id: 10305070
+itgraph_telegram_api_hash: fakeApiHashSetA
+itgraph_bot_token: "111:fakeBotTokenSetA"
+itgraph_alert_chat_id: 100000001
+itgraph_postgres_password: fakeOwnerPasswordSetAaaaa
+itgraph_bot_postgres_password: fakeBotPasswordSetAaaaaaa
+itgraph_metrics_postgres_password: fakeMetricsPasswordSetAaa
+itgraph_proxy_password: fakeProxyPasswordSetAaaaa
+itgraph_proxy_outbound:
+  protocol: vless
+  settings:
+    vnext:
+      - address: fake-vpn-exit-a.invalid
+        port: 443
+itgraph_youtube_api_key: fakeYoutubeKeySetA
+itgraph_backup_offsite: b2
+itgraph_b2_key_id: fakeB2KeyIdSetA
+itgraph_b2_application_key: fakeB2ApplicationKeySetA
+itgraph_b2_bucket_name: fake-bucket-set-a
+itgraph_backup_age_recipient: fakeAgeRecipientSetA

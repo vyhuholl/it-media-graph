@@ -1,4 +1,4 @@
-.PHONY: lint typecheck test validate ansible-lint \
+.PHONY: lint typecheck test test-e2e validate ansible-lint \
 	backup backup-full backup-install backup-uninstall backup-status backup-log
 
 RUN_CMD := uv run
@@ -20,6 +20,11 @@ WORKERS ?= 8
 
 test:
 	$(RUN_CMD) pytest -q -n $(WORKERS) --cov=src
+
+# The role on a throwaway k3d cluster, a quarter of an hour of it. Outside
+# `validate`: it needs Docker and k3d, and reaches no one's cluster but its own.
+test-e2e:
+	deploy/ansible/e2e.sh
 
 # -c: the config lives in deploy/ but this runs from the repo root, and
 # ansible-lint only looks in the cwd — without it the file is linted as

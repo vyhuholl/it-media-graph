@@ -1,0 +1,30 @@
+---
+# The collector's own pod, where the environment does not collect: it takes the lease,
+# logs its route and connects, through a proxy that closes every connection. So the
+# route line proves the settings, the way to the database and the lease, which comes
+# before it, and the non-zero exit proves it fails closed. Bare, so that its expected
+# failure raises no shared alert.
+
+- name: Try the collector's spec
+  ansible.builtin.include_tasks: one_shot.yml
+  vars:
+    __itgraph_shot:
+      name: itgraph-check-collector
+      labels: "{{ __itgraph_may_reach_database | combine(__itgraph_may_reach_proxy) }}"
+      spec: >-
+        {{ __itgraph_watch_spec | combine({
+             'restartPolicy': 'Never',
+             'activeDeadlineSeconds': 300,
+             'terminationGracePeriodSeconds': 10,
+             'containers': [__itgraph_watch_spec.containers[0] | combine({'args': ['watch', '--cycles', '1']})],
+           }) }}
+
+- name: Assert it got as far as connecting, and failed there
+  ansible.builtin.assert:
+    that:
+      - __itgraph_shot_result.logs is search('Telegram route:[^\n]* proxy at ' ~ __itgraph_proxy_host)
+      - __itgraph_shot_result.phase == 'Failed'
+    fail_msg: >-
+      The collector's spec should log a proxied route and exit non-zero here. It ended as
+      {{ __itgraph_shot_result.phase }}, having logged: {{ __itgraph_shot_result.logs | truncate(800) }}
+    quiet: true

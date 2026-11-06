@@ -1,0 +1,190 @@
+---
+# Replaces a test environment's data with a full dump's, and tries the service on it.
+# For a test environment alone: refused where this environment collects, whatever else
+# it is given, and without an input that allows it. No secret passes through here: what
+# runs in the database's pod connects over its local socket. The dump crosses on stdin
+# and is read in the pod alone, and the session's volume is never touched.
+
+- name: Assert a restore belongs here
+  ansible.builtin.assert:
+    that:
+      - not ansible_check_mode
+      - not (itgraph_telegram_collection | bool)
+      - itgraph_restore_allowed | bool
+    fail_msg: >-
+      {% if ansible_check_mode %}The restore has no check mode.{% elif itgraph_telegram_collection | bool %}This
+      environment collects: a restore would replace data that cannot be rebuilt.{% else %}itgraph_restore_allowed
+      is not true. A restore replaces the data it lands on, and belongs in a test environment alone.{% endif %}
+    quiet: true
+
+- name: Assert the namespace is a DNS label
+  ansible.builtin.assert:
+    that: itgraph_namespace is match('^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$')
+    fail_msg: itgraph_namespace is not a DNS label.
+    quiet: true
+
+# One line, the script in a variable: a folded block keeps the newline beside a more
+# indented line, and once ran a pg_restore that read nothing and reported success.
+- name: Read the file as a dump, before anything is touched
+  ansible.builtin.shell:
+    cmd: "{{ __itgraph_in_database }} 'pg_restore --list >/dev/null' < {{ itgraph_restore_from | quote }}"
+  register: __itgraph_listed
+  changed_when: false
+  failed_when: false
+
+- name: Refuse what is not a dump
+  ansible.builtin.fail:
+    msg: "{{ itgraph_restore_from }} is not a dump pg_restore can read: {{ __itgraph_listed.stderr }}"
+  when: __itgraph_listed.rc != 0
+
+- name: Take the namespace's lock
+  ansible.builtin.import_tasks: lock.yml
+
+- name: Restore, holding the lock
+  block:
+    - name: Stop what writes
+      ansible.builtin.include_tasks: quiesce.yml
+
+    - name: Note that the database now holds the dump un-neutralised
+      ansible.builtin.set_fact:
+        __itgraph_unneutralised: true
+
+    - name: Replace the data with the dump's
+      ansible.builtin.shell:
+        cmd: "{{ __itgraph_in_database }} {{ __itgraph_replace | quote }} < {{ itgraph_restore_from | quote }}"
+      vars:
+        __itgraph_replace: |-
+          export PGUSER={{ itgraph_db_user }}
+          dropdb --force {{ itgraph_db_name }}
+          createdb -O {{ itgraph_db_user }} {{ itgraph_db_name }}
+          pg_restore --exit-on-error --no-owner -d {{ itgraph_db_name }}
+      changed_when: true
+
+    # COPY's text format puts one row on a line and escapes a newline within a value,
+    # so a block's lines are its rows. Only the counts leave the pod.
+    - name: Compare every table's rows with the dump's
+      ansible.builtin.shell:
+        cmd: "{{ __itgraph_in_database }} {{ __itgraph_count | quote }} < {{ itgraph_restore_from | quote }}"
+      vars:
+        __itgraph_count: |-
+          export PGUSER={{ itgraph_db_user }}
+          pg_restore --data-only -f - |
+            awk 'inside && /^\\\.$/ { print table, rows; inside = 0; next }
+                 inside { rows++; next }
+                 /^COPY / { table = $2; rows = 0; inside = 1 }' | {
+              bad=0
+              while read -r table want; do
+                got=$(psql -X -A -t -q -d {{ itgraph_db_name }} -c "SELECT count(*) FROM $table")
+                echo "$table $got"
+                if [ "$want" != "$got" ]; then
+                  echo "$table: the dump holds $want rows, the database $got" >&2
+                  bad=1
+                fi
+              done
+              exit "$bad"
+            }
+      register: __itgraph_counts
+      changed_when: false
+
+    # A dump older than the release gains its new columns here, before neutralising
+    # touches them. With no dump first: it would be a copy of what is not yet
+    # neutralised, on a volume that outlives this run.
+    - name: Read what the image would have the database hold
+      ansible.builtin.include_tasks: database_state.yml
+
+    - name: Bring the schema to head
+      ansible.builtin.include_tasks: migrate.yml
+      vars:
+        __itgraph_migrate_without_dump: true
+
+    - name: Neutralise the copy
+      ansible.builtin.command:
+        argv: "{{ __itgraph_psql + ['-q', '-f', '-'] }}"
+        stdin: "{{ lookup('ansible.builtin.file', 'neutralise.sql') }}"
+      changed_when: true
+
+    # Out of the transaction: the tables' files still hold the old rows otherwise. Every
+    # table, since deleting a channel or a mention cascades into ones neutralise.sql
+    # never names, and a list here would fall behind them.
+    - name: Take what was replaced off the tables' files
+      ansible.builtin.command:
+        argv: "{{ __itgraph_psql + ['-q', '-c', 'VACUUM (FULL)'] }}"
+      changed_when: true
+
+    - name: Read back that nothing of it remains
+      ansible.builtin.command:
+        argv: "{{ __itgraph_psql + ['-q', '-f', '-'] }}"
+        stdin: "{{ lookup('ansible.builtin.file', 'readback.sql') }}"
+      changed_when: false
+
+    - name: Note that the copy is neutralised
+      ansible.builtin.set_fact:
+        __itgraph_unneutralised: false
+
+    - name: Count the channels left in the copy
+      ansible.builtin.command:
+        argv: "{{ __itgraph_psql_query + ['SELECT count(*) FROM channels'] }}"
+      register: __itgraph_channels_left
+      changed_when: false
+
+    - name: Start the bot on the restored data
+      ansible.builtin.command:
+        argv: "{{ __itgraph_in_namespace + ['scale', 'deployment', 'itgraph-bot', '--replicas=1'] }}"
+      changed_when: true
+
+    - name: Follow the bot
+      ansible.builtin.include_tasks: rollout.yml
+      vars:
+        __itgraph_workload: deployment/itgraph-bot
+
+    - name: Clear the mark of having stopped it
+      ansible.builtin.command:
+        argv: "{{ __itgraph_in_namespace + ['annotate', 'deployment', 'itgraph-bot', 'itgraph/stopped-by-run-'] }}"
+      changed_when: false
+
+    - name: Note that the workloads are up
+      ansible.builtin.set_fact:
+        __itgraph_workloads_up: true
+
+    - name: Try the service on the restored data
+      ansible.builtin.import_tasks: trials.yml
+
+    - name: Say what came of it
+      ansible.builtin.debug:
+        msg: >-
+          Restored {{ itgraph_restore_from | basename }}, every table's rows matching it.
+          {{ __itgraph_channels_left.stdout | trim }} channels left, nothing naming anyone, no API data.
+          A baseline run and a dump made on it. Delivered through the bot: {{ __itgraph_alert_report }}.
+          Rows by table: {{ __itgraph_counts.stdout_lines | join(', ') }}
+  rescue:
+    # Real ids would otherwise stay in a test environment: the next run would start the
+    # bot on them, and a backup would dump them.
+    - name: Empty the database, which holds the dump un-neutralised
+      ansible.builtin.command:
+        argv: >-
+          {{ __itgraph_in_namespace + ['exec', '-i', 'statefulset/itgraph-postgres', '-c', 'postgres', '--',
+             'bash', '-euo', 'pipefail', '-c', __itgraph_empty] }}
+      vars:
+        __itgraph_empty: |-
+          export PGUSER={{ itgraph_db_user }}
+          dropdb --force --if-exists {{ itgraph_db_name }}
+          createdb -O {{ itgraph_db_user }} {{ itgraph_db_name }}
+          psql -X -q -d {{ itgraph_db_name }} -c CHECKPOINT
+      when: __itgraph_unneutralised | default(false) | bool
+      changed_when: true
+
+    - name: Stop here
+      ansible.builtin.fail:
+        msg: >-
+          The restore did not complete, at: {{ ansible_failed_task.name | default('?') }}.
+          {{ ansible_failed_result.msg | default(ansible_failed_result.stderr | default('')) | truncate(800) }}
+          {{ 'The database was emptied, so that nothing un-neutralised stays.'
+             if __itgraph_unneutralised | default(false) | bool else '' }}
+          {{ 'The bot runs on the neutralised copy.' if __itgraph_workloads_up | default(false) | bool
+             else 'The bot is left stopped; the next run of this role starts it.' }}
+  always:
+    - name: Put the schedules back
+      ansible.builtin.include_tasks: resume.yml
+
+    - name: Release the namespace's lock
+      ansible.builtin.include_tasks: unlock.yml

@@ -1,0 +1,75 @@
+# The VPN exit, as a workload of the namespace. xray writes nothing: its
+# configuration is mounted read-only, and logs go to standard output. Nothing here
+# ever execs into it: a Go binary, which trips the server's AppArmor check.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: itgraph-proxy
+  namespace: {{ itgraph_namespace | to_json }}
+type: Opaque
+stringData:
+  config.json: {{ __itgraph_proxy_config | to_json | to_json }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: itgraph-proxy
+  namespace: {{ itgraph_namespace | to_json }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: itgraph-proxy
+  template:
+    metadata:
+      labels: {{ ({'app': 'itgraph-proxy'} | combine(__itgraph_may_reach_internet)) | to_json }}
+      annotations:
+        itgraph/config-checksum: {{ __itgraph_checksums.proxy | to_json }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: xray
+          image: {{ itgraph_proxy_image | to_json }}
+          command: [xray, run, -config, /etc/xray/config.json]
+          ports:
+            - containerPort: 1080
+          # TCP, not HTTP: the port speaks SOCKS, and the probe's job is only to
+          # say the inbound is up.
+          readinessProbe:
+            tcpSocket:
+              port: 1080
+          env:
+            - name: TZ
+              value: {{ itgraph_timezone | to_json }}
+          securityContext: {{ __itgraph_container_security | to_json }}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          volumeMounts:
+            - {name: config, mountPath: /etc/xray, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: config
+          secret:
+            secretName: itgraph-proxy
+        - {name: tmp, emptyDir: {sizeLimit: 64Mi}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: itgraph-proxy
+  namespace: {{ itgraph_namespace | to_json }}
+spec:
+  type: ClusterIP
+  selector:
+    app: itgraph-proxy
+  ports:
+    - {port: 1080, targetPort: 1080}

@@ -1,0 +1,92 @@
+---
+# The forms a type cannot say, before anything changes. A failure names the input
+# and never its value.
+
+- name: Assert the namespace is a DNS label
+  ansible.builtin.assert:
+    that: itgraph_namespace is match('^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$')
+    fail_msg: itgraph_namespace is not a DNS label.
+    quiet: true
+
+- name: Assert the fixed address is an IPv4 address
+  ansible.builtin.assert:
+    that: itgraph_postgres_access_ip is match('^([0-9]{1,3}[.]){3}[0-9]{1,3}$')
+    fail_msg: itgraph_postgres_access_ip is not an IPv4 address.
+    quiet: true
+
+- name: Assert every image is named as repo:tag@sha256
+  ansible.builtin.assert:
+    that: lookup('ansible.builtin.vars', item) is match('^[^@\s]+:[^@\s]+@sha256:[0-9a-f]{64}$')
+    fail_msg: "{{ item }} is not an image named as repo:tag@sha256:…, which is what a pin gives."
+    quiet: true
+  loop:
+    - itgraph_image
+    - itgraph_postgres_image
+    - itgraph_proxy_image
+
+# The application's image carries the client of this major, and pg_dump refuses a
+# server newer than itself.
+- name: Assert the database's major is the one the application's client is built for
+  ansible.builtin.assert:
+    that: itgraph_postgres_image is match('^[^@\s]*postgres:16([.][^@\s]*|-[^@\s]*)?@')
+    fail_msg: >-
+      itgraph_postgres_image is not of major 16, which is the client the application's image
+      carries: {{ itgraph_postgres_image | regex_replace('@.*$', '') }}.
+    quiet: true
+
+- name: Assert every password is random letters and digits
+  ansible.builtin.assert:
+    that: lookup('ansible.builtin.vars', item) is match('^[A-Za-z0-9]{20,}$')
+    fail_msg: "{{ item }} must be 20 or more letters and digits: it goes into a URL unescaped."
+    quiet: true
+  loop:
+    - itgraph_postgres_password
+    - itgraph_bot_postgres_password
+    - itgraph_metrics_postgres_password
+    - itgraph_proxy_password
+  no_log: false
+
+- name: Assert the outbound fits whether this environment collects
+  ansible.builtin.assert:
+    that: (itgraph_proxy_outbound.protocol | default('') == 'blackhole') != (itgraph_telegram_collection | bool)
+    fail_msg: >-
+      {% if itgraph_telegram_collection | bool %}This environment collects, and itgraph_proxy_outbound
+      closes every connection.{% else %}This environment does not collect, and itgraph_proxy_outbound is
+      not `protocol: blackhole`: a real exit has no business here.{% endif %}
+    quiet: true
+  no_log: false
+
+- name: Assert the outbound is not one with no exit at all
+  ansible.builtin.assert:
+    that: itgraph_proxy_outbound.protocol | default('') not in ['', 'freedom']
+    fail_msg: >-
+      itgraph_proxy_outbound has no protocol, or is `freedom`, which would send Telegram's traffic out
+      from the host's own address.
+    quiet: true
+  no_log: false
+
+# The one API project's quota and its data, and production's store: neither belongs
+# where nothing is collected, and a value pasted into the wrong vault is how they get there.
+- name: Assert an environment that does not collect holds no YouTube key and sends nothing off-site
+  ansible.builtin.assert:
+    that:
+      - itgraph_youtube_api_key | length == 0
+      - itgraph_backup_offsite == 'none'
+    fail_msg: >-
+      This environment does not collect, so itgraph_youtube_api_key must be empty and
+      itgraph_backup_offsite must be none.
+    quiet: true
+  when: not (itgraph_telegram_collection | bool)
+  no_log: false
+
+- name: Assert the off-site settings are whole
+  ansible.builtin.assert:
+    that: >-
+      itgraph_b2_key_id | length > 0 and itgraph_b2_application_key | length > 0
+      and itgraph_b2_bucket_name | length > 0 and itgraph_backup_age_recipient | length > 0
+    fail_msg: >-
+      itgraph_backup_offsite is b2, and it needs itgraph_b2_key_id, itgraph_b2_application_key,
+      itgraph_b2_bucket_name and itgraph_backup_age_recipient, all four.
+    quiet: true
+  when: itgraph_backup_offsite == 'b2'
+  no_log: false

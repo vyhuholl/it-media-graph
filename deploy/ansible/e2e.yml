@@ -1,0 +1,16 @@
+---
+# The role, on the throwaway cluster of e2e.sh. Every value it is given is synthetic.
+
+- name: Run the role on the suite's cluster
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  vars_files:
+    - inputs/e2e.yml
+  tasks:
+    - name: Run the entry point it was asked for
+      ansible.builtin.include_role:
+        name: itgraph
+        tasks_from: "{{ entry | default('main') }}"

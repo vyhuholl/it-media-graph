@@ -49,6 +49,28 @@ def test_build_client_passes_device_metadata(
     assert captured["args"][1] == tg_client.settings.telegram_api_id
 
 
+def test_no_credentials_refuse_before_anything_is_built(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    built = MagicMock()
+    monkeypatch.setattr(tg_client, "TelegramClient", built)
+    monkeypatch.setattr(tg_client.settings, "telegram_api_id", None)
+    monkeypatch.setattr(tg_client.settings, "telegram_api_hash", None)
+
+    with (
+        caplog.at_level(logging.INFO, logger=tg_client.__name__),
+        pytest.raises(
+            tg_client.NotAuthorizedError,
+            match="TELEGRAM_API_ID and TELEGRAM_API_HASH",
+        ),
+    ):
+        tg_client.build_client()
+
+    built.assert_not_called()
+    assert "Telegram route" not in caplog.text
+
+
 @pytest.fixture
 def captured(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """What `build_client` would hand to Telethon. Constructs nothing."""

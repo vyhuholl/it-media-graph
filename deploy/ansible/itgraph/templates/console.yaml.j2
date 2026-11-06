@@ -1,0 +1,59 @@
+{#- What scripts/on-host.sh creates per command: a Job that sleeps, execed into and
+    deleted. A machine that goes away leaves it to end by itself, with exit 0, so it
+    raises no failure, and the TTL takes it away. No secret is in here. -#}
+{%- set variants = {
+      'plain': {
+        'labels': __itgraph_may_reach_database | combine(__itgraph_may_reach_internet),
+        'env': [__itgraph_from_config, __itgraph_from_database] + ([__itgraph_from_youtube] if __itgraph_has_youtube | bool else []),
+        'mounts': [],
+        'volumes': [],
+      },
+      'session': {
+        'labels': __itgraph_may_reach_database | combine(__itgraph_may_reach_proxy),
+        'env': [__itgraph_from_config, __itgraph_from_database, __itgraph_from_telegram],
+        'mounts': [__itgraph_session_mount],
+        'volumes': [__itgraph_session_volume],
+      },
+      'backups': {
+        'labels': __itgraph_may_reach_database,
+        'env': [__itgraph_from_config, __itgraph_from_database],
+        'mounts': [__itgraph_backups_mount],
+        'volumes': [__itgraph_backups_volume],
+      },
+    } -%}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: itgraph-console
+  namespace: {{ itgraph_namespace | to_json }}
+data:
+{% for name, variant in variants.items() %}
+{%   set manifest = {
+       'apiVersion': 'batch/v1',
+       'kind': 'Job',
+       'metadata': {'generateName': 'itgraph-console-', 'namespace': itgraph_namespace, 'labels': {'itgraph/console': 'true'}},
+       'spec': {
+         'backoffLimit': 0,
+         'ttlSecondsAfterFinished': 60,
+         'template': {
+           'metadata': {'labels': {'itgraph/console': 'true', 'app': 'itgraph-console'} | combine(variant.labels)},
+           'spec': {
+             'restartPolicy': 'Never',
+             'automountServiceAccountToken': False,
+             'securityContext': __itgraph_pod_security,
+             'containers': [{
+               'name': 'itgraph',
+               'image': itgraph_image,
+               'command': ['sleep', '14400'],
+               'envFrom': variant.env,
+               'securityContext': __itgraph_container_security,
+               'resources': __itgraph_heavy_job_resources,
+               'volumeMounts': [__itgraph_tmp_mount] + variant.mounts,
+             }],
+             'volumes': [__itgraph_tmp_volume] + variant.volumes,
+           },
+         },
+       },
+     } %}
+  {{ name }}.json: {{ manifest | to_json | to_json }}
+{% endfor %}

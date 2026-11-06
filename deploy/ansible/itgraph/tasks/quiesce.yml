@@ -1,0 +1,48 @@
+---
+# Stops what writes before the database's pod or schema changes. The collector
+# finishes its poll and releases the lease on SIGTERM; killed by a database going
+# away it would only restart into one that is not there yet. What it stops, it marks,
+# so that a run that died here is told from a collector an operator stopped by hand.
+
+- name: Note which schedules are suspended
+  ansible.builtin.command:
+    argv: "{{ __itgraph_in_namespace + ['get', 'cronjobs', '-o', 'json'] }}"
+  register: __itgraph_schedules
+  changed_when: false
+
+- name: Keep which were already suspended
+  ansible.builtin.set_fact:
+    __itgraph_all_schedules: "{{ (__itgraph_schedules.stdout | from_json)['items'] | map(attribute='metadata.name') | list }}"
+    __itgraph_suspended_before: >-
+      {{ (__itgraph_schedules.stdout | from_json)['items'] | selectattr('spec.suspend', 'defined')
+         | selectattr('spec.suspend') | map(attribute='metadata.name') | list }}
+
+- name: Suspend the schedules
+  ansible.builtin.command:
+    argv: >-
+      {{ __itgraph_in_namespace + ['patch', 'cronjob', item, '--type=merge', '-p', {'spec': {'suspend': true}} | to_json] }}
+  loop: "{{ __itgraph_all_schedules | difference(__itgraph_suspended_before) }}"
+  changed_when: true
+
+# A console Job sleeps for hours on an operator's command, and is left out of this.
+- name: Wait up to ten minutes for running jobs to end
+  ansible.builtin.command:
+    argv: >-
+      {{ __itgraph_in_namespace + ['get', 'jobs', '-l', 'itgraph/console!=true', '-o', 'jsonpath=' ~ __itgraph_job_states] }}
+  vars:
+    __itgraph_job_states: '{range .items[*]}{.metadata.name}{" "}{.status.conditions[*].type}{"\n"}{end}'
+  register: __itgraph_jobs
+  changed_when: false
+  until: __itgraph_jobs.stdout_lines | reject('search', 'Complete|Failed') | list | length == 0
+  retries: "{{ __itgraph_jobs_retries | default(60) }}"
+  delay: "{{ __itgraph_jobs_delay | default(10) }}"
+
+- name: Stop the collector and the bot
+  ansible.builtin.include_tasks: stop.yml
+  loop: [itgraph-watch, itgraph-bot]
+  loop_control:
+    loop_var: __itgraph_stopping
+
+- name: Note that writers are stopped
+  ansible.builtin.set_fact:
+    __itgraph_quiesced: true

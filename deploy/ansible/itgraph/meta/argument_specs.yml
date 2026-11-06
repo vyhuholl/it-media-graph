@@ -1,0 +1,158 @@
+---
+# Everything about where the role runs is an input with no default: the
+# repository that runs it gives it, from its inventory, its vault or its seed.
+# Defaults are configuration tied to this repository's code (defaults/main.yml).
+# tasks/inputs.yml checks the forms a type cannot say.
+argument_specs:
+  main:
+    short_description: Deploy itgraph into a namespace, or bring it up to date.
+    description:
+      - Applies the objects, brings the schema to head, rolls out the workloads
+        and checks what it can of each.
+      - Never restores data, and never writes a Telegram session.
+    options: &main_options
+      itgraph_namespace:
+        type: str
+        required: true
+        description: The namespace; a DNS label.
+      itgraph_storage_class:
+        type: str
+        required: true
+        description: The class of the three claims; one that keeps a released volume.
+      itgraph_postgres_access_ip:
+        type: str
+        required: true
+        description: The database's fixed ClusterIP, where an operator's SSH tunnel ends.
+      itgraph_scraper_namespace:
+        type: str
+        required: true
+        description: The namespace of the monitoring's scraper, admitted to the metrics port.
+      itgraph_scraper_labels:
+        type: dict
+        required: true
+        description: The labels of the monitoring's scraper pods.
+      itgraph_image:
+        type: str
+        required: true
+        description: The application's image, as repo:tag@sha256:...
+      itgraph_postgres_image:
+        type: str
+        required: true
+        description: The database's image, of the major the application's client is built for.
+      itgraph_proxy_image:
+        type: str
+        required: true
+        description: The proxy's image, as repo:tag@sha256:...
+      itgraph_telegram_collection:
+        type: bool
+        required: true
+        description: Whether this environment runs the collector. No default on purpose.
+      itgraph_telegram_api_id:
+        type: int
+        required: true
+        description: The Telegram API id; a synthetic non-zero one where collection is off.
+      itgraph_telegram_api_hash:
+        type: str
+        required: true
+        no_log: true
+        description: The Telegram API hash; a synthetic one where collection is off.
+      itgraph_bot_token:
+        type: str
+        required: true
+        no_log: true
+        description: The alert bot's token.
+      itgraph_alert_chat_id:
+        type: int
+        required: true
+        description: The one chat the bot speaks in.
+      itgraph_postgres_password:
+        type: str
+        required: true
+        no_log: true
+        description: The owner role's password; 20 or more letters and digits.
+      itgraph_bot_postgres_password:
+        type: str
+        required: true
+        no_log: true
+        description: The bot role's password; 20 or more letters and digits.
+      itgraph_metrics_postgres_password:
+        type: str
+        required: true
+        no_log: true
+        description: The exporter role's password; 20 or more letters and digits.
+      itgraph_proxy_password:
+        type: str
+        required: true
+        no_log: true
+        description: The SOCKS password; 20 or more letters and digits.
+      itgraph_proxy_outbound:
+        type: dict
+        required: true
+        no_log: true
+        description: The proxy's one outbound; protocol blackhole exactly where collection is off.
+      itgraph_youtube_api_key:
+        type: str
+        required: true
+        no_log: true
+        description: The YouTube key; empty means no YouTube job and no key in any pod.
+      itgraph_backup_offsite:
+        type: str
+        required: true
+        choices: [none, b2]
+        description: Whether dumps leave the host. No default on purpose.
+      itgraph_b2_key_id:
+        type: str
+        description: The off-site store's key id, with b2.
+      itgraph_b2_application_key:
+        type: str
+        no_log: true
+        description: The off-site store's key, with b2.
+      itgraph_b2_bucket_name:
+        type: str
+        description: The off-site bucket, with b2.
+      itgraph_backup_age_recipient:
+        type: str
+        description: The public recipient off-site copies are encrypted to, with b2.
+      itgraph_kubectl:
+        type: list
+        elements: str
+        description: The command that reaches the cluster, as an argument list.
+      itgraph_telegram_api:
+        type: str
+        description: The Bot API's address; empty for Telegram's own. The end-to-end suite gives a stub.
+      itgraph_rollout_timeout:
+        type: int
+        description: Seconds a workload has to come up.
+  restore:
+    short_description: Replace a test environment's data with a full dump's, and try the service on it.
+    description:
+      - For a test environment alone, and refused unless itgraph_restore_allowed is true and collection is off.
+      - Takes the namespace as main left it.
+      - A run that fails before neutralising has finished leaves the database empty and the bot stopped.
+    options:
+      itgraph_restore_from:
+        type: str
+        required: true
+        description: The path of a full dump, on the host the role runs on.
+      itgraph_restore_allowed:
+        type: bool
+        description: Whether this environment takes restores.
+      itgraph_namespace:
+        type: str
+        required: true
+        description: The namespace; a DNS label.
+      itgraph_telegram_collection:
+        type: bool
+        required: true
+        description: Whether this environment runs the collector.
+      itgraph_image:
+        type: str
+        required: true
+        description: The application's image, for the migration.
+      itgraph_kubectl:
+        type: list
+        elements: str
+        description: The command that reaches the cluster, as an argument list.
+      itgraph_rollout_timeout:
+        type: int
+        description: Seconds the bot has to come up.

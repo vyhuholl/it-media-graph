@@ -1,0 +1,19 @@
+---
+# Puts the schedules back as they were found, whatever happened. A schedule the run
+# has since deleted has nothing to put back.
+
+- name: Put the schedules back
+  ansible.builtin.command:
+    argv: >-
+      {{ __itgraph_in_namespace + ['patch', 'cronjob', item, '--type=merge', '-p', {'spec': {'suspend': false}} | to_json] }}
+  loop: "{{ __itgraph_all_schedules | default([]) | difference(__itgraph_suspended_before | default([])) }}"
+  register: __itgraph_resumed
+  changed_when: __itgraph_resumed.rc == 0
+  failed_when: __itgraph_resumed.rc != 0 and 'NotFound' not in __itgraph_resumed.stderr
+
+- name: Say what is left stopped when the run did not finish
+  ansible.builtin.debug:
+    msg: >-
+      This run stopped the collector and the bot, and did not get as far as starting them again. The next
+      run of this role starts them.
+  when: __itgraph_quiesced | default(false) | bool and not (__itgraph_workloads_up | default(false) | bool)

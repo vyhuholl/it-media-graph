@@ -1,0 +1,66 @@
+---
+# Brings the schema to head from a pod of the deployed image, only when it is behind:
+# alembic takes a full dump first on a database with tables, which is why it is not
+# run by habit. The pod has the backups claim for that dump.
+
+- name: Bring the schema to head
+  ansible.builtin.include_tasks: one_shot.yml
+  when: __itgraph_schema_behind | bool
+  vars:
+    __itgraph_shot:
+      name: itgraph-migrate
+      labels: "{{ __itgraph_may_reach_database }}"
+      spec:
+        restartPolicy: Never
+        activeDeadlineSeconds: 3600
+        automountServiceAccountToken: false
+        securityContext: "{{ __itgraph_pod_security }}"
+        containers:
+          - name: itgraph
+            image: "{{ itgraph_image }}"
+            command: [alembic, upgrade, head]
+            env: "{{ [{'name': 'ITGRAPH_SKIP_BACKUP', 'value': '1'}] if __itgraph_migrate_without_dump | default(false) | bool else [] }}"
+            envFrom:
+              - "{{ __itgraph_from_config }}"
+              - "{{ __itgraph_from_database }}"
+            securityContext: "{{ __itgraph_container_security }}"
+            resources: "{{ __itgraph_heavy_job_resources }}"
+            volumeMounts:
+              - "{{ __itgraph_tmp_mount }}"
+              - "{{ __itgraph_backups_mount }}"
+        volumes:
+          - "{{ __itgraph_tmp_volume }}"
+          - "{{ __itgraph_backups_volume }}"
+
+- name: Assert the migration went through
+  ansible.builtin.assert:
+    that: __itgraph_shot_result.phase == 'Succeeded'
+    fail_msg: >-
+      The migration did not complete, so no workload was given the new image:
+      {{ __itgraph_shot_result.logs | truncate(800) }}
+    quiet: true
+  when: __itgraph_schema_behind | bool
+
+- name: Keep where its dump went
+  ansible.builtin.set_fact:
+    __itgraph_migration_report: >-
+      {{ (__itgraph_schema_current | default('', true) or 'no schema') ~ ' to ' ~ __itgraph_schema_head
+         ~ ((', dump at ' ~ (__itgraph_shot_result.logs | regex_search('backed up to ([^ ]+)', '\1') | first))
+            if __itgraph_shot_result.logs is search('backed up to ') else ', no dump taken') }}
+  when: __itgraph_schema_behind | bool
+
+# Asked again whether or not anything ran: file order protects a full run only, and
+# this is what stops workloads on a schema that is behind for any other reason.
+- name: Read the schema version again
+  ansible.builtin.command:
+    argv: "{{ __itgraph_psql_query + ['SELECT version_num FROM alembic_version'] }}"
+  register: __itgraph_version_after
+  changed_when: false
+
+- name: Assert the schema is at head
+  ansible.builtin.assert:
+    that: __itgraph_version_after.stdout | trim == __itgraph_schema_head
+    fail_msg: >-
+      The schema is at {{ __itgraph_version_after.stdout | trim }}, not at the image's head,
+      {{ __itgraph_schema_head }}, so no workload is created, changed or restarted.
+    quiet: true

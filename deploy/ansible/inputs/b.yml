@@ -1,0 +1,26 @@
+---
+# A synthetic environment that does not collect: no key, nothing leaves. Every
+# value here is fake, and differs from set A's, so that a value of one found in the
+# other's objects is a mistake a test can see.
+itgraph_namespace: itgraph-b
+itgraph_storage_class: example-other-class
+itgraph_postgres_access_ip: 192.0.2.54
+itgraph_scraper_namespace: other-monitoring
+itgraph_scraper_labels:
+  app: other-scraper
+itgraph_image: "ghcr.io/example/it-media-graph:v0.0.2@sha256:4444444444444444444444444444444444444444444444444444444444444444"
+itgraph_postgres_image: "docker.io/library/postgres:16.16@sha256:5555555555555555555555555555555555555555555555555555555555555555"
+itgraph_proxy_image: "ghcr.io/example/xray-core:0.0.2@sha256:6666666666666666666666666666666666666666666666666666666666666666"
+itgraph_telegram_collection: false
+itgraph_telegram_api_id: 20406080
+itgraph_telegram_api_hash: fakeApiHashSetB
+itgraph_bot_token: "222:fakeBotTokenSetB"
+itgraph_alert_chat_id: 100000002
+itgraph_postgres_password: fakeOwnerPasswordSetBbbbb
+itgraph_bot_postgres_password: fakeBotPasswordSetBbbbbbb
+itgraph_metrics_postgres_password: fakeMetricsPasswordSetBbb
+itgraph_proxy_password: fakeProxyPasswordSetBbbbb
+itgraph_proxy_outbound:
+  protocol: blackhole
+itgraph_youtube_api_key: ""
+itgraph_backup_offsite: none

@@ -1,0 +1,52 @@
+---
+# Follows a workload until it is up, or puts it back. A failure prints what there is to
+# see while it is still on the screen.
+
+- name: "Follow it until it is up - {{ __itgraph_workload }}"
+  ansible.builtin.command:
+    argv: >-
+      {{ __itgraph_in_namespace + ['rollout', 'status', __itgraph_workload,
+         '--timeout=' ~ itgraph_rollout_timeout ~ 's'] }}
+  register: __itgraph_rolled
+  changed_when: false
+  failed_when: false
+
+- name: "Put it back when it did not come up - {{ __itgraph_workload }}"
+  when: __itgraph_rolled.rc != 0
+  block:
+    - name: "Read which revision it is at - {{ __itgraph_workload }}"
+      ansible.builtin.command:
+        argv: >-
+          {{ __itgraph_in_namespace + ['get', __itgraph_workload,
+             '-o', 'jsonpath={.metadata.annotations.deployment\.kubernetes\.io/revision}'] }}
+      register: __itgraph_revision_now
+      changed_when: false
+      failed_when: false
+
+    # Only what this run gave a new template: one it only scaled back up would go to an
+    # older one. A restore changes no template, and knows no revisions.
+    - name: "Undo the rollout - {{ __itgraph_workload }}"
+      ansible.builtin.command:
+        argv: "{{ __itgraph_in_namespace + ['rollout', 'undo', __itgraph_workload] }}"
+      register: __itgraph_undone
+      changed_when: __itgraph_undone.rc == 0
+      failed_when: false
+      when:
+        - __itgraph_revisions_before is defined
+        - __itgraph_revision_now.stdout | trim != __itgraph_revisions_before.get(__itgraph_workload | regex_replace('^deployment/', ''), '')
+
+    - name: "Read why - {{ __itgraph_workload }}"
+      ansible.builtin.command:
+        argv: "{{ __itgraph_in_namespace + ['logs', __itgraph_workload, '--all-containers', '--tail=50'] }}"
+      register: __itgraph_rollout_logs
+      changed_when: false
+      failed_when: false
+
+    - name: "Stop here - {{ __itgraph_workload }}"
+      ansible.builtin.fail:
+        msg: >-
+          {{ __itgraph_workload }} did not come up in {{ itgraph_rollout_timeout }} seconds, and was
+          {{ 'left as it is: this run gave it no new template' if __itgraph_undone is skipped
+             else ('put back to its previous template' if __itgraph_undone.rc == 0
+                   else 'not put back: nothing to go back to') }}.
+          Its log: {{ __itgraph_rollout_logs.stdout | default('') | truncate(1500) }}

@@ -1,0 +1,7 @@
+# No Pod Security label here: the run applies it last, with `kubectl label`, so
+# that a first run on a live namespace can still go back, and so that server-side
+# apply, which owns no such field, can never take it away (tasks/main.yml).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ itgraph_namespace | to_json }}

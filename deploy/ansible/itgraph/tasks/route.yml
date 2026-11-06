@@ -1,0 +1,40 @@
+---
+# Reads the line the collector logs at connect time, from its current container. A
+# deployment whose settings did not arrive works, logs nothing unusual, and reaches
+# Telegram from the address the proxy exists to hide; this is what catches it.
+
+- name: Read the route the collector took
+  ansible.builtin.command:
+    argv: "{{ __itgraph_in_namespace + ['logs', 'deployment/itgraph-watch', '-c', 'itgraph'] }}"
+  register: __itgraph_watch_log
+  until: "'Telegram route:' in __itgraph_watch_log.stdout"
+  retries: "{{ __itgraph_route_retries | default(15) }}"
+  delay: "{{ __itgraph_route_delay | default(2) }}"
+  changed_when: false
+  failed_when: false
+
+# Logged once per start, and the kubelet rotates container logs: a collector that has run
+# for months may no longer have it. Only then is the route read from its environment,
+# where the line's values come from. Python is safe to exec into.
+- name: Read the route from a long-running collector's environment
+  ansible.builtin.command:
+    argv: "{{ __itgraph_in_namespace + ['exec', 'deployment/itgraph-watch', '-c', 'itgraph', '--', 'printenv', 'PROXY_TYPE', 'PROXY_HOST', 'PROXY_PORT'] }}"
+  register: __itgraph_watch_env
+  when:
+    - "'Telegram route:' not in __itgraph_watch_log.stdout"
+    - "'watch' not in (__itgraph_changed | default([]))"
+  changed_when: false
+  failed_when: false
+
+- name: Assert the collector is proxied
+  ansible.builtin.assert:
+    that: >-
+      ('Telegram route: socks5 proxy at ' ~ __itgraph_proxy_host ~ ':1080') in __itgraph_watch_log.stdout
+      or (__itgraph_watch_env.stdout_lines | default([]) == ['socks5', __itgraph_proxy_host, '1080'])
+    fail_msg: >-
+      {% if 'Telegram route: direct' in __itgraph_watch_log.stdout %}The collector connected directly: its
+      proxy settings did not reach it.{% elif 'Telegram route:' in __itgraph_watch_log.stdout %}The collector
+      reaches Telegram through something other than {{ __itgraph_proxy_host }}:1080, not the proxy whose exit
+      this run checked.{% else %}The collector has logged no route since it started, so it is not getting as
+      far as connecting.{% endif %}
+    quiet: true

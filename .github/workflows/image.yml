@@ -1,6 +1,6 @@
-# What CI is: a builder of the image, nothing else. It gates nothing —
-# pre-commit remains the whole gate — so a red run here means the image
-# is stale, not that master is broken.
+# On a push to master, CI is a builder of the image and nothing else. It gates
+# nothing, and pre-commit remains the gate for a push, so a red run here means the
+# image is stale, not that master is broken. A version tag is gated: see release.yml.
 
 name: image
 
@@ -32,6 +32,6 @@ jobs:
           context: .
           platforms: linux/amd64
           push: true
-          # The deploy resolves this tag to a digest and pins that, so
+          # A release retags this by digest, and a pin names that digest, so
           # the commit name is a pointer, never what runs.
           tags: ghcr.io/${{ github.repository }}:${{ github.sha }}

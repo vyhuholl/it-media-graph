@@ -16,6 +16,7 @@ make lint          # ruff check --fix + ruff format
 make typecheck     # mypy src/
 make test          # pytest
 make ansible-lint  # ansible-lint over deploy/
+make test-e2e      # the role on a throwaway k3d cluster; outside validate, needs Docker and k3d
 make validate      # lint + typecheck + test + ansible-lint   <- after every change
 
 uv run alembic revision --autogenerate -m "..."
@@ -39,20 +40,26 @@ uv run itgraph --help    # CLI entrypoint (typer)
 
 ## Testing
 - **No network in tests.** Telethon is mocked; fixtures are saved, anonymized payloads under `tests/fixtures/`.
-- Real `api_id` / `api_hash` / session files never appear in tests. CI builds the image and runs no tests, so there is nowhere to add them to, and making it run the collector "for real" is not a reason to give it more.
+- Real `api_id` / `api_hash` / session files never appear in tests. CI holds no secret but its own token, so there is nowhere to add them to, and making it run the collector "for real" is not a reason to give it more.
 - Fake credentials are spelled out in words (`test-api-hash`, `fake-…`), never as plausible-looking hex. `tests/` is deliberately **not** excluded from the gitleaks hook, so a realistic fake trips it — and the fix is to make the value obviously fake, not to add an exclude, a `# gitleaks:allow`, or a fingerprint allowlist. A fake that looks real also costs a human reviewer the ability to tell the difference.
 - Tests use separate databases on the same Postgres instance, created and dropped by a fixture in `conftest.py`. That fixture refuses to run against a database whose name does not end in `_test` — never weaken the check, per-worker names included.
 - `make test` runs eight workers (`pytest-xdist`), one database each (`itgraph_gw0_test`, …). The schema is built once per run and the tables are emptied with `TRUNCATE` between tests — building it per test was two thirds of the suite's wall clock. **Nothing in the suite may alter the schema**, because it now outlives the test that changed it; a test that needs its own schema has to build its own database. `make test WORKERS=0` runs in one process, which is how a failure is read.
-- **CI builds the image and gates nothing.** One person works on this repository, so pre-commit is still the whole gate: ruff and ansible-lint on commit, mypy and pytest on push. `.github/workflows/image.yml` builds `linux/amd64` and pushes `ghcr.io/vyhuholl/it-media-graph:<commit>` on every push to master; it runs no tests and blocks nothing. A hook skipped with `--no-verify` is still not caught anywhere later.
+- **A push to `master` gates nothing, and a tag does.** One person works on this repository, so pre-commit is the gate for a push: ruff and ansible-lint on commit, mypy and pytest on push. `.github/workflows/image.yml` builds `linux/amd64` and pushes `ghcr.io/vyhuholl/it-media-graph:<commit>` on every push to master; it runs no tests and blocks nothing. A hook skipped with `--no-verify` is still not caught there. A version tag means something, since what it publishes is what an operator will run: `.github/workflows/release.yml` runs the suite and the role's checks first, and publishes nothing if they fail.
+
+## Deploying
+- **A deploy is an operator running the role `deploy/ansible/itgraph` at a pinned release**, from the repository that owns the host, in the test environment first. Everything about where it runs is an input: the role names no host, no address and no repository, and neither does anything else here. Nothing deploys on a merge or a tag. See `deploy/runbook.md`.
+- **The session never reaches a test environment.** A test environment has `itgraph_telegram_collection: false`, a proxy whose one outbound closes every connection, no YouTube key, no off-site store and its own credentials, and the role refuses anything else there. No task of the role writes a session, and the session lease cannot see across databases, so this rule is what protects the account.
+- **Each workload holds only its own secrets, and reaches only what it needs.** A new secret goes to the workloads that read it and no others; a new outbound connection needs a label in `deploy/ansible/itgraph/vars/main.yml`. The collector reaches DNS, the database and the proxy, and nothing else.
+- **What the restore neutralises keeps up with the schema.** A change adding a field that names a person, a note someone writes, or anything that would act on restored data, names the restore in its design: `files/neutralise.sql` and `files/readback.sql`, whose tests remove each statement in turn.
 
 ## Never commit
 - `.env`, `*.session`, `*.session-journal` — a session file is full account access
 - the Telegram **bot token**. Unlike the api hash it plausibly ends up on a machine you do not own, which is why the bot also gets its own database role: the role is what bounds the damage when the token leaks, and a token in a migration or a fixture defeats both
 - the **proxy password** (`PROXY_PASSWORD`), on the same footing as the api hash. It buys someone else a shared exit billed to the operator, and — worse — an address the collector's traffic is known to come from
-- the **vault password** (`deploy/.vault_pass`), or `deploy/group_vars/all/secrets.vault.yml` in plaintext. The vault is committed encrypted, and the repository is public: the password is all that stands between anyone and the bot token, the api hash and the proxy endpoint, and rotating it does not re-protect the ciphertext already in history. Pre-commit refuses both, so a hook failure there is never fixed by skipping the hook
+- **production's inventory or vault**, or any value from them. They live on the controller alone, and this repository is public: no host, address, token or chat id belongs in it, in code, docs, OpenSpec artifacts or commit messages. Inputs under `deploy/ansible/inputs/` are synthetic and spelled so
 - the **YouTube API key** (`YOUTUBE_API_KEY`), on the same footing as the api hash. Whoever holds it spends the quota of the one API project the policies allow (III.D.1.c) — a second project to escape that is not an option, any more than a second Telegram account is
 - the **B2 application key** (`b2_application_key`), on the same footing as the api hash. Whoever holds it fills the off-site store the account pays for; the account's caps are $0 precisely so that this fails loudly instead of billing quietly
-- the **age identity** that decrypts the off-site copies. It pairs with the public recipient in `deploy/group_vars/all/main.yml`; on the collection host it would undo the point of encrypting before upload (the host cannot read its own copies), and anywhere else it turns every off-site copy into plaintext for whoever finds it. It lives in the password manager only
+- the **age identity** that decrypts the off-site copies. It pairs with the public recipient the role is given as `itgraph_backup_age_recipient`; on the collection host it would undo the point of encrypting before upload (the host cannot read its own copies), and anywhere else it turns every off-site copy into plaintext for whoever finds it. It lives in the password manager only
 - **review files** from `itgraph yt review-export` (`*.review.tsv`). They hold YouTube API data that has to be gone within 30 days, so they live outside the repository and are deleted once applied
 - any dump of the user's own subscriptions or real collected channel data
 - commenter user IDs or any other personal data; store hashed, keep out of git
