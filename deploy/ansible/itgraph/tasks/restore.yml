@@ -27,7 +27,7 @@
 # indented line, and once ran a pg_restore that read nothing and reported success.
 - name: Read the file as a dump, before anything is touched
   ansible.builtin.shell:
-    cmd: "{{ __itgraph_in_database }} 'pg_restore --list >/dev/null' < {{ itgraph_restore_from | quote }}"
+    cmd: "{{ __itgraph_in_database }} {{ __itgraph_list_dump | quote }} < {{ itgraph_restore_from | quote }}"
   register: __itgraph_listed
   changed_when: false
   failed_when: false

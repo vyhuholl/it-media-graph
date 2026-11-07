@@ -32,6 +32,12 @@ __itgraph_in_database: >-
   {{ itgraph_kubectl | map('quote') | join(' ') }} -n {{ itgraph_namespace | quote }}
   exec -i statefulset/itgraph-postgres -c postgres -- bash -euo pipefail -c
 
+# Whether what is on stdin is a dump, said by pg_restore. It reads the table of
+# contents alone and leaves the rest of a pipe unread, and through `kubectl exec`
+# the unread rest stalls the stream until kubectl gives up: a real dump of 280 MB
+# did. So the rest is read to its end.
+__itgraph_list_dump: 'rc=0; pg_restore --list >/dev/null || rc=$?; cat >/dev/null; exit "$rc"'
+
 # The Deployments a run follows, and where each says which template it is at.
 __itgraph_deployments: [itgraph-watch, itgraph-bot, itgraph-metrics, itgraph-proxy]
 __itgraph_revision_key: deployment.kubernetes.io/revision
