@@ -607,7 +607,7 @@ async def test_a_kind_too_thin_to_fit_borrows_the_pooled_curve(
 
     assert (ChannelKind.EVENT, Metric.VIEWS) in summary.borrowed
     assert (ChannelKind.EVENT, Metric.VIEWS) not in summary.fitted
-    assert "borrowed the pooled curve" in summary.line()
+    assert "borrowed the pooled fit" in summary.line()
 
     async with database.session() as session:
         rows = await session.execute(
@@ -870,3 +870,264 @@ def test_a_residual_is_measured_from_the_posts_before_it() -> None:
     )
 
     assert _rolling(history)(viral) == 100.0
+
+
+# --- comments, counted ---------------------------------------------------------
+
+
+async def seed_comment_posts(
+    database: Database,
+    channel: int,
+    counts: list[tuple[int, int]],
+    *,
+    kind: str = "personal",
+    first_id: int = 7000,
+) -> None:
+    """A channel's posts a day apart, each read at one hour and at eight,
+    as (comments at one hour, comments at eight)."""
+    await seed_channel(database, channel, kind=kind)
+    async with database.session() as session:
+        for index, (early, settled) in enumerate(counts):
+            msg_id = first_id + index
+            published = NOW - timedelta(days=len(counts) - index)
+            await session.execute(
+                text(
+                    "INSERT INTO raw_messages "
+                    "(channel_id, msg_id, payload, fetched_at) VALUES "
+                    "(:c, :m, CAST(:p AS jsonb), :f)"
+                ),
+                {
+                    "c": channel,
+                    "m": msg_id,
+                    "f": published,
+                    "p": json.dumps(
+                        {
+                            "_": "Message",
+                            "id": msg_id,
+                            "date": published.isoformat(),
+                        }
+                    ),
+                },
+            )
+            for age, value in (
+                (timedelta(hours=1), early),
+                (timedelta(hours=8), settled),
+            ):
+                await session.execute(
+                    text(
+                        "INSERT INTO message_metrics "
+                        "(channel_id, msg_id, observed_at, views, comments) "
+                        "VALUES (:c, :m, :at, 0, :n)"
+                    ),
+                    {
+                        "c": channel,
+                        "m": msg_id,
+                        "at": published + age,
+                        "n": value,
+                    },
+                )
+
+
+def pattern(posts: int) -> list[tuple[int, int]]:
+    """Mostly no comments, now and then a few, rarely a discussion."""
+    shape = [
+        (0, 0),
+        (0, 0),
+        (1, 2),
+        (0, 0),
+        (0, 1),
+        (2, 6),
+        (0, 0),
+        (1, 1),
+        (0, 0),
+        (3, 9),
+    ]
+    return [shape[index % len(shape)] for index in range(posts)]
+
+
+async def test_comment_zeros_are_kept_and_view_zeros_are_not(
+    database: Database,
+) -> None:
+    from itgraph.db.baselines import recent_values
+
+    await seed_comment_posts(database, CHANNEL, pattern(10))
+    async with database.session() as session:
+        comments = await recent_values(
+            session,
+            Metric.COMMENTS,
+            since=NOW - timedelta(days=60),
+            until=NOW,
+            burst_gap=timedelta(seconds=60),
+        )
+        views = await recent_values(
+            session,
+            Metric.VIEWS,
+            since=NOW - timedelta(days=60),
+            until=NOW,
+            burst_gap=timedelta(seconds=60),
+        )
+
+    assert [value for _, value in comments[CHANNEL]] == [
+        float(settled) for _, settled in pattern(10)
+    ]
+    assert views == {}
+
+
+async def test_a_refresh_measures_comments_as_counts(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A kind with enough posts fits its own dispersion; a thin one borrows."""
+    monkeypatch.setattr(settings, "baseline_min_band_samples", 3)
+    monkeypatch.setattr(settings, "baseline_min_band_spread_posts", 10)
+    monkeypatch.setattr(settings, "baseline_window_days", 60)
+    await seed_comment_posts(database, CHANNEL, pattern(40))
+    await seed_comment_posts(
+        database, OTHER, pattern(12), kind="media", first_id=9000
+    )
+
+    summary = await refresh_baselines(database, now=NOW)
+
+    assert (ChannelKind.PERSONAL, Metric.COMMENTS) in summary.fitted
+    assert (ChannelKind.MEDIA, Metric.COMMENTS) in summary.borrowed
+    # Every channel on its own newest posts: comments have no fallback.
+    assert summary.references[Metric.COMMENTS] == (2, 0)
+
+    async with database.session() as session:
+        stored = dict(
+            (
+                await session.execute(
+                    text(
+                        "SELECT channel_id, median FROM channel_baselines "
+                        "WHERE metric = 'comments'"
+                    )
+                )
+            ).all()
+        )
+        rulers = {
+            kind: (dispersion, borrowed)
+            for kind, dispersion, borrowed in await session.execute(
+                text(
+                    "SELECT kind::text, dispersion, borrowed FROM metric_baselines "
+                    "WHERE metric = 'comments'"
+                )
+            )
+        }
+        loaded = await load_baselines(session)
+
+    # The mean of the newest twenty, zeros kept: two cycles of the pattern.
+    assert stored[CHANNEL] == pytest.approx(
+        sum(s for _, s in pattern(20)) / 20
+    )
+    personal, media = rulers["personal"], rulers["media"]
+    assert personal[0] is not None and personal[0] > 0 and personal[1] is False
+    assert media[0] is not None and media[1] is True
+    assert loaded is not None
+    assert loaded.counts(Metric.COMMENTS)
+    baseline = loaded.for_channel(CHANNEL, Metric.COMMENTS)
+    assert baseline is not None
+    assert baseline.dispersion == pytest.approx(personal[0])
+    assert baseline.factor == 1.0
+    # Ten early comments in a cycle over nineteen settled ones.
+    assert baseline.curve.fractions["48m"] == pytest.approx(7 / 19, rel=0.01)
+
+
+async def test_a_run_without_a_comment_dispersion_counts_nothing(
+    database: Database,
+) -> None:
+    await seed_channel(database)
+    run_id = await a_run(database)
+    async with database.session() as session:
+        loaded = await load_baselines(session)
+    assert loaded is not None and loaded.run_id == run_id
+    assert not loaded.counts(Metric.COMMENTS)
+
+
+async def comment_rulers(database: Database) -> tuple[float, dict[str, float]]:
+    async with database.session() as session:
+        dispersion = await session.scalar(
+            text(
+                "SELECT dispersion FROM metric_baselines WHERE metric = 'comments' "
+                "AND kind = 'personal' AND run_id = (SELECT max(id) FROM baseline_runs)"
+            )
+        )
+        curve = dict(
+            (
+                await session.execute(
+                    text(
+                        "SELECT band, fraction FROM curve_points "
+                        "WHERE metric = 'comments' AND kind = 'personal' "
+                        "AND run_id = (SELECT max(id) FROM baseline_runs)"
+                    )
+                )
+            ).all()
+        )
+    return float(dispersion), curve
+
+
+async def test_parts_of_an_album_and_of_a_burst_do_not_shape_comments(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Never scored, so never fitted: a later part's counter is nearly
+    always zero, and beside the channel's expectation it would read as
+    dispersion no scored post has."""
+    monkeypatch.setattr(settings, "baseline_min_band_samples", 3)
+    monkeypatch.setattr(settings, "baseline_min_band_spread_posts", 10)
+    monkeypatch.setattr(settings, "baseline_window_days", 60)
+    await seed_comment_posts(database, CHANNEL, pattern(40))
+    await refresh_baselines(database, now=NOW)
+    before = await comment_rulers(database)
+
+    async with database.session() as session:
+        for index in range(25, 40):
+            msg_id = 7000 + index
+            published = NOW - timedelta(days=40 - index)
+            # The post becomes an album's first part, and gains a second part;
+            # a message twenty seconds later is the rest of a burst.
+            await session.execute(
+                text(
+                    "UPDATE raw_messages SET payload = payload || "
+                    "jsonb_build_object('grouped_id', CAST(:album AS bigint)) "
+                    "WHERE channel_id = :c AND msg_id = :m"
+                ),
+                {"album": 900 + index, "c": CHANNEL, "m": msg_id},
+            )
+            for extra, offset, album in (
+                (msg_id + 500, timedelta(0), 900 + index),
+                (msg_id + 600, timedelta(seconds=20), None),
+            ):
+                payload = {
+                    "_": "Message",
+                    "id": extra,
+                    "date": (published + offset).isoformat(),
+                }
+                if album is not None:
+                    payload["grouped_id"] = album
+                await session.execute(
+                    text(
+                        "INSERT INTO raw_messages (channel_id, msg_id, payload, fetched_at) "
+                        "VALUES (:c, :m, CAST(:p AS jsonb), :f)"
+                    ),
+                    {
+                        "c": CHANNEL,
+                        "m": extra,
+                        "p": json.dumps(payload),
+                        "f": published,
+                    },
+                )
+                for age in (timedelta(hours=1), timedelta(hours=8)):
+                    await session.execute(
+                        text(
+                            "INSERT INTO message_metrics "
+                            "(channel_id, msg_id, observed_at, views, comments) "
+                            "VALUES (:c, :m, :at, 0, 0)"
+                        ),
+                        {
+                            "c": CHANNEL,
+                            "m": extra,
+                            "at": published + offset + age,
+                        },
+                    )
+
+    await refresh_baselines(database, now=NOW)
+
+    assert await comment_rulers(database) == before

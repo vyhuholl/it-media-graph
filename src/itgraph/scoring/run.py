@@ -32,7 +32,7 @@ from itgraph.db.baselines import Baselines, load_baselines
 from itgraph.db.models import Metric
 from itgraph.db.session import Database
 from itgraph.scoring.fold import Head, Placed, burst_heads, fold
-from itgraph.scoring.score import Score, Spike, score_post
+from itgraph.scoring.score import COUNTED, Score, Spike, score_post
 
 __all__ = ["Reading", "SpikeSummary", "run_scoring"]
 
@@ -118,6 +118,11 @@ class SpikeSummary:
     # Scored, but against what they were when their history was collected
     # rather than what they are: too quiet for a recent reference.
     channels_on_fallback: int = 0
+    # Counted metrics this pass was asked to score and could not, because
+    # the current baselines measured no dispersion for them — a run from
+    # before comments were counted. Said, so silence is not mistaken for
+    # a day without discussion.
+    uncounted: tuple[str, ...] = ()
 
     def line(self) -> str:
         if self.channels_with_baseline == 0:
@@ -145,6 +150,12 @@ class SpikeSummary:
             line += (
                 f"; {self.channels_on_fallback} scored against their "
                 "settled history, too quiet for a recent reference"
+            )
+
+        if self.uncounted:
+            line += (
+                f"; {', '.join(self.uncounted)} not scored: the current "
+                "baselines measured no dispersion — run `itgraph baselines`"
             )
 
         if self.baseline_age is not None and self.baseline_age > timedelta(
@@ -270,15 +281,24 @@ def _best_per_post(
     crossed: dict[tuple[int, int], datetime] = {}
     for reading in readings:
         channel_id = reading.post_key[0]
-        scores = score_post(
-            reading.values,
-            reading.age,
-            {
-                metric: baselines.for_channel(channel_id, metric)
-                for metric in metrics
-            },
-            metrics=metrics,
-        )
+        # A comment count under the minimum is set aside before anything
+        # is compared: it neither crosses nor becomes the post's best, so
+        # five comments on a channel that never gets any cannot take the
+        # alert a post's views had earned.
+        scores = [
+            score
+            for score in score_post(
+                reading.values,
+                reading.age,
+                {
+                    metric: baselines.for_channel(channel_id, metric)
+                    for metric in metrics
+                },
+                metrics=metrics,
+            )
+            if score.metric != Metric.COMMENTS
+            or score.observed >= settings.alert_spike_comments_min
+        ]
         if not scores:
             continue
         key = reading.post_key
@@ -387,6 +407,11 @@ async def run_scoring(
         channels_in_scope=baselines.channels_in_scope,
         channels_with_baseline=baselines.scored_channels,
         channels_on_fallback=baselines.fallback_channels,
+        uncounted=tuple(
+            str(metric)
+            for metric in metrics
+            if metric in COUNTED and not baselines.counts(metric)
+        ),
         threshold=limit,
         replay=dry_run,
         now=moment,

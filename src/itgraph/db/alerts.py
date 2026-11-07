@@ -76,6 +76,9 @@ class PendingAlert:
     value: float
     raised_at: datetime
     attempts: int
+    # A comment spike's count and the expectation it was scored against.
+    observed: float | None = None
+    expected: float | None = None
 
 
 async def raised_bands(
@@ -229,12 +232,20 @@ async def raise_spikes(
         return 0, 0
 
     def row(spike: Spike) -> dict[str, object]:
+        kind = _spike_kind(spike)
+        # The count and its expectation, kept for a comment spike alone:
+        # the z does not give the count back, and the next refresh would
+        # give another expectation. Every row carries both keys, as one
+        # multi-row insert needs.
+        counted = kind is AlertKind.COMMENT_SPIKE
         return {
-            "kind": _spike_kind(spike),
+            "kind": kind,
             "channel_id": spike.post_key[0],
             "msg_id": spike.post_key[1],
             "band": 1,
             "value": float(spike.score.z),
+            "observed": float(spike.score.observed) if counted else None,
+            "expected": float(spike.score.expected) if counted else None,
         }
 
     async def write(
@@ -318,6 +329,8 @@ async def claim_undelivered(
             value=alert.value,
             raised_at=alert.raised_at,
             attempts=alert.attempts,
+            observed=alert.observed,
+            expected=alert.expected,
         )
         for alert in rows.scalars()
     ]

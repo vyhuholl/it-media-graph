@@ -40,7 +40,7 @@ from itgraph.scoring.curves import (
     Observation,
 )
 from itgraph.scoring.fold import burst_heads
-from itgraph.scoring.score import Baseline
+from itgraph.scoring.score import COUNTED, Baseline
 
 __all__ = [
     "Baselines",
@@ -113,6 +113,19 @@ class Baselines:
     references: dict[tuple[int, Metric], BaselineReference] = field(
         default_factory=dict
     )
+    # A counted metric's dispersion per kind, where the run measured one.
+    dispersions: dict[tuple[ChannelKind, Metric], float] = field(
+        default_factory=dict
+    )
+
+    def counts(self, metric: Metric) -> bool:
+        """Whether a counted metric can be scored under this run at all.
+
+        False for a run measured before comments were counted: it stores
+        no dispersion, and the scoring pass says so rather than finding
+        no comment worth telling.
+        """
+        return any(found == metric for _, found in self.dispersions)
 
     def for_channel(self, channel_id: int, metric: Metric) -> Baseline | None:
         """The baseline for one channel and metric, or ``None``.
@@ -146,6 +159,7 @@ class Baselines:
             curve=curve,
             spread=spread,
             band_spreads=self.band_spreads.get((kind, metric), {}),
+            dispersion=self.dispersions.get((kind, metric)),
         )
 
     @property
@@ -253,7 +267,8 @@ async def recent_values(
     ``scoring/curves.py`` normalises a curve to, so a reference built
     from these and a curve fraction multiply into the same quantity.
     Oldest first, positive values only, which is what a median over them
-    is taken over; a post never read in the band (the collector sleeps
+    is taken over — but for a counted metric zeros too, since its
+    reference is a mean in which a post nobody commented on counts; a post never read in the band (the collector sleeps
     through the eighth hour of anything published around 19:00) is left
     out rather than guessed.
 
@@ -313,11 +328,12 @@ async def recent_values(
         (((channel, msg), published) for channel, msg, published, _ in rows),
         gap=burst_gap,
     )
+    keep_zeros = metric in COUNTED
     history: dict[int, list[tuple[datetime, float]]] = {}
     for channel, msg, published, value in rows:
         if heads[(channel, msg)] != (channel, msg):
             continue
-        if value is None or value <= 0:
+        if value is None or value < 0 or (value == 0 and not keep_zeros):
             continue
         history.setdefault(channel, []).append((published, float(value)))
     for entries in history.values():
@@ -326,7 +342,11 @@ async def recent_values(
 
 
 async def observations(
-    session: AsyncSession, metric: Metric, *, since: datetime
+    session: AsyncSession,
+    metric: Metric,
+    *,
+    since: datetime,
+    burst_gap: timedelta = timedelta(0),
 ) -> dict[ChannelKind, list[Observation]]:
     """Snapshots of posts published since a moment, grouped by channel kind.
 
@@ -334,9 +354,47 @@ async def observations(
     stored publication date. Never which sample in the schedule this was
     meant to be — samples are irregular by design, and a curve fitted on
     intended ages would describe a schedule rather than a metric.
+
+    **A counted metric is read the way its posts are scored**: zeros kept,
+    since its curve and dispersion are made of them as much as of anything,
+    and an album as its first part, a burst as its first message. A later
+    part of an album has a comment counter of its own, nearly always zero,
+    and is never scored; fitted beside the channel's expectation it would
+    read as dispersion that no scored post has. The other metrics take
+    logarithms, drop their zeros, and are read as they always were.
     """
-    result = await session.execute(
-        text(f"""
+    counted = metric in COUNTED
+    if counted:
+        # Every post takes part in chaining a burst, read or not, as in
+        # `recent_values`; only a burst's first message is then kept.
+        query = f"""
+            WITH posts AS (
+              SELECT channel_id, msg_id, published, kind FROM (
+                SELECT r.channel_id, r.msg_id, c.kind::text AS kind,
+                       (r.payload->>'date')::timestamptz AS published,
+                       row_number() OVER (
+                         PARTITION BY r.channel_id,
+                           coalesce(r.payload->>'grouped_id', r.msg_id::text)
+                         ORDER BY r.msg_id
+                       ) AS part
+                FROM raw_messages r
+                JOIN channels c ON c.tg_id = r.channel_id
+                WHERE (r.payload->>'date')::timestamptz >= :since
+                  AND c.kind IS NOT NULL
+              ) t
+              WHERE part = 1
+            )
+            SELECT p.kind, p.channel_id, p.msg_id,
+                   EXTRACT(EPOCH FROM (m.observed_at - p.published))
+                     AS age_seconds,
+                   {SNAPSHOT_VALUE[metric]} AS v,
+                   p.published
+            FROM posts p
+            LEFT JOIN message_metrics m
+              ON m.channel_id = p.channel_id AND m.msg_id = p.msg_id
+        """
+    else:
+        query = f"""
             SELECT c.kind::text AS kind, m.channel_id, m.msg_id,
                    EXTRACT(EPOCH FROM (
                      m.observed_at - (r.payload->>'date')::timestamptz
@@ -349,16 +407,30 @@ async def observations(
             JOIN channels c ON c.tg_id = m.channel_id
             WHERE (r.payload->>'date')::timestamptz >= :since
               AND c.kind IS NOT NULL
-        """),
-        {"since": since},
-    )
+        """
+    rows = (await session.execute(text(query), {"since": since})).all()
 
+    heads: dict[tuple[int, int], tuple[int, int]] | None = None
+    if counted:
+        heads = burst_heads(
+            {
+                (channel, msg): published
+                for _, channel, msg, _, _, published in rows
+            }.items(),
+            gap=burst_gap,
+        )
+
+    keep_zeros = counted
     grouped: dict[ChannelKind, list[Observation]] = {}
-    for kind, channel, msg, age_seconds, value, published in result.all():
+    for kind, channel, msg, age_seconds, value, published in rows:
+        if heads is not None and heads[(channel, msg)] != (channel, msg):
+            continue
         # A reading predating its post is clock skew or a bad stored
         # date; a negative age passes every band test silently, which is
         # the worst way for bad data to behave.
-        if value is None or value <= 0 or age_seconds is None:
+        if value is None or age_seconds is None or value < 0:
+            continue
+        if value == 0 and not keep_zeros:
             continue
         if age_seconds < 0:
             continue
@@ -461,6 +533,7 @@ async def store_curves(
     samples: int,
     band_spreads: dict[str, float] | None = None,
     borrowed: bool = False,
+    dispersion: float | None = None,
 ) -> None:
     """Write one kind's fitted shape and rulers for one metric.
 
@@ -479,6 +552,7 @@ async def store_curves(
             spread=spread,
             samples=samples,
             borrowed=borrowed,
+            dispersion=dispersion,
         )
     )
     spreads = band_spreads or {}
@@ -528,11 +602,14 @@ async def load_baselines(session: AsyncSession) -> Baselines | None:
 
     factors: dict[tuple[ChannelKind, Metric], float] = {}
     spreads: dict[tuple[ChannelKind, Metric], float] = {}
+    dispersions: dict[tuple[ChannelKind, Metric], float] = {}
     for ruler in await session.scalars(
         select(MetricBaseline).where(MetricBaseline.run_id == run.id)
     ):
         factors[(ruler.kind, ruler.metric)] = ruler.factor
         spreads[(ruler.kind, ruler.metric)] = ruler.spread
+        if ruler.dispersion is not None:
+            dispersions[(ruler.kind, ruler.metric)] = ruler.dispersion
 
     fractions: dict[tuple[ChannelKind, Metric], dict[str, float]] = {}
     counts: dict[tuple[ChannelKind, Metric], dict[str, int]] = {}
@@ -569,4 +646,5 @@ async def load_baselines(session: AsyncSession) -> Baselines | None:
         band_spreads=band_spreads,
         channels_in_scope=run.channels_in_scope,
         references=references,
+        dispersions=dispersions,
     )

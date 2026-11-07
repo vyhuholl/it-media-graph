@@ -181,6 +181,34 @@ def test_a_spike_with_nothing_folded_says_nothing_about_the_channel() -> None:
     assert "📶" not in spike().text
 
 
+def test_a_comment_alert_states_the_count_and_the_usual() -> None:
+    text = spike(
+        kind=AlertKind.COMMENT_SPIKE, z=14.2, observed=117.0, expected=0.5
+    ).text
+    assert text.splitlines()[0] == (
+        "💬 Комментарии — 117, обычно меньше одного (z 14.2)"
+    )
+
+
+def test_a_comment_alert_rounds_the_usual() -> None:
+    text = spike(
+        kind=AlertKind.COMMENT_SPIKE, z=8.2, observed=1647.0, expected=9.3
+    ).text
+    assert "1647, обычно около 9 (z 8.2)" in text
+
+
+def test_a_comment_alert_without_its_count_reads_like_the_others() -> None:
+    """Raised before the count was kept: words, as every kind had."""
+    text = spike(kind=AlertKind.COMMENT_SPIKE, z=5.0).text
+    assert "Комментарии — намного выше обычного (z 5.0)" in text
+
+
+def test_the_other_kinds_never_state_a_count() -> None:
+    text = spike(observed=900.0, expected=300.0).text
+    assert "900" not in text
+    assert "выше обычного" in text
+
+
 def test_the_digest_says_how_many_it_covers() -> None:
     """What separates a digest from a silent drop."""
     body = digest([rendered()], held=7)

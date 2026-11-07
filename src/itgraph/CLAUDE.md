@@ -61,11 +61,12 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `alerts/cascade.py` | Which posts are travelling: distinct unaffiliated families, pure functions over edge rows |
 | `alerts/run.py` | The detection pass: load, detect, store, report. Touches no network and no snapshots |
 | `alerts/` | Deciding that something is worth telling the operator. Writes the queue; sends nothing |
-| `scoring/curves.py` | How a metric accrues with a post's age, the factors that join a curve to history, and a channel's own reference from its newest posts; pure |
-| `scoring/score.py` | What a post should have reached by now, and how far past it went; pure |
+| `scoring/curves.py` | How a metric accrues with a post's age, the factors that join a curve to history, and a channel's own reference from its newest posts; for comments, a mean with the zeros kept and a curve as a ratio of sums; pure |
+| `scoring/score.py` | What a post should have reached by now, and how far past it went; pure. Comments go to `counts.py`, and only where the run measured their dispersion |
+| `scoring/counts.py` | Comments as counts: the negative binomial's upper tail by the regularised incomplete beta, its z with a ±40 ceiling, and the dispersion fitted by likelihood; pure, no numpy or scipy |
 | `scoring/fold.py` | What counts as one thing: a burst of messages is one post, a channel's spikes inside a window are one event; pure |
-| `scoring/refresh.py` | The baseline refresh: fit, store, publish as one run. A refresh replaces rather than accumulates |
-| `scoring/run.py` | The scoring pass: load, score, raise, report. Replay is this same pass with an earlier moment |
+| `scoring/refresh.py` | The baseline refresh: fit, store, publish as one run. A refresh replaces rather than accumulates. Comments are fitted as counts: no mature fallback, a ratio-of-sums curve, and a dispersion per kind by likelihood beside the spread |
+| `scoring/run.py` | The scoring pass: load, score, raise, report. Replay is this same pass with an earlier moment. A comment count under `alert_spike_comments_min` is set aside before the post's best is chosen; a run without a comment dispersion is reported as not scoring comments |
 | `scoring/` | Recognizing that a post is doing unusually well for its channel and its age |
 | `bot/render.py` | An alert as a message a person reads; pure, so the wording is testable |
 | `bot/app.py` | Delivery: claim, send, mark. The poll is correctness, the notification is speed |
@@ -82,8 +83,8 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `db/edges.py` | The derived tables: `edges`, `pending_mentions` and the sources that order them |
 | `db/raw.py` | Writes into the raw layer; nothing here reads a payload |
 | `db/metrics.py` | Writes into the snapshot layer: append-only readings of a post's counters |
-| `db/alerts.py` | The alert queue: raising, claiming, delivering, and what the operator thought |
-| `db/baselines.py` | The baseline tables: what a post of a given age is expected to reach, and the run it was measured in |
+| `db/alerts.py` | The alert queue: raising, claiming, delivering, and what the operator thought. A comment spike keeps its count and the expectation it was scored against |
+| `db/baselines.py` | The baseline tables: what a post of a given age is expected to reach, and the run it was measured in. Comment readings keep their zeros and are read as posts are scored, an album by its first part and a burst by its first message; the comment dispersion is stored per kind |
 | `db/poll.py` | The poll queue: which channel is due, and when it is due again. Timing only |
 | `db/floods.py` | The record of rate limits: one row per wait, and the two questions asked of it |
 | `db/yt_channels.py` | The YouTube inventory: records (the operator's, never deleted) and payloads (YouTube's, 30 days at most); creation, expiry, gone and back, what is due for refresh, review, listing |

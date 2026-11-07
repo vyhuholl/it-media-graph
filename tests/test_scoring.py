@@ -639,3 +639,219 @@ def test_the_maximum_age_cuts() -> None:
     assert reference_at(
         posts, T0, newest=20, minimum=5, max_age=timedelta(days=90)
     ) == (300.0, 5)
+
+
+# --- comments, scored as counts ------------------------------------------------
+
+# Comments' shape as measured for personal channels on 2026-11-07, as a
+# ratio of sums: about a quarter by fifteen minutes, all of it by eight hours.
+COMMENTS_CURVE = Curve(
+    fractions={"15m": 0.27, "48m": 0.59, "220m": 0.85, "420m": 1.0},
+    samples=dict.fromkeys(("15m", "48m", "220m", "420m"), 500),
+)
+
+
+def comments(mean: float = 1.0, dispersion: float | None = 1.58) -> Baseline:
+    """A channel whose newest posts average `mean` comments at eight hours."""
+    return Baseline(
+        reference=mean,
+        factor=1.0,
+        curve=COMMENTS_CURVE,
+        spread=1.1,
+        dispersion=dispersion,
+    )
+
+
+EIGHT_HOURS = timedelta(hours=8)
+
+
+def test_no_comments_on_a_quiet_channel_scores_below_zero() -> None:
+    score = score_metric("comments", 0.0, EIGHT_HOURS, comments(1.0))
+    assert score is not None
+    assert score.z < 0
+
+
+def test_thirty_comments_on_a_channel_of_about_one_cross() -> None:
+    score = score_metric("comments", 30.0, EIGHT_HOURS, comments(1.0))
+    assert score is not None
+    assert score.z >= 3.7
+    assert score.expected == pytest.approx(1.0)
+    assert score.observed == 30.0
+
+
+def test_a_kind_whose_discussions_vary_widely_needs_more() -> None:
+    calm = score_metric("comments", 12.0, EIGHT_HOURS, comments(1.0, 0.4))
+    wild = score_metric("comments", 12.0, EIGHT_HOURS, comments(1.0, 12.9))
+    assert calm is not None and wild is not None
+    assert wild.z < calm.z
+
+
+def test_a_young_post_is_measured_against_its_age() -> None:
+    """Ten at fifteen minutes is more than ten at eight hours."""
+    young = score_metric(
+        "comments", 10.0, timedelta(minutes=16), comments(4.0)
+    )
+    settled = score_metric("comments", 10.0, EIGHT_HOURS, comments(4.0))
+    assert young is not None and settled is not None
+    assert young.expected == pytest.approx(4.0 * 0.27)
+    assert young.z > settled.z
+
+
+def test_a_run_without_a_dispersion_scores_no_comments() -> None:
+    assert (
+        score_metric("comments", 30.0, EIGHT_HOURS, comments(1.0, None))
+        is None
+    )
+
+
+def test_a_count_past_the_arithmetic_is_a_finite_ceiling() -> None:
+    score = score_metric(
+        "comments", 100_000.0, EIGHT_HOURS, comments(1.0, 0.05)
+    )
+    assert score is not None
+    assert score.z == 40.0
+
+
+def test_a_channel_whose_posts_had_no_comments_is_floored_not_refused() -> (
+    None
+):
+    score = score_metric("comments", 10.0, EIGHT_HOURS, comments(0.0))
+    assert score is not None
+    assert score.expected == pytest.approx(0.05)
+    assert 3.7 < score.z < 40.0
+
+
+def test_a_dispersion_changes_nothing_for_the_other_metrics() -> None:
+    plain = score_metric("views", 900.0, EIGHT_HOURS, baseline())
+    with_one = score_metric(
+        "views",
+        900.0,
+        EIGHT_HOURS,
+        Baseline(
+            reference=1000.0,
+            factor=0.44,
+            curve=VIEWS_CURVE,
+            spread=0.38,
+            dispersion=1.58,
+        ),
+    )
+    assert plain == with_one
+
+
+def test_the_counted_metrics_are_the_enums() -> None:
+    from itgraph.db.models import Metric
+    from itgraph.scoring.score import COUNTED
+
+    assert COUNTED == {Metric.COMMENTS.value}
+
+
+# --- comment baselines ---------------------------------------------------------
+
+
+def test_the_comment_reference_keeps_the_posts_nobody_commented_on() -> None:
+    from itgraph.scoring.curves import recent_mean
+
+    values = [0.0] * 18 + [10.0, 10.0]
+    assert recent_mean(values, newest=20, minimum=10) == (1.0, 20)
+    # The median of the commented ones would have said ten.
+    assert recent_reference(values, newest=20, minimum=2) == (10.0, 2)
+
+
+def test_a_comment_reference_needs_ten_posts() -> None:
+    from itgraph.scoring.curves import recent_mean
+
+    assert recent_mean([0.0] * 9, newest=20, minimum=10) is None
+    assert recent_mean([0.0] * 10, newest=20, minimum=10) == (0.0, 10)
+
+
+def test_a_counted_reference_at_a_moment_is_a_mean() -> None:
+    moment = datetime(2026, 11, 7, tzinfo=UTC)
+    history = [
+        (moment - timedelta(days=d), 3.0 if d % 5 == 0 else 0.0)
+        for d in range(25, 0, -1)
+    ]
+    found = reference_at(
+        history,
+        moment,
+        newest=20,
+        minimum=10,
+        max_age=timedelta(days=90),
+        counted=True,
+    )
+    assert found == (pytest.approx(0.6), 20)
+
+
+def test_zeros_shape_the_comment_curve() -> None:
+    """Fifteen minutes is mostly zeros, and the fraction has to say so."""
+    from itgraph.scoring.curves import fit_count_curve
+
+    observations = []
+    for post in range(40):
+        settled = 4.0 if post % 2 else 0.0
+        early = 1.0 if post % 4 == 1 else 0.0
+        observations += [
+            Observation(
+                post_key=(1, post), age=timedelta(minutes=16), value=early
+            ),
+            Observation(
+                post_key=(1, post), age=timedelta(hours=8), value=settled
+            ),
+        ]
+
+    counted = fit_count_curve(observations, min_samples=20)
+    medians = fit_curve(observations, min_samples=5)
+
+    # Ten early comments over eighty settled ones.
+    assert counted.fractions["15m"] == pytest.approx(10 / 80)
+    assert counted.samples["15m"] == 40
+    # The median of the non-zero fractions knows only the posts that had some.
+    assert medians.fractions["15m"] == pytest.approx(0.25)
+
+
+def test_a_known_comment_dispersion_is_recovered_by_the_fit() -> None:
+    """Posts drawn with dispersion 1.58, a reference of two at eight hours
+    and three fifths of it at fifty minutes: the fit gives the 1.58 back."""
+    import random
+
+    from test_counts import negative_binomial
+
+    from itgraph.scoring.refresh import _fit
+
+    rng = random.Random(7)
+    entries = []
+    for post in range(500):
+        for age, mean in (
+            (timedelta(minutes=50), 1.2),
+            (timedelta(hours=8), 2.0),
+        ):
+            entries.append(
+                Observation(
+                    post_key=(1, post),
+                    age=age,
+                    value=float(negative_binomial(rng, mean, 1.58)),
+                )
+            )
+
+    fit = _fit(entries, {}, recent=lambda entry: 2.0, counted=True)
+
+    assert not isinstance(fit, str)
+    assert fit.factor == 1.0
+    assert fit.curve.fractions["48m"] == pytest.approx(0.6, rel=0.15)
+    assert fit.dispersion == pytest.approx(1.58, rel=0.2)
+
+
+def test_a_comment_reference_never_holds_its_own_post() -> None:
+    from itgraph.scoring.refresh import _rolling
+
+    moment = datetime(2026, 11, 7, tzinfo=UTC)
+    published = [moment - timedelta(days=d) for d in range(30, 0, -1)]
+    history = {1: [(at, 0.0) for at in published[:-1]]}
+    history[1].append((published[-1], 500.0))
+    discussed = Observation(
+        post_key=(1, 30),
+        age=timedelta(hours=2),
+        value=300.0,
+        published=published[-1],
+    )
+
+    assert _rolling(history, counted=True)(discussed) == 0.0

@@ -13,6 +13,12 @@ The estimate, and every part of it measured rather than assumed:
 
     z = log(actual / expected) / spread          ← spread per metric and kind
 
+**Comments are the exception**, scored as counts in ``scoring/counts.py``:
+the same expectation, floored at a twentieth of a comment, as the mean of a
+negative binomial with the kind's dispersion, and the z whose upper tail is
+the probability of a count at least as large. A counter that is zero in
+half its readings has no logarithm worth taking.
+
 The reference is the channel's eight-hour value where it has enough
 recent posts to measure one, and its mature median otherwise — which the
 kind's factor turns into an eight-hour figure, and which is only as recent
@@ -37,9 +43,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+from itgraph.scoring.counts import MEAN_FLOOR, count_z
 from itgraph.scoring.curves import Curve, band_of
 
 __all__ = [
+    "COUNTED",
     "Baseline",
     "Score",
     "Spike",
@@ -78,6 +86,10 @@ class Baseline:
     curve: Curve
     spread: float
     band_spreads: dict[str, float] = field(default_factory=dict)
+    # A counted metric's dispersion, for its kind. ``None`` for the others,
+    # and for a counted metric whose run measured none, which then scores
+    # nothing rather than falling back to a logarithm it cannot describe.
+    dispersion: float | None = None
 
     def spread_at(self, age: timedelta) -> float | None:
         """The dispersion to divide this reading by, or ``None``.
@@ -134,6 +146,12 @@ class Spike:
     crossed_at: datetime
 
 
+# The metrics scored as counts: comments, by `Metric.COMMENTS`'s value. A
+# string here because this module knows no enum of the database's; a test
+# holds the two equal.
+COUNTED = frozenset({"comments"})
+
+
 def expected(baseline: Baseline, age: timedelta) -> float | None:
     """What this metric should be on this channel at this age.
 
@@ -168,6 +186,8 @@ def score_metric(
     """
     if observed is None or baseline is None:
         return None
+    if metric in COUNTED:
+        return _score_count(metric, observed, age, baseline)
     reference = expected(baseline, age)
     dispersion = baseline.spread_at(age)
     if reference is None or dispersion is None or dispersion <= 0:
@@ -184,6 +204,33 @@ def score_metric(
         observed=observed,
         expected=reference,
         z=math.log(value / reference) / dispersion,
+    )
+
+
+def _score_count(
+    metric: str, observed: float, age: timedelta, baseline: Baseline
+) -> Score | None:
+    """A counted metric's score: how improbable the count is.
+
+    No dispersion is no score, the refusal ``score_metric`` makes for a
+    missing curve: a run measured before counts were scored as counts
+    cannot score them, and pretending with a logarithm is the failure this
+    exists to replace. A zero expectation is not a refusal, since a
+    channel whose posts had no comments is exactly where one comment is
+    surprising; it is floored instead.
+    """
+    if baseline.dispersion is None:
+        return None
+    fraction = baseline.curve.at(age)
+    if fraction is None:
+        return None
+    mean = max(baseline.reference * baseline.factor * fraction, MEAN_FLOOR)
+    return Score(
+        metric=metric,
+        age=age,
+        observed=observed,
+        expected=mean,
+        z=count_z(round(observed), mean, baseline.dispersion),
     )
 
 

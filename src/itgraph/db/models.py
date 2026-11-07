@@ -1418,6 +1418,14 @@ class Alert(Base):
     band: Mapped[int] = mapped_column(Integer)
     value: Mapped[float] = mapped_column(Float)
 
+    # For a comment spike, the count that crossed and the expectation it
+    # was scored against. A z does not give the count back, and the next
+    # baseline run would give another expectation, so what decided it is
+    # kept with it. Null for every other kind, whose message says how far
+    # past normal in words rather than in numbers.
+    observed: Mapped[float | None] = mapped_column(Float)
+    expected: Mapped[float | None] = mapped_column(Float)
+
     raised_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -1618,6 +1626,12 @@ class MetricBaseline(Base):
     This figure is what a band too thin to measure its own falls back to,
     which is why it is still fitted and still stored.
 
+    ``dispersion`` is comments' ruler instead: a count zero in half its
+    readings has no logarithm worth a spread, so comments are scored as a
+    negative binomial, and this is its dispersion for the kind, fitted by
+    maximum likelihood. Null for every other metric, and for a run measured
+    before comments were counted, which then scores no comments at all.
+
     ``borrowed`` records that this kind could not be fitted and took the
     curve pooled across all kinds. It is not the "no partial baselines"
     rule being relaxed — that rule forbids mixing measured and assumed
@@ -1642,6 +1656,7 @@ class MetricBaseline(Base):
     factor: Mapped[float] = mapped_column(Float)
     spread: Mapped[float] = mapped_column(Float)
     samples: Mapped[int] = mapped_column(Integer)
+    dispersion: Mapped[float | None] = mapped_column(Float)
 
     borrowed: Mapped[bool] = mapped_column(
         Boolean, server_default=false(), default=False

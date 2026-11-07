@@ -17,6 +17,13 @@ enabling them keeps accumulating in the meantime.
 eight hours where it has enough of them, its mature median otherwise. The
 mature medians are still read for every channel, because the kind's
 factor is fitted from them and the fallback channels need it.
+
+**Comments are counted, and fitted differently** (``scoring/counts.py``):
+their reference is the mean of the newest posts with the zeros kept, with
+no mature fallback; their curve is a ratio of sums; and beside the log
+spread, which is still stored and scores nothing, each kind gets a
+dispersion fitted by maximum likelihood against the reference each post
+would have been scored against.
 """
 
 import logging
@@ -37,16 +44,19 @@ from itgraph.db.baselines import (
 )
 from itgraph.db.models import BaselineReference, ChannelKind, Metric
 from itgraph.db.session import Database
+from itgraph.scoring.counts import MEAN_FLOOR, fit_dispersion
 from itgraph.scoring.curves import (
     Curve,
     Observation,
     band_of,
     fit_band_spreads,
+    fit_count_curve,
     fit_curve,
     fit_factor,
     fit_spread,
     reference_at,
 )
+from itgraph.scoring.score import COUNTED
 
 # What a residual is measured from: the reference one observation's post
 # would have been scored against, or ``None`` where it had none.
@@ -105,7 +115,7 @@ class BaselineSummary:
             pairs = ", ".join(
                 f"{kind}/{metric}" for kind, metric in self.borrowed
             )
-            line += f"; borrowed the pooled curve: {pairs}"
+            line += f"; borrowed the pooled fit: {pairs}"
         if self.skipped:
             reasons = ", ".join(
                 f"{kind or 'every kind'}/{metric} ({why})"
@@ -171,6 +181,34 @@ class Fit:
     spread: float
     band_spreads: dict[str, float]
     samples: int
+    dispersion: float | None = None
+
+
+def _dispersion(
+    entries: list[Observation], *, curve: Curve, reference: Reference
+) -> float | str:
+    """A counted metric's dispersion for one pool, or why it has none.
+
+    Each reading against the mean its post would have been scored
+    against — the reference built from the posts settled before it, so a
+    post never fits its own ruler. Measured on at least as many distinct
+    posts as a band's own spread needs, for the same reason: fitted on a
+    handful of posts, a dispersion comes out too narrow as often as not,
+    and too narrow is the direction that over-alerts.
+    """
+    pairs: list[tuple[int, float]] = []
+    posts: set[tuple[int, int]] = set()
+    for entry in entries:
+        fraction = curve.at(entry.age)
+        base = reference(entry)
+        if fraction is None or base is None:
+            continue
+        pairs.append((round(entry.value), max(base * fraction, MEAN_FLOOR)))
+        posts.add(entry.post_key)
+    if len(posts) < settings.baseline_min_band_spread_posts:
+        return "too few posts to fit a dispersion"
+    dispersion = fit_dispersion(pairs)
+    return "no dispersion" if dispersion is None else dispersion
 
 
 def _fit(
@@ -178,6 +216,7 @@ def _fit(
     medians: dict[int, tuple[float, int]],
     *,
     recent: Reference | None = None,
+    counted: bool = False,
 ) -> Fit | str:
     """Everything one pool of observations supports, or why it does not.
 
@@ -189,23 +228,34 @@ def _fit(
     had one when the post went out; anything it does not cover is
     measured from the mature median and the factor fitted here, which is
     what scoring would have done with it.
+
+    ``counted`` is a counted metric's fit: the curve a ratio of sums, no
+    factor and no mature fallback, and a dispersion beside the spread.
     """
     floor = settings.baseline_min_band_samples
-    curve = fit_curve(entries, min_samples=floor)
+    if counted:
+        curve = fit_count_curve(entries, min_samples=floor)
+    else:
+        curve = fit_curve(entries, min_samples=floor)
     if not curve.fractions:
         return "no band met the minimum"
 
-    factor = fit_factor(
-        entries,
-        {channel: value for channel, (value, _) in medians.items()},
-        min_samples=floor,
-    )
+    if counted:
+        factor: float | None = 1.0
+    else:
+        factor = fit_factor(
+            entries,
+            {channel: value for channel, (value, _) in medians.items()},
+            min_samples=floor,
+        )
     if factor is None:
         return "too few posts with a mature median"
 
     def reference(entry: Observation) -> float | None:
         if recent is not None and (value := recent(entry)) is not None:
             return value
+        if counted:
+            return None
         median = medians.get(entry.post_key[0])
         return None if median is None else median[0] * factor
 
@@ -223,6 +273,13 @@ def _fit(
         # metric would apply that metric's shape to this one.
         return "no measurable spread"
 
+    dispersion: float | None = None
+    if counted:
+        found = _dispersion(entries, curve=curve, reference=reference)
+        if isinstance(found, str):
+            return found
+        dispersion = found
+
     return Fit(
         curve=curve,
         factor=factor,
@@ -234,11 +291,15 @@ def _fit(
             min_posts=settings.baseline_min_band_spread_posts,
         ),
         samples=len(entries),
+        dispersion=dispersion,
     )
 
 
 def _recent_reference(
-    history: Sequence[tuple[datetime, float]], moment: datetime
+    history: Sequence[tuple[datetime, float]],
+    moment: datetime,
+    *,
+    counted: bool = False,
 ) -> tuple[float, int] | None:
     """A channel's recent reference at a moment, under the settings."""
     return reference_at(
@@ -247,11 +308,14 @@ def _recent_reference(
         newest=settings.baseline_recent_posts,
         minimum=settings.baseline_recent_min_posts,
         max_age=timedelta(days=settings.baseline_recent_max_days),
+        counted=counted,
     )
 
 
 def _rolling(
     history: Mapping[int, Sequence[tuple[datetime, float]]],
+    *,
+    counted: bool = False,
 ) -> Reference:
     """Each observation's recent reference as of its own post's publication.
 
@@ -267,7 +331,9 @@ def _rolling(
             return None
         if entry.post_key not in cache:
             found = _recent_reference(
-                history.get(entry.post_key[0], ()), entry.published
+                history.get(entry.post_key[0], ()),
+                entry.published,
+                counted=counted,
             )
             cache[entry.post_key] = None if found is None else found[0]
         return cache[entry.post_key]
@@ -313,12 +379,20 @@ async def refresh_baselines(
         references: dict[Metric, tuple[int, int]] = {}
 
         for metric in Metric:
-            medians = await mature_medians(
-                session,
-                metric,
-                mature_days=settings.baseline_mature_days,
-                max_days=settings.baseline_mature_max_days,
-                min_posts=settings.baseline_min_channel_posts,
+            counted = metric in COUNTED
+            # A counted metric has no mature fallback: the settled value is
+            # a final count, not an eight-hour one, and its factor would be
+            # fitted on the commented posts alone.
+            medians = (
+                {}
+                if counted
+                else await mature_medians(
+                    session,
+                    metric,
+                    mature_days=settings.baseline_mature_days,
+                    max_days=settings.baseline_mature_max_days,
+                    min_posts=settings.baseline_min_channel_posts,
+                )
             )
             # Far enough back that the oldest post in the curve window
             # still has its whole reference behind it.
@@ -333,7 +407,12 @@ async def refresh_baselines(
             recent = {
                 channel: found
                 for channel, entries in history.items()
-                if (found := _recent_reference(entries, moment)) is not None
+                if (
+                    found := _recent_reference(
+                        entries, moment, counted=counted
+                    )
+                )
+                is not None
             }
             fallback = {
                 channel: median
@@ -357,9 +436,14 @@ async def refresh_baselines(
             scored.update(recent)
             scored.update(fallback)
             references[metric] = (len(recent), len(fallback))
-            rolling = _rolling(history)
+            rolling = _rolling(history, counted=counted)
 
-            by_kind = await observations(session, metric, since=since)
+            by_kind = await observations(
+                session,
+                metric,
+                since=since,
+                burst_gap=timedelta(seconds=settings.scoring_burst_seconds),
+            )
             if not by_kind:
                 # No snapshot in the window carried this metric at all —
                 # a channel that publishes no reactions is the ordinary
@@ -376,10 +460,11 @@ async def refresh_baselines(
                 [entry for entries in by_kind.values() for entry in entries],
                 medians,
                 recent=rolling,
+                counted=counted,
             )
 
             for kind, entries in by_kind.items():
-                fit = _fit(entries, medians, recent=rolling)
+                fit = _fit(entries, medians, recent=rolling, counted=counted)
                 borrowed = False
                 if isinstance(fit, str):
                     if isinstance(pooled, str):
@@ -403,6 +488,7 @@ async def refresh_baselines(
                     band_spreads=fit.band_spreads,
                     samples=fit.samples,
                     borrowed=borrowed,
+                    dispersion=fit.dispersion,
                 )
                 (borrowed_pairs if borrowed else fitted).append((kind, metric))
 

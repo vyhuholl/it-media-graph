@@ -792,6 +792,7 @@ def score(
     from itgraph.config import settings
     from itgraph.db.session import Database
     from itgraph.scoring.run import run_scoring
+    from itgraph.scoring.score import COUNTED
 
     if since is not None and not replay:
         # --since bounds a replay's history. On a live pass the window is
@@ -826,7 +827,8 @@ def score(
             line = (
                 f"  z {spike.score.z:5.1f}  {spike.score.metric:<9} "
                 f"{channel}/{msg}  "
-                f"{spike.score.observed:.0f} vs {spike.score.expected:.0f} "
+                f"{spike.score.observed:.0f} vs "
+                f"{spike.score.expected:.{1 if spike.score.metric in COUNTED else 0}f} "
                 f"expected at {_hours(spike.score.age)}"
             )
             head = heads.get(spike.post_key)

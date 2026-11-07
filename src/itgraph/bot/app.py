@@ -128,6 +128,8 @@ async def _render(
             z=alert.value,
             text=evidence.text,
             folded=folded,
+            observed=alert.observed,
+            expected=alert.expected,
         )
 
     return render_cascade(

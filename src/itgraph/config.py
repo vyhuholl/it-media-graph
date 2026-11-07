@@ -392,10 +392,15 @@ class Settings(BaseSettings):
     # baselines are computed for all four regardless, so enabling one is
     # configuration rather than a re-fit.
     #
-    # Comments are absent: 184 posts across 304 channels, a spread of
-    # 1.01, and a calibration drifting from −0.15 to 0.00 across the age
-    # bands. Measured too poorly to alert on, and a metric that fires
-    # wrongly costs more trust than one that stays quiet.
+    # Comments alert since they are scored as counts (`scoring/counts.py`).
+    # The logarithm every other metric is scored by cannot describe a
+    # counter that is zero in half its readings: replayed over the 30 days
+    # to 2026-11-07 it raised 0.1 comment messages a day at the shared
+    # threshold. As a negative binomial with a dispersion per kind, the
+    # same z 3.7 and the minimum below give 0.75 a day after folding —
+    # replayed on this code over the last 16 days, baselines refreshed
+    # each day in order — and of the twenty strongest the operator found
+    # seventeen to be natural reactions to news.
     #
     # Typed as the enum, for the reason `ProxyType` is an enum: a typo
     # here would otherwise disable a metric silently, and under-alerting
@@ -404,7 +409,18 @@ class Settings(BaseSettings):
         Metric.VIEWS,
         Metric.REACTIONS,
         Metric.FORWARDS,
+        Metric.COMMENTS,
     )
+
+    # The fewest comments that may raise a comment alert, however
+    # improbable fewer would be. A channel that almost never gets a comment
+    # makes five improbable, and five is not a discussion anyone would want
+    # a message about. Replayed on the same 16 days: 1.19 messages a day
+    # at no minimum, 1.06 at five, 0.75 at ten. Kept at ten by the
+    # operator, under the one or two a day first asked for, rather than
+    # let five comments on a quiet channel through; twenty would drop
+    # discussions of seventeen to nineteen the operator found real.
+    alert_spike_comments_min: int = Field(default=10, ge=0)
 
     # How long after a channel's first spike its later spikes are folded
     # into it rather than sent. When a whole channel's audience grows at

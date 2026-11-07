@@ -163,6 +163,13 @@ def _magnitude(z: float) -> str:
     return "исключительно много"
 
 
+def _usual(expected: float) -> str:
+    """What a channel's posts usually have, in words a reader counts in."""
+    if expected < 1:
+        return "обычно меньше одного"
+    return f"обычно около {round(expected)}"
+
+
 def render_spike(
     *,
     alert_id: int,
@@ -175,6 +182,8 @@ def render_spike(
     z: float,
     text: str | None,
     folded: int = 0,
+    observed: float | None = None,
+    expected: float | None = None,
 ) -> RenderedAlert:
     """One post doing unusually well on one metric, as one message.
 
@@ -194,13 +203,28 @@ def render_spike(
     grew" — and counted rather than listed, because a list of links is
     the series folding exists to replace. Nothing is said when it is
     zero: a single post standing out is the ordinary claim.
+
+    A comment spike says its count and what the channel's posts usually
+    have at that age, where it has them: a count is a number a reader
+    reads, unlike the multiple of a spread. Without them — an alert raised
+    before they were kept — it reads like the other kinds.
     """
     who = channel_title or (
         f"@{channel_username}" if channel_username else "канал"
     )
     label = SPIKE_LABEL.get(kind, "📈 Активность")
+    if (
+        kind is AlertKind.COMMENT_SPIKE
+        and observed is not None
+        and expected is not None
+    ):
+        headline = (
+            f"{label} — {round(observed)}, {_usual(expected)} (z {z:.1f})"
+        )
+    else:
+        headline = f"{label} — {_magnitude(z)} (z {z:.1f})"
     lines = [
-        f"{label} — {_magnitude(z)} (z {z:.1f})",
+        headline,
         f"{who} · {age_phrase(now - published_at)}",
     ]
 

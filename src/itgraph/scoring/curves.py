@@ -49,10 +49,12 @@ __all__ = [
     "Observation",
     "band_of",
     "fit_band_spreads",
+    "fit_count_curve",
     "fit_curve",
     "fit_factor",
     "fit_spread",
     "median",
+    "recent_mean",
     "recent_reference",
     "reference_at",
 ]
@@ -195,7 +197,7 @@ def median(values: Sequence[float]) -> float:
 
 
 def _reference(
-    observations: Iterable[Observation],
+    observations: Iterable[Observation], *, keep_zeros: bool = False
 ) -> dict[tuple[int, int], float]:
     """Each post's value in the reference band, where it has one.
 
@@ -208,7 +210,7 @@ def _reference(
     for entry in observations:
         if band_of(entry.age) != REFERENCE_BAND:
             continue
-        if entry.value <= 0:
+        if entry.value < 0 or (entry.value == 0 and not keep_zeros):
             continue
         current = reference.get(entry.post_key)
         if current is None or entry.value > current:
@@ -254,6 +256,39 @@ def fit_curve(
             if len(values) >= min_samples
         },
         samples={band: len(values) for band, values in gathered.items()},
+    )
+
+
+def fit_count_curve(
+    observations: Sequence[Observation], *, min_samples: int = 20
+) -> Curve:
+    """A counted metric's shape: per band, a ratio of sums, zeros kept.
+
+    ``fit_curve`` takes the median of each post's fraction over non-zero
+    readings, which for comments discards half the data — the posts
+    nobody had commented on yet — and describes the shape of the posts
+    that already had some. Here every reading of a post with a reading at
+    eight hours counts, and the band's fraction is what its readings sum
+    to over what those posts reached at eight hours.
+    """
+    reference = _reference(observations, keep_zeros=True)
+    sums: dict[str, tuple[float, float, int]] = {}
+    for entry in observations:
+        base = reference.get(entry.post_key)
+        if base is None or entry.value < 0:
+            continue
+        band = band_of(entry.age)
+        if band is None:
+            continue
+        reached, possible, count = sums.get(band, (0.0, 0.0, 0))
+        sums[band] = (reached + entry.value, possible + base, count + 1)
+    return Curve(
+        fractions={
+            band: reached / possible
+            for band, (reached, possible, count) in sums.items()
+            if count >= min_samples and possible > 0
+        },
+        samples={band: count for band, (_, _, count) in sums.items()},
     )
 
 
@@ -361,6 +396,23 @@ def recent_reference(
     return median(taken), len(taken)
 
 
+def recent_mean(
+    values: Sequence[float], *, newest: int, minimum: int
+) -> tuple[float, int] | None:
+    """A counted metric's reference: the mean of the newest, zeros kept.
+
+    The mean, because it is the parameter the count is scored with; zeros
+    kept, because a channel whose posts mostly had no comments is a
+    channel where comments are rare, and a median of the commented ones
+    would describe a different channel. Twenty posts of which two had ten
+    comments is a reference of one, not ten.
+    """
+    taken = list(values[-newest:])
+    if len(taken) < minimum:
+        return None
+    return sum(taken) / len(taken), len(taken)
+
+
 def reference_at(
     history: Sequence[tuple[datetime, float]],
     moment: datetime,
@@ -368,6 +420,7 @@ def reference_at(
     newest: int,
     minimum: int,
     max_age: timedelta,
+    counted: bool = False,
 ) -> tuple[float, int] | None:
     """The reference a channel had at ``moment``.
 
@@ -386,10 +439,10 @@ def reference_at(
     """
     upper = bisect_right(history, moment - REFERENCE_SETTLED, key=_published)
     lower = bisect_left(history, moment - max_age, key=_published)
-    window = history[lower:upper]
-    return recent_reference(
-        [value for _, value in window], newest=newest, minimum=minimum
-    )
+    window = [value for _, value in history[lower:upper]]
+    if counted:
+        return recent_mean(window, newest=newest, minimum=minimum)
+    return recent_reference(window, newest=newest, minimum=minimum)
 
 
 def _published(entry: tuple[datetime, float]) -> datetime:

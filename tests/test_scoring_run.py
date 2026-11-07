@@ -44,6 +44,13 @@ EXPECTED_AT_2H = 1000.0 * 0.44 * 0.50
 # a spike pitched just above it breaks the day the threshold moves.
 SPIKE = 6
 
+# Comments, counted: all of a post's comments by two hours of age, a
+# channel of about one a post, and personal channels' measured dispersion.
+COMMENTS_CURVE = Curve(
+    fractions={"48m": 0.6, "105m": 1.0, "420m": 1.0},
+    samples=dict.fromkeys(("48m", "105m", "420m"), 500),
+)
+
 
 @pytest.fixture(autouse=True)
 def shipped_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -108,6 +115,7 @@ async def snapshot(
     views: int | None = None,
     forwards: int | None = None,
     reactions: dict[str, int] | None = None,
+    comments: int | None = None,
 ) -> None:
     """One reading of one post, taken at ``age`` after publication."""
     observed = NOW - published_ago + age
@@ -115,8 +123,8 @@ async def snapshot(
         await session.execute(
             text(
                 "INSERT INTO message_metrics (channel_id, msg_id, "
-                "observed_at, views, forwards, reactions) VALUES "
-                "(:c, :m, :at, :v, :f, CAST(:r AS jsonb))"
+                "observed_at, views, forwards, reactions, comments) VALUES "
+                "(:c, :m, :at, :v, :f, CAST(:r AS jsonb), :n)"
             ),
             {
                 "c": channel,
@@ -125,6 +133,7 @@ async def snapshot(
                 "v": views,
                 "f": forwards,
                 "r": None if reactions is None else json.dumps(reactions),
+                "n": comments,
             },
         )
 
@@ -134,6 +143,8 @@ async def seed_baselines(
     *,
     views_median: float = 1000.0,
     forwards_median: float | None = None,
+    comments_mean: float | None = None,
+    comment_rulers: bool = False,
     channel: int = CHANNEL,
     spread: float = 0.38,
     reference: BaselineReference = BaselineReference.MATURE,
@@ -181,6 +192,26 @@ async def seed_baselines(
                 factor=0.44,
                 spread=spread,
                 samples=500,
+            )
+        if comments_mean is not None:
+            await store_channel_medians(
+                session,
+                run,
+                Metric.COMMENTS,
+                {channel: (comments_mean, 20)},
+                reference=BaselineReference.RECENT,
+            )
+        if comments_mean is not None or comment_rulers:
+            await store_curves(
+                session,
+                run,
+                ChannelKind.PERSONAL,
+                Metric.COMMENTS,
+                curve=COMMENTS_CURVE,
+                factor=1.0,
+                spread=1.1,
+                samples=500,
+                dispersion=1.58,
             )
         run.completed_at = NOW - timedelta(hours=1)
 
@@ -813,3 +844,166 @@ async def test_a_channel_on_the_fallback_is_scored_and_counted(
     assert summary.raised == 1
     assert summary.channels_on_fallback == 1
     assert "1 scored against their settled history" in summary.line()
+
+
+async def test_a_run_without_a_comment_dispersion_says_comments_are_not_scored(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Silence must not read as a day without discussion."""
+    monkeypatch.setattr(
+        settings,
+        "alert_spike_metrics",
+        (Metric.VIEWS, Metric.COMMENTS),
+    )
+    await seed_post(database)
+    await seed_baselines(database)
+    await snapshot(database, views=int(EXPECTED_AT_2H))
+
+    summary = await run_scoring(database, now=NOW)
+
+    assert summary.uncounted == ("comments",)
+    assert "comments not scored" in summary.line()
+    assert "itgraph baselines" in summary.line()
+
+
+# --- comments ------------------------------------------------------------------
+
+
+async def test_ten_comments_on_a_quiet_channel_raise_a_comment_alert(
+    database: Database,
+) -> None:
+    await seed_post(database)
+    # About a third of a comment a post: ten is z 4.5.
+    await seed_baselines(database, comments_mean=0.3)
+    await snapshot(database, views=int(EXPECTED_AT_2H), comments=10)
+
+    summary = await run_scoring(database, now=NOW)
+
+    assert summary.raised == 1
+    kind, channel, msg, value = alerts_one(await alerts(database))
+    assert kind == AlertKind.COMMENT_SPIKE
+    assert (channel, msg) == (CHANNEL, POST)
+    assert value > 3.7
+
+
+async def test_nine_comments_raise_nothing_however_improbable(
+    database: Database,
+) -> None:
+    """Under the minimum, a count is set aside before anything is compared."""
+    await seed_post(database)
+    # Nine is z 4.2 here, past the threshold, and still under the minimum.
+    await seed_baselines(database, comments_mean=0.3)
+    await snapshot(database, views=int(EXPECTED_AT_2H), comments=9)
+
+    summary = await run_scoring(database, now=NOW)
+
+    assert summary.raised == 0
+    assert await alerts(database) == []
+
+
+async def test_short_comments_do_not_take_the_alert_views_earned(
+    database: Database,
+) -> None:
+    await seed_post(database)
+    await seed_baselines(database, comments_mean=0.0)
+    await snapshot(database, views=int(EXPECTED_AT_2H * SPIKE), comments=9)
+
+    await run_scoring(database, now=NOW)
+
+    [(kind, *_)] = await alerts(database)
+    assert kind == AlertKind.VIEWS_SPIKE
+
+
+async def test_one_post_strong_on_views_and_comments_raises_one_alert(
+    database: Database,
+) -> None:
+    """Under its strongest: here the comments, far past the views."""
+    await seed_post(database)
+    await seed_baselines(database, comments_mean=1.0)
+    await snapshot(database, views=int(EXPECTED_AT_2H * SPIKE), comments=200)
+
+    summary = await run_scoring(database, now=NOW)
+
+    assert summary.raised == 1
+    [(kind, *_)] = await alerts(database)
+    assert kind == AlertKind.COMMENT_SPIKE
+
+
+async def test_a_replay_lists_a_comment_crossing(database: Database) -> None:
+    await seed_post(database)
+    await seed_baselines(database, comments_mean=1.0)
+    await snapshot(database, views=int(EXPECTED_AT_2H), comments=40)
+
+    summary = await run_scoring(database, now=NOW, dry_run=True)
+
+    assert [spike.score.metric for spike in summary.spikes] == [
+        Metric.COMMENTS
+    ]
+    assert await alerts(database) == []
+
+
+def test_comments_alert_by_default_with_a_minimum_of_ten() -> None:
+    from itgraph.config import Settings
+
+    assert (
+        Metric.COMMENTS in Settings.model_fields["alert_spike_metrics"].default
+    )
+    assert Settings.model_fields["alert_spike_comments_min"].default == 10
+
+
+async def test_a_comment_alert_keeps_its_count_and_expectation(
+    database: Database,
+) -> None:
+    """And neither moves when the baselines are refreshed."""
+    from itgraph.db.alerts import claim_undelivered
+
+    await seed_post(database)
+    await seed_baselines(database, comments_mean=0.3)
+    await snapshot(database, views=int(EXPECTED_AT_2H), comments=10)
+    await run_scoring(database, now=NOW)
+    await seed_baselines(database, comments_mean=5.0)
+
+    async with database.session() as session:
+        stored = (
+            await session.execute(
+                text("SELECT kind::text, observed, expected FROM alerts")
+            )
+        ).one()
+        [pending] = await claim_undelivered(session, limit=10)
+
+    assert tuple(stored) == ("comment_spike", 10.0, pytest.approx(0.3))
+    assert (pending.observed, pending.expected) == (10.0, pytest.approx(0.3))
+
+
+async def test_a_views_alert_keeps_no_count(database: Database) -> None:
+    await seed_post(database)
+    await seed_baselines(database)
+    await snapshot(database, views=int(EXPECTED_AT_2H * SPIKE))
+    await run_scoring(database, now=NOW)
+
+    async with database.session() as session:
+        stored = (
+            await session.execute(
+                text("SELECT observed, expected FROM alerts")
+            )
+        ).one()
+
+    assert tuple(stored) == (None, None)
+
+
+async def test_a_channel_too_quiet_for_a_comment_reference_still_scores_views(
+    database: Database,
+) -> None:
+    """No comment reference — too few recent posts, and comments have no
+    fallback — so its comments are not scored, and its views are, against
+    the settled history they fall back to."""
+    await seed_post(database)
+    await seed_baselines(database, comment_rulers=True)
+    await snapshot(database, views=int(EXPECTED_AT_2H * SPIKE), comments=30)
+
+    summary = await run_scoring(database, now=NOW)
+
+    assert summary.raised == 1
+    [(kind, *_)] = await alerts(database)
+    assert kind == AlertKind.VIEWS_SPIKE
+    assert summary.uncounted == ()
