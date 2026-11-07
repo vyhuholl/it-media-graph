@@ -906,6 +906,10 @@ async def test_a_lost_lease_still_arrives_as_itself(
 
     await seed(database, FIRST)
     client = client_for({FIRST: [fresh(10, 5, views=1)]})
+    # The loop checks its lease once its clock, the host's monotonic one, is
+    # past the interval: on a machine up for less than that, the one cycle
+    # here would check nothing. A CI runner can be.
+    monkeypatch.setattr(settings, "watch_lease_check_seconds", 1e-9)
 
     with pytest.raises(LeaseLostError):
         await watch(client, database, lease=LostLease(), max_cycles=1)  # type: ignore[arg-type]

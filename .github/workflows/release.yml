@@ -47,6 +47,11 @@ jobs:
       # Includes the role's checks and the release's harness, which need no cluster.
       - name: The tests
         run: make test
+        env:
+          # Under GitHub Actions Typer takes the output for a terminal and draws
+          # its errors in colour and in a box, which splits the text the CLI's
+          # tests look for.
+          _TYPER_FORCE_DISABLE_TERMINAL: "1"
       - name: Lint the role
         run: make ansible-lint
 
