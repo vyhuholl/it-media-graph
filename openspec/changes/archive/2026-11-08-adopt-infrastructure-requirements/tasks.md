@@ -97,29 +97,29 @@ Tasks marked **(operator)** reach the server, the controller, Telegram, B2 or th
 
 ## 13. The test environment
 
-- [ ] 13.1 **(operator)** A test bot from BotFather; a test group; values into the test vault. Verify: `/status` answers in that group after 13.5.
-- [ ] 13.2 **(operator)** The request implemented behind the flag; production's `--check --diff` shows no change. Verify: its output.
-- [ ] 13.3 **(operator)** Push `master`, wait for the image, tag `v0.1.0`. Verify: the release holds the archive and its sum, and the image's tag has the commit's digest.
-- [ ] 13.4 **(operator)** Pin in test. Verify: the commit in the test inventory.
-- [ ] 13.5 **(operator)** The main playbook on a fresh volume, twice. Verify: green, the second run restarting nothing, the namespace enforcing `restricted`, and the failing collector pod's report.
-- [ ] 13.6 **(operator)** `restore` from production's newest full dump. Verify: counts match, the read-back's zeroes, the synthetic alert in the test group, a new baseline run, no container restarting in five minutes; the duration of the revision clearing people, recorded in `remove-person-ids-from-raw-layer`, 5.3.
-- [ ] 13.7 **(operator)** `restore` from the off-site copy, the age identity pasted at the prompt. Verify: as 13.6, and no copy left on the controller or the test host.
-- [ ] 13.8 **(operator)** One rule fired on purpose to the test group. Verify: seen there, and resolved.
-- [ ] 13.9 **(operator)** The takeover rehearsed in test (Migration Plan, step 7). Verify: Postgres up as uid 999 on files a root-started image wrote; the gap measured, and recorded here.
+- [x] 13.1 **(operator)** A test bot from BotFather; a test group; values into the test vault. Verify: `/status` answers in that group after 13.5.
+- [x] 13.2 **(operator)** The request implemented behind the flag; production's `--check --diff` shows no change. Verify: its output.
+- [x] 13.3 **(operator)** Push `master`, wait for the image, tag `v0.1.0`. Verify: the release holds the archive and its sum, and the image's tag has the commit's digest.
+- [x] 13.4 **(operator)** Pin in test. Verify: the commit in the test inventory.
+- [x] 13.5 **(operator)** The main playbook on a fresh volume, twice. Verify: green, the second run restarting nothing, the namespace enforcing `restricted`, and the failing collector pod's report.
+- [x] 13.6 **(operator)** `restore` from production's newest full dump. Verify: counts match, the read-back's zeroes, the synthetic alert in the test group, a new baseline run, no container restarting in five minutes; the duration of the revision clearing people, recorded in `remove-person-ids-from-raw-layer`, 5.3.
+- [x] 13.7 **(operator)** `restore` from the off-site copy, the age identity pasted at the prompt. Verify: as 13.6, and no copy left on the controller or the test host.
+- [x] 13.8 **(operator)** One rule fired on purpose to the test group. Verify: seen there, and resolved.
+- [x] 13.9 **(operator)** The takeover rehearsed in test (Migration Plan, step 7). Verify: Postgres up as uid 999 on files a root-started image wrote; the gap measured, and recorded here.
 
 ## 14. Production
 
-- [ ] 14.1 **(operator)** Values into production's vault on the controller, printing none; the restore's read key issued; the namespace's non-Secret objects snapshotted there. Verify: `--check --diff` shows only what the design says.
-- [ ] 14.2 **(operator)** At about 06:15 Moscow time: promote the pins, flag on, run the main playbook. Verify: the report; the session's checksum unchanged, compared on the host with no copy made; channels' count unchanged; the old objects gone.
-- [ ] 14.3 **(operator)** At about 07:05: polls advancing, a YouTube pass complete, the route line, the exit check, the tunnel to the fixed address, taking a role's password and refusing none, every series scraped, the rules silent. Verify: each read and recorded here.
-- [ ] 14.4 **(operator)** Rotate the bot token, the YouTube key and the B2 key. **The old values are revoked for good.** Reissue the VPN credential only if the server stays the same. Verify: the bot answers, the next YouTube pass completes, the next backup's upload succeeds; the collector not restarted by any but the role's own changes to it.
-- [ ] 14.5 **(operator)** Soak: one backup under the role with its off-site copy, one restore of a dump taken under the role, one off-site restore. A week's reading of the YouTube timeout alert's noise. Verify: each recorded here.
+- [x] 14.1 **(operator)** Values into production's vault on the controller, printing none; the restore's read key issued; the namespace's non-Secret objects snapshotted there. Verify: `--check --diff` shows only what the design says.
+- [x] 14.2 **(operator)** At about 06:15 Moscow time: promote the pins, flag on, run the main playbook. Verify: the report; the session's checksum unchanged, compared on the host with no copy made; channels' count unchanged; the old objects gone.
+- [x] 14.3 **(operator)** At about 07:05: polls advancing, a YouTube pass complete, the route line, the exit check, the tunnel to the fixed address, taking a role's password and refusing none, every series scraped, the rules silent. Verify: each read and recorded here.
+- [x] 14.4 **(operator)** Rotate the bot token, the YouTube key and the B2 key. **The old values are revoked for good.** Reissue the VPN credential only if the server stays the same. Verify: the bot answers, the next YouTube pass completes, the next backup's upload succeeds; the collector not restarted by any but the role's own changes to it.
+- [x] 14.5 **(operator)** Soak: one backup under the role with its off-site copy, one restore of a dump taken under the role, one off-site restore. A week's reading of the YouTube timeout alert's noise. Verify: each recorded here.
 
 ## 15. Retirement
 
-- [ ] 15.1 **(operator)** `make backup-uninstall` on the operator's machine. Verify: `launchctl` says the agent is not loaded.
-- [ ] 15.2 The commit removing the old path (design.md, Decision 17), its hooks, targets and tests, and the launchd agent's part of `src/itgraph/README.md`. Verify: `make validate`; `git ls-files` lists no `vault`, `inventory` or `playbook` under `deploy/`.
-- [ ] 15.3 **(operator)** **Final, and not to be undone:** delete `deploy/.vault_pass`, `deploy/inventory.ini`, the vault password in the password manager and on every other machine, the old copy of the session in the operator's backups directory and any like it on the retired host, and the old dumps. The age identity stays. Verify: a search of each machine for `*.session*` and `.vault_pass` finds nothing.
+- [x] 15.1 **(operator)** `make backup-uninstall` on the operator's machine. Verify: `launchctl` says the agent is not loaded.
+- [x] 15.2 The commit removing the old path (design.md, Decision 17), its hooks, targets and tests, and the launchd agent's part of `src/itgraph/README.md`. Verify: `make validate`; `git ls-files` lists no `vault`, `inventory` or `playbook` under `deploy/`.
+- [x] 15.3 **(operator)** **Final, and not to be undone:** delete `deploy/.vault_pass`, `deploy/inventory.ini`, the vault password in the password manager and on every other machine, the old copy of the session in the operator's backups directory and any like it on the retired host, and the old dumps. The age identity stays. Verify: a search of each machine for `*.session*` and `.vault_pass` finds nothing.
 
 ## Workflow follow-up
 

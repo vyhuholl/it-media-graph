@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change add-alert-bot. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Alerts Are Raised Once Per Post Per Band
 
 The system SHALL raise at most one alert for a given kind, post and threshold band. Re-running a detection pass over unchanged data MUST write nothing, and this SHALL be enforced by the schema rather than by a pass remembering what it has already raised.
@@ -40,7 +42,7 @@ The system SHALL raise at most one alert for a given kind, post and threshold ba
 
 ### Requirement: An Alert Records What It Took To Decide
 
-The system SHALL record, for each alert, the kind, the post, the band crossed, the measured value at the moment it crossed, and when it was raised. It MUST NOT store a rendered message, and it MUST NOT store a copy of evidence that can be read from the derived tables.
+The system SHALL record, for each alert, the kind, the post, the band crossed, the measured value at the moment it crossed, and when it was raised. A comment alert SHALL also record the comment count and the expectation it was scored against, because the next baseline run would give another expectation. It MUST NOT store a rendered message, and it MUST NOT store a copy of evidence that can be read from the derived tables.
 
 #### Scenario: The deciding measure is preserved
 
@@ -58,6 +60,12 @@ The system SHALL record, for each alert, the kind, the post, the band crossed, t
 
 - **WHEN** an alert is raised
 - **THEN** the post it refers to is present in the raw layer
+
+#### Scenario: A comment alert keeps its count and expectation
+
+- **WHEN** a comment alert is raised
+- **THEN** the count that crossed and the expectation it was scored against are stored on it
+- **AND** neither changes when baselines are refreshed
 
 ### Requirement: Delivery Is Claimed, Confirmed, And Retried
 
@@ -244,6 +252,12 @@ The delivery path itself stays kind-blind: claiming, the daily cap, quiet hours,
 - **THEN** the message names that metric and how far past normal the post went
 - **AND** it is not worded as though the post had been reposted
 
+#### Scenario: A comment alert states the count
+
+- **GIVEN** an alert raised because a post's comments passed the threshold
+- **WHEN** it is delivered
+- **THEN** the message names comments, the count, and about how many the channel's posts usually have at that age
+
 ### Requirement: The Bot Reports Its Own State
 
 The system SHALL let the operator ask what the alerting is doing, so that quiet and broken are distinguishable without a database client.
@@ -307,4 +321,3 @@ Folding is not withholding: every folded alert is recorded, stays attributable t
 
 - **WHEN** the operator asks for status
 - **THEN** the reply says how many of the alerts raised were folded into another
-

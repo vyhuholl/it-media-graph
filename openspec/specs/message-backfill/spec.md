@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change add-message-backfill. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Collection Scope
 
 The system SHALL fetch history only from channels that were reviewed and accepted, and MUST NOT fetch from any other entity.
@@ -32,11 +34,11 @@ The system SHALL fetch history only from channels that were reviewed and accepte
 
 ### Requirement: Raw Message Storage
 
-The system SHALL store every fetched message as a verbatim payload keyed by channel and message id, and MUST NOT derive anything from it while collecting.
+The system SHALL store every fetched message as its payload as received, keyed by channel and message id, but for what names a person, which is removed before the payload is written (personal-data, "What Names A Person"). It MUST NOT derive anything from it while collecting.
 
 #### Scenario: A message is stored verbatim
 - **WHEN** a message is fetched
-- **THEN** its complete payload is stored as received
+- **THEN** its complete payload is stored as received, but for what names a person
 - **AND** the channel id, message id and a fetch timestamp are stored alongside it
 
 #### Scenario: Re-fetching does not duplicate
@@ -48,6 +50,12 @@ The system SHALL store every fetched message as a verbatim payload keyed by chan
 #### Scenario: Nothing is derived during collection
 - **WHEN** a backfill run completes
 - **THEN** no forward edges, mentions, external links or language labels have been written by it
+
+#### Scenario: A message naming people is stored without them
+- **GIVEN** a fetched message whose latest commenters and paid reactors include users
+- **WHEN** it is stored
+- **THEN** the stored payload names none of them
+- **AND** every other field is stored as received
 
 ### Requirement: Resumable Progress
 
@@ -189,7 +197,7 @@ The system SHALL record per-channel failures and continue the run.
 
 ### Requirement: Channel Metadata Pass
 
-The system SHALL fetch extended information for an in-scope channel when what it holds is absent or stale, store the payload verbatim, and use it to resolve discussion chats. This pass SHALL be independent of the history walk: it is requested on its own, bounded on its own, and a rate limit that stops it MUST NOT stop a history walk. A history walk MUST NOT trigger it.
+The system SHALL fetch extended information for an in-scope channel when what it holds is absent or stale, store the payload as received but for what names a person (personal-data, "What Names A Person"), and use it to resolve discussion chats. This pass SHALL be independent of the history walk: it is requested on its own, bounded on its own, and a rate limit that stops it MUST NOT stop a history walk. A history walk MUST NOT trigger it.
 
 #### Scenario: The history walk never fetches extended information
 
@@ -273,6 +281,12 @@ The system SHALL fetch extended information for an in-scope channel when what it
 
 - **WHEN** a channel's history is fetched
 - **THEN** the publication date of its newest message is stored on the channel
+
+#### Scenario: A channel's payload is stored without people
+
+- **GIVEN** extended information listing a user who is not a bot
+- **WHEN** it is stored
+- **THEN** the stored payload does not list that user, and lists the channel's bots as received
 
 ### Requirement: Randomized Request Pacing
 
@@ -444,4 +458,3 @@ The system SHALL walk a channel's history without issuing any request that carri
 
 - **WHEN** a backfill run completes, whatever it skipped or failed on
 - **THEN** it has issued no username resolution
-

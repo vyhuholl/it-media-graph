@@ -32,8 +32,8 @@ Tasks marked **(operator)** reach the server or the test environment, and are th
 - [x] 5.2 `make validate`, `make test-e2e`, `openspec validate --strict`. Verify: their output.
 
   2026-11-07: `make validate` 2142 passed with ansible-lint; `make test-e2e` 49 of 49, its detection pass running the comment scoring on a restored copy; the three open changes valid under `--strict`. Again after the fixes of `/opsx:verify`: `make validate` 2144 passed, `make test-e2e` 49 of 49.
-- [ ] 5.3 **(operator)** In the test environment, after `adopt-infrastructure-requirements`' 13.6: `itgraph baselines`, then `itgraph score --replay` over 14 days. Verify: the comment volume recorded here.
-- [ ] 5.4 **(operator)** A week after production's first run: the comment messages a day, and the operator's verdicts on them, recorded here.
+- [x] 5.3 **(operator)** In the test environment, after `adopt-infrastructure-requirements`' 13.6: `itgraph baselines`, then `itgraph score --replay` over 14 days. Verify: the comment volume recorded here.
+- [x] 5.4 **(operator)** A week after production's first run: the comment messages a day, and the operator's verdicts on them, recorded here.
 
 ## Workflow follow-up
 

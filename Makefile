@@ -1,5 +1,4 @@
-.PHONY: lint typecheck test test-e2e validate ansible-lint \
-	backup backup-full backup-install backup-uninstall backup-status backup-log
+.PHONY: lint typecheck test test-e2e validate ansible-lint
 
 RUN_CMD := uv run
 
@@ -37,24 +36,6 @@ test-e2e:
 # vault is excluded in .ansible-lint), so it gets a throwaway password
 # rather than the real one.
 ansible-lint:
-	ANSIBLE_VAULT_PASSWORD_FILE=deploy/.ansible-lint-vault-pass $(RUN_CMD) ansible-lint -c deploy/.ansible-lint
+	$(RUN_CMD) ansible-lint -c deploy/.ansible-lint
 
 validate: lint typecheck test ansible-lint
-
-backup:
-	$(RUN_CMD) itgraph backup
-
-backup-full:
-	$(RUN_CMD) itgraph backup --full
-
-backup-install:
-	./scripts/backup-agent.sh install
-
-backup-uninstall:
-	./scripts/backup-agent.sh uninstall
-
-backup-status:
-	./scripts/backup-agent.sh status
-
-backup-log:
-	./scripts/backup-agent.sh log

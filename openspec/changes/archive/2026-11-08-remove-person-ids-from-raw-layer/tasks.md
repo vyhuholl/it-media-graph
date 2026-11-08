@@ -32,7 +32,7 @@ The requirement is `adopt-infrastructure-requirements`' `database-backups` delta
 
   The operator on 2026-11-07, before production: «Сначала поправь privacy.html и PLAN.md. Слова сам подбери какие лучше. Сегодня 07.11.2026.» So the words are the agent's, and both pages describe what the version of 2026-11-07 does rather than the date production ran it: it removes people before storing, deletes those stored when first installed, and the backups holding them go about four weeks later. Both pages go live when `master` is pushed.
 - [x] 5.2 `docs/privacy.html` takes them and a new "Last updated" date; `docs/PLAN.md`'s legal note says what was removed and when. Verify: `git diff` shows those lines and nothing else.
-- [ ] 5.3 **(operator)** A read-only count on production, `jsonb_path_exists` alone, streaming: no stored payload names a person; and the revision's duration in the test restore of 13.6. Verify: both recorded here.
+- [x] 5.3 **(operator)** A read-only count on production, `jsonb_path_exists` alone, streaming: no stored payload names a person; and the revision's duration in the test restore of 13.6. Verify: both recorded here.
 
 ## Workflow follow-up
 
