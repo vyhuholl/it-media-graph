@@ -269,7 +269,10 @@ async def _maybe_digest(
     outcome that makes every other guarantee here worthless.
     """
     if not digest_is_due(
-        now, hour=settings.alert_digest_hour, last=stats.last_digest_at
+        now,
+        hour=settings.alert_digest_hour,
+        last=stats.last_digest_at,
+        zone=settings.watch_timezone,
     ):
         return
 

@@ -335,6 +335,41 @@ async def test_the_digest_delivers_what_quiet_hours_held(
         assert await claim_undelivered(session, limit=10) == []
 
 
+async def test_the_digest_goes_at_its_hour_in_the_operators_zone(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """09:00 in Moscow, which is 06:00 UTC, not 09:00 UTC.
+
+    Production's digests went out at 12:00 Moscow time until 2026-11-08:
+    the hour was read against the UTC clock the bot is handed.
+    """
+    await prepare(database)
+    monkeypatch.setattr(settings, "watch_timezone", "Europe/Moscow")
+    monkeypatch.setattr(settings, "alert_quiet_from_hour", 2)
+    monkeypatch.setattr(settings, "alert_quiet_to_hour", 7)
+    monkeypatch.setattr(settings, "alert_digest_hour", 9)
+    sender = Recorder()
+    stats = BotStats()
+
+    night = NOW.replace(hour=1)  # 04:00 in Moscow, inside quiet hours
+    async with database.session() as session:
+        await session.execute(
+            text("UPDATE alerts SET raised_at = :at"), {"at": night}
+        )
+
+    await deliver_once(
+        database, sender, stats, now=NOW.replace(hour=5, minute=30)
+    )
+    assert sender.messages == []  # 08:30 in Moscow: not yet
+
+    await deliver_once(
+        database, sender, stats, now=NOW.replace(hour=6, minute=30)
+    )
+    assert stats.digested == 1  # 09:30 in Moscow
+    async with database.session() as session:
+        assert await claim_undelivered(session, limit=10) == []
+
+
 async def test_a_digest_covering_nothing_is_not_sent(
     database: Database, monkeypatch: pytest.MonkeyPatch
 ) -> None:

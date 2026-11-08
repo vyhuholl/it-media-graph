@@ -134,6 +134,13 @@ The system SHALL bound how many alerts are sent directly within a period. Alerts
 - **WHEN** the summary would be due
 - **THEN** no message is sent
 
+#### Scenario: The summary is due at its hour in the operator's zone
+
+- **GIVEN** the summary's hour is 09:00 and the watched zone is Moscow's
+- **WHEN** it is 09:30 in Moscow, 06:30 UTC
+- **THEN** the summary is due
+- **AND** at 08:30 in Moscow it is not, though the hour has passed in UTC
+
 ### Requirement: Quiet Hours Hold Rather Than Drop
 
 The system SHALL send no alert directly during a configured quiet window. Alerts raised during it MUST be delivered afterwards rather than discarded.

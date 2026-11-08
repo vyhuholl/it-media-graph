@@ -583,12 +583,40 @@ async def test_raised_bands_reports_what_exists(database: Database) -> None:
 def test_a_digest_is_due_once_a_day() -> None:
     morning = datetime(2026, 8, 4, 9, 30, tzinfo=UTC)
 
-    assert digest_is_due(morning, hour=9, last=None)
+    assert digest_is_due(morning, hour=9, last=None, zone="UTC")
     assert not digest_is_due(
-        datetime(2026, 8, 4, 8, 0, tzinfo=UTC), hour=9, last=None
+        datetime(2026, 8, 4, 8, 0, tzinfo=UTC), hour=9, last=None, zone="UTC"
     )
-    assert not digest_is_due(morning, hour=9, last=morning)
-    assert digest_is_due(morning + timedelta(days=1), hour=9, last=morning)
+    assert not digest_is_due(morning, hour=9, last=morning, zone="UTC")
+    assert digest_is_due(
+        morning + timedelta(days=1), hour=9, last=morning, zone="UTC"
+    )
+
+
+def test_a_digest_is_due_at_its_hour_in_the_operators_zone() -> None:
+    """09:00 is the operator's morning, not Greenwich's.
+
+    In Moscow 09:30 is 06:30 UTC: the digest is due then, and not at
+    08:30 Moscow time, though 08:30 UTC would have passed an hour of 9
+    read against the wrong clock. The day turns in the same zone: a
+    digest sent at 00:30 Moscow time is the new day's, though UTC still
+    reads the old one.
+    """
+    moscow = "Europe/Moscow"
+    half_past_nine = datetime(2026, 8, 4, 6, 30, tzinfo=UTC)
+    half_past_eight = datetime(2026, 8, 4, 5, 30, tzinfo=UTC)
+
+    assert digest_is_due(half_past_nine, hour=9, last=None, zone=moscow)
+    assert not digest_is_due(half_past_eight, hour=9, last=None, zone=moscow)
+
+    sent_yesterday = datetime(2026, 8, 3, 6, 30, tzinfo=UTC)
+    assert digest_is_due(
+        half_past_nine, hour=9, last=sent_yesterday, zone=moscow
+    )
+    sent_today = datetime(2026, 8, 4, 6, 0, tzinfo=UTC)
+    assert not digest_is_due(
+        half_past_nine, hour=9, last=sent_today, zone=moscow
+    )
 
 
 async def test_concurrent_claims_do_not_deadlock(

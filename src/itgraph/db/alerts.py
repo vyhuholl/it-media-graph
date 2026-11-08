@@ -547,7 +547,9 @@ async def listen(session: AsyncSession) -> None:
     await session.execute(text(f"LISTEN {CHANNEL}"))
 
 
-def digest_is_due(now: datetime, *, hour: int, last: datetime | None) -> bool:
+def digest_is_due(
+    now: datetime, *, hour: int, last: datetime | None, zone: str
+) -> bool:
     """Whether the summary should go out now.
 
     True once per day, at or after the configured hour, and not again
@@ -555,12 +557,22 @@ def digest_is_due(now: datetime, *, hour: int, last: datetime | None) -> bool:
     that has never sent one gets its first at the next occurrence of the
     hour rather than immediately on startup, so restarting is not a way
     to make it repeat itself.
+
+    The hour and the day are the given zone's, the operator's, as quiet
+    hours are: the bot is handed UTC, and read against it 09:00 was
+    noon in Moscow.
     """
-    if now.hour < hour:
+    from zoneinfo import ZoneInfo
+
+    local = now.astimezone(ZoneInfo(zone))
+    if local.hour < hour:
         return False
     if last is None:
         return True
-    return (now - last) >= timedelta(hours=24) or last.date() < now.date()
+    last_local = last.astimezone(ZoneInfo(zone))
+    return (now - last) >= timedelta(
+        hours=24
+    ) or last_local.date() < local.date()
 
 
 @dataclass(frozen=True, slots=True)
