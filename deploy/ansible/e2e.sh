@@ -346,6 +346,123 @@ fi
 case "$refused" in *'no password supplied'*) ;; *) fail "not refused for lack of a password: $refused" ;; esac
 ok 'the fixed address refuses a wrong password, and none'
 
+# --- the reader --------------------------------------------------------------------
+
+host_pod='{"hostNetwork": true, "securityContext": {"runAsNonRoot": true, "runAsUser": 3000}}'
+as_reader() { # <password> <sql>...: each statement its own transaction, through the tunnel's end
+	local cmd="PGPASSWORD=$1 psql -X -w -h 10.43.0.250 -U itgraph_reader -d itgraph -v ON_ERROR_STOP=1 -tA"
+	shift
+	for sql in "$@"; do cmd="$cmd -c \"$sql\""; done
+	probe e2e-host e2e-host-reader '{}' "$(jq -cn --arg cmd "$cmd 2>&1" '["sh", "-c", $cmd]')" "$host_pod"
+}
+reader_logs_in() { [ "$(psql_in "$namespace" "SELECT rolcanlogin FROM pg_roles WHERE rolname = 'itgraph_reader'")" = t ]; }
+reader_sessions() { psql_in "$namespace" "SELECT count(*) FROM pg_stat_activity WHERE usename = 'itgraph_reader'"; }
+hold_reader() { # <password>: a session of the reader, kept open by a pod of its own
+	kubectl -n e2e-host delete pod e2e-host-held --ignore-not-found >/dev/null
+	jq -n --arg image "$image" \
+		--arg cmd "PGPASSWORD=$1 psql -X -w -h 10.43.0.250 -U itgraph_reader -d itgraph -c 'SELECT pg_sleep(300)' 2>&1" '
+		{apiVersion: "v1", kind: "Pod", metadata: {name: "e2e-host-held", namespace: "e2e-host"},
+		 spec: {restartPolicy: "Never", activeDeadlineSeconds: 400, automountServiceAccountToken: false, hostNetwork: true,
+		   securityContext: {runAsNonRoot: true, runAsUser: 3000, seccompProfile: {type: "RuntimeDefault"}},
+		   containers: [{name: "held", image: $image, command: ["sh", "-c", $cmd],
+		     securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}}}]}}' |
+		kubectl create -f - >/dev/null || fail 'the held session could not be created'
+	local tries=0
+	until [ "$(reader_sessions)" = 1 ]; do
+		tries=$((tries + 1))
+		[ "$tries" -lt 90 ] || fail "the reader's session never opened"
+		sleep 2
+	done
+}
+held_was_ended() { # the held session ended by the server, not by its own end
+	local tries=0 phase=""
+	while :; do
+		phase="$(kubectl -n e2e-host get pod e2e-host-held -o jsonpath='{.status.phase}')"
+		case "$phase" in Succeeded | Failed) break ;; esac
+		tries=$((tries + 1))
+		[ "$tries" -lt 30 ] || return 1
+		sleep 2
+	done
+	kubectl -n e2e-host logs pod/e2e-host-held 2>&1 | grep -q 'terminating connection due to administrator command'
+}
+drop_held() {
+	# Ended from the server's side too: a backend inside pg_sleep notices its client
+	# gone only when the sleep is over.
+	psql_in "$namespace" "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = 'itgraph_reader'" >/dev/null
+	kubectl -n e2e-host delete pod e2e-host-held --ignore-not-found >/dev/null
+	local tries=0
+	until [ "$(reader_sessions)" = 0 ]; do
+		tries=$((tries + 1))
+		[ "$tries" -lt 30 ] || fail "the held session outlived its pod"
+		sleep 2
+	done
+}
+reader_run() { # <log> [ansible-playbook arguments]: a run that must restart nothing
+	local log=$1
+	shift
+	role main "$@" >"$log" 2>&1 || {
+		tail -40 "$log" >&2
+		fail "a run for the reader's login failed"
+	}
+	grep -q 'restarted: none' "$log" || fail "a run for the reader's login restarted something"
+}
+first=fakeReaderPasswordSetEeee
+second=fakeReaderPasswordSetEeeeTwo
+
+say 'the reader with no password given'
+as_reader "$first" 'SELECT 1' >/dev/null && fail 'the reader logged in with no password given'
+reader_logs_in && fail 'the reader may log in with no password given'
+ok 'with no password given, the reader cannot log in'
+
+say 'the reader with a password'
+reader_run "$work/reader-set.log" -e itgraph_reader_postgres_password="$first"
+ok 'setting the reader'\''s password restarts nothing'
+started="$(as_reader "$first" 'SHOW transaction_read_only' 'SHOW work_mem' 'SHOW statement_timeout' \
+	'SHOW idle_in_transaction_session_timeout' 'SELECT count(*) >= 0 FROM channels')" ||
+	fail "the reader could not log in: $started"
+# kubectl names the container it read the logs of, since the probe has an init one.
+[ "$(printf '%s\n' "$started" | grep -v '^Defaulted container' | tr '\n' ' ')" = 'on 16MB 10min 5min t ' ] ||
+	fail "the reader's session started as: $started"
+ok 'the reader logs in through the tunnel, reads, and starts read-only with its guards'
+if refused="$(as_reader "$first" 'INSERT INTO channels DEFAULT VALUES')"; then
+	fail 'the reader wrote'
+fi
+case "$refused" in *'read-only transaction'*) ;; *) fail "a write was not refused as read-only: $refused" ;; esac
+if refused="$(as_reader "$first" 'SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE' 'INSERT INTO channels DEFAULT VALUES')"; then
+	fail 'the reader wrote once read-only was lifted'
+fi
+case "$refused" in *'permission denied'*) ;; *) fail "a write after lifting read-only was not refused for privilege: $refused" ;; esac
+ok 'a write is refused as read-only, and for privilege once read-only is lifted'
+
+say 'a run that leaves the reader as it was'
+hold_reader "$first"
+reader_run "$work/reader-same.log" -e itgraph_reader_postgres_password="$first"
+[ "$(reader_sessions)" = 1 ] || fail "a run that changed nothing ended the reader's session"
+[ "$(kubectl -n e2e-host get pod e2e-host-held -o jsonpath='{.status.phase}')" = Running ] || fail 'the held session ended'
+drop_held
+ok "a run that changes nothing leaves the reader's session open"
+
+say 'a new password for the reader'
+hold_reader "$first"
+reader_run "$work/reader-new.log" -e itgraph_reader_postgres_password="$second"
+held_was_ended || fail "a new password left the reader's session open"
+drop_held
+if refused="$(as_reader "$first" 'SELECT 1')"; then
+	fail 'the old password still logs in'
+fi
+case "$refused" in *'password authentication failed'*) ;; *) fail "the old password was not refused for itself: $refused" ;; esac
+as_reader "$second" 'SELECT 1' >/dev/null || fail 'the new password does not log in'
+ok "a new password ends the reader's sessions, refuses the old one and takes the new"
+
+say "the reader's password taken away"
+hold_reader "$second"
+reader_run "$work/reader-gone.log"
+held_was_ended || fail "taking the password away left the reader's session open"
+drop_held
+as_reader "$second" 'SELECT 1' >/dev/null && fail 'the reader logged in after its password was taken away'
+reader_logs_in && fail 'the reader may still log in'
+ok "taking the password away ends the reader's sessions and its login"
+
 say 'the series, for the scraper alone'
 kubectl create namespace monitoring >/dev/null 2>&1 || true
 scrape='["python3", "-c", "import urllib.request; r = urllib.request.urlopen(\"http://itgraph-metrics.itgraph.svc:9090/metrics\", timeout=10); print(r.read().decode())"]'
@@ -523,6 +640,22 @@ case "$payload" in *"a public post"*) ;; *) fail 'the text did not come across' 
 	fail 'a paid reactor who is a person came across'
 ok 'on the real rows, the copy names nobody and holds no API data, and the graph is there'
 
+# Over the local socket, as the owner: the reader's grants, not its login.
+reader_reads_the_copy() {
+	[ "$(read_rows "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'
+		AND NOT has_table_privilege('itgraph_reader', format('%I.%I', table_schema, table_name), 'SELECT')")" = 0 ] ||
+		fail 'a table of the copy the reader cannot read'
+	[ "$(read_rows "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+		AND has_table_privilege('itgraph_reader', format('%I.%I', table_schema, table_name), 'INSERT, UPDATE, DELETE, TRUNCATE')")" = 0 ] ||
+		fail 'a table of the copy the reader can write'
+	[ "$(read_rows "SELECT count(*) FROM pg_default_acl d, aclexplode(d.defaclacl) a
+		WHERE a.grantee = 'itgraph_reader'::regrole AND a.privilege_type = 'SELECT'")" = 1 ] ||
+		fail 'the copy grants the reader no default privilege'
+	[ "$(read_rows 'SET ROLE itgraph_reader; SELECT count(*) FROM channels' | tail -n 1)" = 3 ] || fail 'the reader does not read the copy'
+}
+reader_reads_the_copy
+ok 'a dump older than the reader comes out readable by it, and by nothing more'
+
 trial_alerts="$(read_rows 'SELECT count(*) FROM alerts WHERE band = 2147483647')"
 if grep -q 'Delivered through the bot: could not be proven' "$work/restore.log"; then
 	[ "$trial_alerts" = 0 ] || fail 'an alert raised in quiet hours'
@@ -546,12 +679,22 @@ ok 'detection runs on the copy'
 
 say 'a second restore, from a dump of the neutralised copy'
 dump_from_claim "$work/neutralised.dump"
+# The dump at head names the reader, so that the restore below replays its grants
+# rather than leaving them to a migration. Read to its end, as the role reads a dump.
+kubectl -n "$namespace" exec -i statefulset/itgraph-postgres -c postgres -- \
+	bash -c 'pg_restore --schema-only -f -; cat >/dev/null' <"$work/neutralised.dump" >"$work/neutralised.sql"
+grep -q 'GRANT SELECT ON TABLE public.channels TO itgraph_reader;' "$work/neutralised.sql" ||
+	fail "the dump at head carries no grant to the reader"
+grep -q 'ALTER DEFAULT PRIVILEGES FOR ROLE itgraph IN SCHEMA public GRANT SELECT ON TABLES TO itgraph_reader;' \
+	"$work/neutralised.sql" || fail "the dump at head carries no default privilege for the reader"
 role restore -e itgraph_restore_from="$work/neutralised.dump" >"$work/restore2.log" 2>&1 || {
 	tail -40 "$work/restore2.log" >&2
 	fail 'a second restore failed'
 }
 [ "$(read_rows 'SELECT count(*) FROM channels')" = 3 ] || fail 'the second restore lost channels'
 ok 'a dump of the neutralised copy restores'
+reader_reads_the_copy
+ok "a dump that carries the reader's grants restores whole, and the reader reads the copy"
 
 say 'a copy through age and back, restored as any other dump'
 docker run --rm -i --entrypoint sh itgraph-e2e:local -c '

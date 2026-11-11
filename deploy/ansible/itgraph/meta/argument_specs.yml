@@ -80,6 +80,13 @@ argument_specs:
         required: true
         no_log: true
         description: The exporter role's password; 20 or more letters and digits.
+      itgraph_reader_postgres_password:
+        type: str
+        required: true
+        no_log: true
+        description: >-
+          The reader role's password, for operators' tunnels and no workload; 20 or more
+          letters and digits, or empty for a role that cannot log in.
       itgraph_proxy_password:
         type: str
         required: true

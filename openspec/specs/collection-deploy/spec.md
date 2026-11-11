@@ -374,6 +374,16 @@ Each workload's pods SHALL receive only the configuration that workload reads. A
 - **WHEN** the password of the bot's database role changes and the role runs
 - **THEN** the bot restarts and the collector does not
 
+#### Scenario: The reader's password
+
+- **WHEN** any pod, Job or Secret's data is rendered
+- **THEN** none holds the reader's password
+
+#### Scenario: A new password for the reader
+
+- **WHEN** the reader's password is set, changed or taken away and the role runs
+- **THEN** no workload restarts, and the run reports none restarted
+
 #### Scenario: A process that needs no Telegram credentials
 
 - **GIVEN** a process with no Telegram API credentials configured
@@ -425,6 +435,12 @@ The database SHALL also be served at a fixed ClusterIP, given as an input, where
 - **GIVEN** an operator's account on the host
 - **WHEN** they connect through an SSH tunnel to the fixed address with a database role's password
 - **THEN** the connection is accepted
+
+#### Scenario: A tunnel as the reader
+
+- **GIVEN** a deploy given the reader's password
+- **WHEN** an operator connects through the tunnel to the fixed address as `itgraph_reader` with that password
+- **THEN** the connection is accepted, and the session reads the database and is refused any write
 
 #### Scenario: No credential
 

@@ -12,22 +12,19 @@ schema.
 import asyncio
 import json
 import os
-import subprocess
-import sys
 from collections.abc import Iterator
-from pathlib import Path
 from typing import Any
 
 import asyncpg
 import pytest
 from conftest import MAINTENANCE_DATABASE
+from conftest import alembic as locked_alembic
 from conftest import test_database_url as shared_test_url
 from people_cases import ALL, CASES, ONE_OF_EACH, UNTOUCHED, Case, newest_rule
 from sqlalchemy.engine import URL, make_url
 
 from itgraph.tg.payload import without_people
 
-REPO_ROOT = Path(__file__).parent.parent
 PREVIOUS = "b7d2e4f19a30"
 SOURCE = 1000000001
 
@@ -130,20 +127,12 @@ async def test_each_type_and_field_alone_is_the_collectors_in_sql(
 
 
 def alembic(url: URL, *args: str) -> None:
-    done = subprocess.run(
-        [sys.executable, "-m", "alembic", *args],
-        cwd=REPO_ROOT,
-        env={
-            **os.environ,
-            "DATABASE_URL": url.render_as_string(hide_password=False),
-            # A dump before an upgrade is the backup layer's, tested there;
-            # here there is no container to take one from.
-            "ITGRAPH_SKIP_BACKUP": "1",
-        },
-        capture_output=True,
-        text=True,
-        timeout=180,
-        check=False,
+    done = locked_alembic(
+        url,
+        *args,
+        # A dump before an upgrade is the backup layer's, tested there;
+        # here there is no container to take one from.
+        env={"ITGRAPH_SKIP_BACKUP": "1"},
     )
     assert done.returncode == 0, done.stdout + done.stderr
 

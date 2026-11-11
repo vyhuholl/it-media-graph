@@ -46,6 +46,16 @@
     - itgraph_proxy_password
   no_log: false
 
+# Empty is a choice and not a gap: the reader then cannot log in.
+- name: Assert the reader's password is random letters and digits, or empty
+  ansible.builtin.assert:
+    that: itgraph_reader_postgres_password is match('^([A-Za-z0-9]{20,})?$')
+    fail_msg: >-
+      itgraph_reader_postgres_password must be 20 or more letters and digits, or empty for a reader
+      that cannot log in.
+    quiet: true
+  no_log: false
+
 - name: Assert the outbound fits whether this environment collects
   ansible.builtin.assert:
     that: (itgraph_proxy_outbound.protocol | default('') == 'blackhole') != (itgraph_telegram_collection | bool)

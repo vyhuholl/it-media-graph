@@ -57,6 +57,20 @@ __itgraph_passwords:
   - key: metrics
     role: itgraph_metrics
     password: "{{ itgraph_metrics_postgres_password }}"
+  # An operator's door, in no workload: empty is a reader that cannot log in.
+  # Its sessions end when its login changes, since no restart ends them: the
+  # other roles' belong to pods the same run restarts, or to the run itself.
+  - key: reader
+    role: itgraph_reader
+    password: "{{ itgraph_reader_postgres_password }}"
+    end_sessions: true
+
+# What follows a change to a role's login in the same psql: for a role marked
+# `end_sessions`, the end of every session it has open.
+__itgraph_end_sessions: >-
+  {{ ("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = '"
+      ~ __itgraph_role.role ~ "' AND pid <> pg_backend_pid();")
+     if __itgraph_role.end_sessions | default(false) else '' }}
 
 __itgraph_database_url: >-
   postgresql+asyncpg://{{ itgraph_db_user }}:{{ itgraph_postgres_password }}@{{ __itgraph_database_host }}:5432/{{ itgraph_db_name }}

@@ -3,19 +3,17 @@
 A database of its own, because this is about what the migrations grant and
 the suite's shared schema comes from `create_all`, which grants nothing.
 `SET ROLE` rather than logging in: the role has no password, and giving it
-one would be a change to the cluster outside any `_test` database.
+one would be a change to the cluster outside any `_test` database. Every
+Alembic run goes through `conftest.alembic`, which holds the cluster-wide
+migration lock: the revisions create and alter roles.
 """
 
 import asyncio
-import os
-import subprocess
-import sys
 from collections.abc import Iterator
 from datetime import UTC, datetime
-from pathlib import Path
 
 import pytest
-from conftest import MAINTENANCE_DATABASE
+from conftest import MAINTENANCE_DATABASE, alembic
 from conftest import test_database_url as the_test_database_url
 from sqlalchemy import text
 from sqlalchemy.engine import URL
@@ -24,25 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from itgraph.metrics.series import read_families
 
-REPO_ROOT = Path(__file__).parent.parent
 ROLE = "itgraph_metrics"
-# Any number: it only has to be the same for every worker building one.
-MIGRATION_LOCK = 720_306_941
-
-
-def alembic(url: URL, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, "-m", "alembic", *args],
-        cwd=REPO_ROOT,
-        env={
-            **os.environ,
-            "DATABASE_URL": url.render_as_string(hide_password=False),
-        },
-        capture_output=True,
-        text=True,
-        timeout=180,
-        check=False,
-    )
 
 
 @pytest.fixture(scope="module")
@@ -62,20 +42,6 @@ def migrated() -> Iterator[URL]:
                     text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
                 )
                 await conn.execute(text(f'CREATE DATABASE "{name}"'))
-                # A role is the cluster's: two workers creating one at the
-                # same moment would collide inside its `IF NOT EXISTS`.
-                await conn.execute(
-                    text(f"SELECT pg_advisory_lock({MIGRATION_LOCK})")
-                )
-                try:
-                    done = await asyncio.to_thread(
-                        alembic, url, "upgrade", "head"
-                    )
-                finally:
-                    await conn.execute(
-                        text(f"SELECT pg_advisory_unlock({MIGRATION_LOCK})")
-                    )
-                assert done.returncode == 0, done.stdout + done.stderr
         finally:
             await admin.dispose()
 
@@ -93,6 +59,8 @@ def migrated() -> Iterator[URL]:
         asyncio.run(build())
     except OSError as exc:
         pytest.skip(f"Postgres is not reachable: {exc}")
+    done = alembic(url, "upgrade", "head")
+    assert done.returncode == 0, done.stdout + done.stderr
     try:
         yield url
     finally:

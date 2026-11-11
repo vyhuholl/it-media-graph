@@ -24,6 +24,7 @@ SECRETS = (
     "itgraph_postgres_password",
     "itgraph_bot_postgres_password",
     "itgraph_metrics_postgres_password",
+    "itgraph_reader_postgres_password",
     "itgraph_proxy_password",
     "itgraph_youtube_api_key",
     "itgraph_b2_application_key",
@@ -68,6 +69,16 @@ def pod_answers(
             "of major 16",
         ),
         ({"itgraph_postgres_password": "short"}, "itgraph_postgres_password"),
+        (
+            {"itgraph_reader_postgres_password": "short"},
+            "itgraph_reader_postgres_password",
+        ),
+        (
+            {
+                "itgraph_reader_postgres_password": "has a @ in it and is long enough"
+            },
+            "itgraph_reader_postgres_password",
+        ),
         (
             {"itgraph_proxy_password": "has a @ in it and is long enough"},
             "itgraph_proxy_password",
@@ -131,9 +142,17 @@ def test_a_key_or_a_store_is_refused_where_collection_is_off(
     assert "fake-application-key" not in run.output
 
 
-def test_a_missing_input_is_refused_by_name(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "name",
+    [
+        "itgraph_telegram_collection",
+        # Empty is how the reader is left out, so leaving it out is refused.
+        "itgraph_reader_postgres_password",
+    ],
+)
+def test_a_missing_input_is_refused_by_name(tmp_path: Path, name: str) -> None:
     inputs = yaml.safe_load((INPUTS / "a.yml").read_text())
-    del inputs["itgraph_telegram_collection"]
+    del inputs[name]
     custom = tmp_path / "inputs.yml"
     custom.write_text(yaml.safe_dump(inputs))
     # A set of its own, in place of the shared one.
@@ -144,8 +163,21 @@ def test_a_missing_input_is_refused_by_name(tmp_path: Path) -> None:
     )
 
     assert run.failed
-    assert "itgraph_telegram_collection" in run.output
+    assert name in run.output
     assert run.calls == []
+
+
+@pytest.mark.parametrize("password", ["", "fakeReaderPasswordLongEnough"])
+def test_the_readers_password_may_be_empty(
+    tmp_path: Path, password: str
+) -> None:
+    run = run_role(
+        tmp_path,
+        "inputs",
+        extra={"itgraph_reader_postgres_password": password},
+    )
+
+    assert not run.failed, run.output
 
 
 def apply_extra(
@@ -347,6 +379,133 @@ def test_a_failed_password_is_not_marked_as_set(tmp_path: Path) -> None:
     assert run.failed
     assert run.called("annotate") == []
     assert "fakeNewPasswordForThisRole" not in run.output
+
+
+def reader_extra(
+    password: str = "fakeNewPasswordForTheReader",
+) -> dict[str, Any]:
+    return {
+        "__itgraph_role": {
+            "key": "reader",
+            "role": "itgraph_reader",
+            "password": password,
+            "end_sessions": True,
+        }
+    }
+
+
+def marks(**annotations: str) -> dict[str, Any]:
+    return rule(
+        "get secret itgraph-postgres",
+        json.dumps({"metadata": {"annotations": annotations}}),
+    )
+
+
+def changes(run: Run) -> list[str]:
+    """What the run gave psql to change, statement by statement."""
+    return [call["stdin"] for call in run.calls if "-f" in call["args"]]
+
+
+def test_a_new_reader_password_ends_its_sessions_after_the_change(
+    tmp_path: Path,
+) -> None:
+    run = run_role(
+        tmp_path,
+        "password",
+        rules=[rule("get secret itgraph-postgres", "")],
+        extra=reader_extra(),
+    )
+
+    assert not run.failed, run.output
+    [statements] = changes(run)
+    altered = statements.index("ALTER ROLE itgraph_reader LOGIN PASSWORD")
+    ended = statements.index("pg_terminate_backend")
+    assert altered < ended
+    assert "usename = 'itgraph_reader'" in statements
+    [marked] = run.called("annotate")
+    assert any(
+        arg.startswith("itgraph/password-reader=") for arg in marked["args"]
+    )
+    for call in run.calls:
+        assert "fakeNewPasswordForTheReader" not in " ".join(call["args"])
+    assert "fakeNewPasswordForTheReader" not in run.output
+
+
+def test_a_password_already_set_for_the_reader_ends_nothing(
+    tmp_path: Path,
+) -> None:
+    import hashlib
+
+    hash_of = hashlib.sha256(b"fakeNewPasswordForTheReader").hexdigest()
+    run = run_role(
+        tmp_path,
+        "password",
+        rules=[marks(**{"itgraph/password-reader": hash_of})],
+        extra=reader_extra(),
+    )
+
+    assert not run.failed, run.output
+    assert changes(run) == []
+
+
+def test_a_new_bot_password_ends_no_session(tmp_path: Path) -> None:
+    run = run_role(
+        tmp_path,
+        "password",
+        rules=[rule("get secret itgraph-postgres", "")],
+        extra=role_extra(),
+    )
+
+    assert not run.failed, run.output
+    [statements] = changes(run)
+    assert "pg_terminate_backend" not in statements
+
+
+@pytest.mark.parametrize(
+    ("can_log_in", "mark"),
+    [
+        ("t", None),  # a login given by hand
+        ("f", "a-stale-mark"),  # a run that died before removing the mark
+        ("t", "a-mark"),  # a password set by an earlier run
+    ],
+)
+def test_an_empty_password_takes_the_login_away(
+    tmp_path: Path, can_log_in: str, mark: str | None
+) -> None:
+    run = run_role(
+        tmp_path,
+        "password",
+        rules=[
+            marks(**({"itgraph/password-reader": mark} if mark else {})),
+            rule("rolcanlogin", can_log_in),
+        ],
+        extra=reader_extra(""),
+    )
+
+    assert not run.failed, run.output
+    [statements] = changes(run)
+    taken = statements.index(
+        "ALTER ROLE itgraph_reader NOLOGIN PASSWORD NULL;"
+    )
+    assert taken < statements.index("pg_terminate_backend")
+    removed = run.called("annotate", "itgraph/password-reader-")
+    assert len(removed) == (1 if mark else 0)
+    assert [c for c in run.called("annotate") if c not in removed] == []
+
+
+def test_an_empty_password_on_a_role_that_cannot_log_in_changes_nothing(
+    tmp_path: Path,
+) -> None:
+    run = run_role(
+        tmp_path,
+        "password",
+        rules=[marks(), rule("rolcanlogin", "f")],
+        extra=reader_extra(""),
+    )
+
+    assert not run.failed, run.output
+    assert changes(run) == []
+    assert run.changing() == []
 
 
 SCHEDULES = {
@@ -1109,6 +1268,7 @@ def marks_set() -> str:
                         ("owner", "itgraph_postgres_password"),
                         ("bot", "itgraph_bot_postgres_password"),
                         ("metrics", "itgraph_metrics_postgres_password"),
+                        ("reader", "itgraph_reader_postgres_password"),
                     )
                 }
             }
@@ -1203,7 +1363,7 @@ def test_a_run_with_nothing_to_change_stops_and_restarts_nothing(
 
 def test_a_new_password_for_another_role_stops_nothing(tmp_path: Path) -> None:
     marks = json.loads(marks_set())
-    for key in ("bot", "metrics"):
+    for key in ("bot", "metrics", "reader"):
         marks["metadata"]["annotations"][f"itgraph/password-{key}"] = "other"
     run = run_role(
         tmp_path,
@@ -1216,8 +1376,39 @@ def test_a_new_password_for_another_role_stops_nothing(tmp_path: Path) -> None:
     assert run.called("scale") == []
     assert run.called("patch") == []
     altered = [c["stdin"] for c in run.calls if "ALTER" in c["stdin"]]
-    assert len(altered) == 2
+    assert len(altered) == 3
     assert not [role for role in altered if "ROLE itgraph " in role]
+    assert_no_secret_anywhere(run)
+
+
+def test_taking_the_readers_password_away_stops_nothing(
+    tmp_path: Path,
+) -> None:
+    run = run_role(
+        tmp_path,
+        "main",
+        rules=[
+            *whole_run_rules(version=HEAD, marks=marks_set()),
+            rule("rolcanlogin", "t"),
+        ],
+        extra={
+            "__itgraph_now_hour": 12,
+            "itgraph_reader_postgres_password": "",
+        },
+    )
+
+    assert not run.failed, run.output
+    assert run.called("scale") == []
+    assert run.called("patch") == []
+    altered = [c["stdin"] for c in run.calls if "ALTER" in c["stdin"]]
+    assert altered == [
+        (
+            "ALTER ROLE itgraph_reader NOLOGIN PASSWORD NULL;"
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            "WHERE usename = 'itgraph_reader' AND pid <> pg_backend_pid();\n"
+        )
+    ]
+    assert "restarted: none" in run.output
     assert_no_secret_anywhere(run)
 
 

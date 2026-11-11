@@ -7,6 +7,8 @@ database whose name ends in ``_test``.
 import asyncio
 import json
 import os
+import subprocess
+import sys
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -55,6 +57,57 @@ from itgraph.db.session import Database
 
 MAINTENANCE_DATABASE = "postgres"
 FIXTURES = Path(__file__).parent / "fixtures"
+REPO_ROOT = Path(__file__).parent.parent
+
+# Held around every Alembic run a test makes on a database of its own. The
+# revisions create roles and set their options, and a role is the
+# cluster's: two workers creating one at the same moment collide inside
+# its `IF NOT EXISTS`, and two setting its options fail with "tuple
+# concurrently updated". Any number: it only has to be the same for every
+# worker.
+MIGRATION_LOCK = 720_306_941
+
+
+def alembic(
+    url: URL, *args: str, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Alembic against ``url``, holding the migration lock while it runs."""
+
+    def run() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-m", "alembic", *args],
+            cwd=REPO_ROOT,
+            env={
+                **os.environ,
+                **(env or {}),
+                "DATABASE_URL": url.render_as_string(hide_password=False),
+            },
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+
+    async def locked() -> subprocess.CompletedProcess[str]:
+        admin = create_async_engine(
+            url.set(database=MAINTENANCE_DATABASE),
+            isolation_level="AUTOCOMMIT",
+        )
+        try:
+            async with admin.connect() as conn:
+                await conn.execute(
+                    text(f"SELECT pg_advisory_lock({MIGRATION_LOCK})")
+                )
+                try:
+                    return await asyncio.to_thread(run)
+                finally:
+                    await conn.execute(
+                        text(f"SELECT pg_advisory_unlock({MIGRATION_LOCK})")
+                    )
+        finally:
+            await admin.dispose()
+
+    return asyncio.run(locked())
 
 
 def test_database_url() -> URL:

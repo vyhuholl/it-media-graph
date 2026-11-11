@@ -16,6 +16,7 @@ itgraph_alert_chat_id: 100000003
 itgraph_postgres_password: fakeOwnerPasswordSetEeeee
 itgraph_bot_postgres_password: fakeBotPasswordSetEeeeeee
 itgraph_metrics_postgres_password: fakeMetricsPasswordSetEee
+itgraph_reader_postgres_password: ""
 itgraph_proxy_password: fakeProxyPasswordSetEeeee
 itgraph_proxy_outbound:
   protocol: blackhole

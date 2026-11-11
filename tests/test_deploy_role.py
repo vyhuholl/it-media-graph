@@ -687,6 +687,7 @@ def test_no_secret_is_outside_the_secret_streams(
             "itgraph_postgres_password",
             "itgraph_bot_postgres_password",
             "itgraph_metrics_postgres_password",
+            "itgraph_reader_postgres_password",
             "itgraph_proxy_password",
             "itgraph_youtube_api_key",
             "itgraph_b2_application_key",
@@ -697,6 +698,19 @@ def test_no_secret_is_outside_the_secret_streams(
         text = json.dumps(kept)
         for secret in secrets:
             assert secret not in text, stream
+
+
+def test_the_readers_password_is_in_no_object(
+    rendered: dict[str, dict[str, Objects]],
+) -> None:
+    """An operator's door: no workload reads it, so no Secret holds it."""
+    password = yaml.safe_load((INPUTS / "a.yml").read_text())[
+        "itgraph_reader_postgres_password"
+    ]
+    assert password
+
+    for stream, objects in rendered["a"].items():
+        assert password not in json.dumps(objects), stream
 
 
 def test_a_new_bot_token_changes_the_bots_template_alone(

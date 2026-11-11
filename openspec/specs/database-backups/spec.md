@@ -182,6 +182,19 @@ The role's restore entry point SHALL take the path of a full dump on the host an
 - **WHEN** it is given to the restore entry point
 - **THEN** it restores as any other dump does
 
+#### Scenario: A dump that carries the reader's grants
+
+- **GIVEN** a full dump of a database at head, whose grants and default privileges name `itgraph_reader`
+- **WHEN** it is restored into a test environment deployed at the same release
+- **THEN** it loads whole, every table's rows match the dump, the read-back passes
+- **AND** the reader reads every table of the restored copy, including through the default privileges, and can write none
+
+#### Scenario: A dump older than the reader
+
+- **GIVEN** a full dump of a database at a revision before the reader's
+- **WHEN** it is restored
+- **THEN** the migration to head grants the reader every table of the restored copy
+
 ### Requirement: A Restore Is Checked Against The Dump
 
 After loading, the restore SHALL compare every table's row count with the rows the dump holds, and fail naming the table on any difference, so that a load that read nothing cannot report success. It SHALL then bring the schema to the deployed image's head before neutralising.
