@@ -1,4 +1,4 @@
-"""The alert queue: raising, claiming, delivering, and what was thought.
+"""Telegram's alert queue: raising, claiming, holding and delivering.
 
 The one interface between detection and delivery. Everything here is
 either a write a pass makes or a write the bot makes, and the two never
@@ -24,9 +24,7 @@ from itgraph.alerts.cascade import Cascade
 from itgraph.db.models import (
     Alert,
     AlertDelivery,
-    AlertFeedback,
     AlertKind,
-    AlertVerdict,
     Metric,
 )
 from itgraph.scoring.fold import Head, Placed
@@ -43,6 +41,7 @@ __all__ = [
     "digest_is_due",
     "failing_alerts",
     "folded_posts",
+    "hold_alerts",
     "listen",
     "mark_delivered",
     "mark_failed",
@@ -52,7 +51,6 @@ __all__ = [
     "raise_spikes",
     "raised_bands",
     "raised_spikes",
-    "record_verdict",
     "settle_folds",
 ]
 
@@ -293,9 +291,18 @@ async def raise_spikes(
 
 
 async def claim_undelivered(
-    session: AsyncSession, *, limit: int
+    session: AsyncSession, *, limit: int | None, held: bool = False
 ) -> list[PendingAlert]:
-    """Take up to ``limit`` outstanding alerts, oldest first.
+    """Take up to ``limit`` outstanding alerts, those never failed first.
+
+    ``held`` picks which: the ones the direct path may still send, or the
+    ones set aside for the digest. They are claimed apart because claiming
+    them together let ten held alerts at the head of the queue stop every
+    direct send until the digest — the digest's own work standing in
+    front of everything raised after it. Those never tried come before
+    those that failed, for the same reason: one alert Telegram keeps
+    refusing must not stand in front of the rest. ``None`` takes them all,
+    which is what a digest wants.
 
     ``FOR UPDATE SKIP LOCKED`` rather than a process-wide lease. The
     collector's session file genuinely cannot be shared, so it takes a
@@ -314,8 +321,12 @@ async def claim_undelivered(
     """
     rows = await session.execute(
         select(Alert)
-        .where(Alert.delivered_at.is_(None), Alert.folded_into.is_(None))
-        .order_by(Alert.raised_at, Alert.id)
+        .where(
+            Alert.delivered_at.is_(None),
+            Alert.folded_into.is_(None),
+            Alert.held_at.is_not(None) if held else Alert.held_at.is_(None),
+        )
+        .order_by(Alert.attempts > 0, Alert.raised_at, Alert.id)
         .limit(limit)
         .with_for_update(skip_locked=True)
     )
@@ -413,19 +424,40 @@ async def folded_posts(session: AsyncSession, *, head: PendingAlert) -> int:
 
 
 async def mark_failed(
-    session: AsyncSession, alert_id: int, *, error: str
+    session: AsyncSession, alert_ids: Sequence[int], *, error: str
 ) -> None:
-    """Record a failed send, leaving the alert outstanding.
+    """Record a failed send, leaving the alerts outstanding.
 
-    ``delivered_at`` stays null, so the next tick picks it up again.
-    ``attempts`` is what a backoff and the status report read — an alert
-    that has failed many times is worth mentioning rather than retrying
-    at full rate forever.
+    Several at once, because a digest's part is one send for many alerts,
+    and each of them failed to arrive. ``delivered_at`` stays null, so the
+    next tick picks them up again. ``attempts`` is what the status report
+    and the series read — an alert that has failed many times is worth
+    mentioning rather than retrying at full rate forever.
     """
+    if not alert_ids:
+        return
     await session.execute(
         update(Alert)
-        .where(Alert.id == alert_id)
+        .where(Alert.id.in_(alert_ids))
         .values(attempts=Alert.attempts + 1, last_error=error[:500])
+    )
+
+
+async def hold_alerts(
+    session: AsyncSession, alert_ids: Sequence[int], *, at: datetime
+) -> None:
+    """Set these alerts aside for the digest.
+
+    Once held, an alert belongs to the digest even if the cap frees up
+    before it: what a reader is told is "held for the summary", and an
+    alert hours old is a record by then rather than news.
+    """
+    if not alert_ids:
+        return
+    await session.execute(
+        update(Alert)
+        .where(Alert.id.in_(alert_ids), Alert.held_at.is_(None))
+        .values(held_at=at)
     )
 
 
@@ -452,29 +484,6 @@ async def count_delivered_since(
     )
 
 
-async def record_verdict(
-    session: AsyncSession,
-    *,
-    alert_id: int,
-    verdict: AlertVerdict,
-    at: datetime,
-) -> None:
-    """Store what the operator thought, replacing any earlier answer.
-
-    Keyed by the alert, so changing one's mind overwrites rather than
-    appends: the question is what they think, not what they have thought.
-    """
-    statement = insert(AlertFeedback).values(
-        alert_id=alert_id, verdict=verdict, given_at=at
-    )
-    await session.execute(
-        statement.on_conflict_do_update(
-            index_elements=[AlertFeedback.alert_id],
-            set_={"verdict": statement.excluded.verdict, "given_at": at},
-        )
-    )
-
-
 @dataclass(frozen=True, slots=True)
 class OutstandingAlerts:
     """What is waiting, and whether anything has tried to send it.
@@ -488,8 +497,15 @@ class OutstandingAlerts:
     """
 
     total: int
+    # Not held, and never tried: held alerts wait for the digest by
+    # design, and counting them here would make a quiet night read as a
+    # delivery loop that stopped.
     never_attempted: int
     oldest_raised_at: datetime | None
+    # Of `total`, how many are set aside for the digest, and the oldest of
+    # those that are not.
+    held: int = 0
+    oldest_unheld_raised_at: datetime | None = None
 
     def oldest_wait(self, now: datetime) -> timedelta | None:
         """How long the oldest outstanding alert has been waiting."""
@@ -505,12 +521,16 @@ async def outstanding_alerts(session: AsyncSession) -> OutstandingAlerts:
     attempted and never will be, and counting it would make "the head is
     waiting for morning" read as "nothing is trying to send".
     """
-    total, never, oldest = (
+    total, never, oldest, held, oldest_unheld = (
         await session.execute(
             select(
                 func.count(Alert.id),
-                func.count(Alert.id).filter(Alert.attempts == 0),
+                func.count(Alert.id).filter(
+                    Alert.attempts == 0, Alert.held_at.is_(None)
+                ),
                 func.min(Alert.raised_at),
+                func.count(Alert.id).filter(Alert.held_at.is_not(None)),
+                func.min(Alert.raised_at).filter(Alert.held_at.is_(None)),
             ).where(Alert.delivered_at.is_(None), Alert.folded_into.is_(None))
         )
     ).one()
@@ -518,6 +538,8 @@ async def outstanding_alerts(session: AsyncSession) -> OutstandingAlerts:
         total=int(total or 0),
         never_attempted=int(never or 0),
         oldest_raised_at=oldest,
+        held=int(held or 0),
+        oldest_unheld_raised_at=oldest_unheld,
     )
 
 

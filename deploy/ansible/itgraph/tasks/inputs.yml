@@ -56,6 +56,18 @@
     quiet: true
   no_log: false
 
+# Half of it would deliver one language and strand the other, or name a topic of
+# no chat. A test environment may give its own: they reach its own chat.
+- name: Assert the YouTube alert chat comes with both its topics, or none of the three
+  ansible.builtin.assert:
+    that: >-
+      [itgraph_youtube_alert_chat_id, itgraph_youtube_alert_topic_en, itgraph_youtube_alert_topic_ru]
+      | map('int') | select('ne', 0) | list | length in [0, 3]
+    fail_msg: >-
+      itgraph_youtube_alert_chat_id, itgraph_youtube_alert_topic_en and itgraph_youtube_alert_topic_ru
+      go together: all three, or none of them for no YouTube alerts.
+    quiet: true
+
 - name: Assert the outbound fits whether this environment collects
   ansible.builtin.assert:
     that: (itgraph_proxy_outbound.protocol | default('') == 'blackhole') != (itgraph_telegram_collection | bool)

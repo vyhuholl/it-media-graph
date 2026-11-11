@@ -35,12 +35,10 @@ copies rows out:
   the recipient's own channel being handed back to them. Nothing about
   *how* the pair was found travels with it — not the score, not the
   evidence columns, not the reviewer's note.
-* **Nothing about the operator's own judgement.** The alerts section
-  reports what was raised and never `alert_feedback`: which alerts the
-  operator called useful is the labelled data this project trains its
-  thresholds on, and it says more about them than about the channel.
-  `band`, `delivered_at` and the delivery columns are settings and
-  plumbing, and are left out for the same reason.
+* **What was raised, not how it was delivered.** The alerts section
+  reports what was raised; `band`, `delivered_at` and the delivery
+  columns are settings and plumbing, and say more about the bot than
+  about the channel.
 * **No cluster roster.** A cluster is dozens of seeds, and printing its
   members publishes a chunk of the inventory. The cluster's size, keyword
   label and dominant kind describe the neighbourhood without naming it.
@@ -212,11 +210,8 @@ WATCHED = """
 """
 
 # Deliberately four columns. `band` is which configured threshold tier
-# was crossed and `delivered_at` / `delivery` / `attempts` are the bot's
-# plumbing — operator settings, not facts about the channel. The
-# operator's own verdict in `alert_feedback` is not joined at all: what
-# they thought of an alert is the labelled data this project trains on,
-# and it is nobody else's business what got called a false alarm.
+# was crossed and `delivered_at` / `delivery` / `attempts` / `held_at` are
+# the bot's plumbing — operator settings, not facts about the channel.
 ALERTS = """
     SELECT a.kind::text, a.msg_id, a.value, a.raised_at
     FROM alerts a

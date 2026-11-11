@@ -17,15 +17,15 @@ from itgraph.db.alerts import (
     count_delivered_since,
     digest_is_due,
     failing_alerts,
+    hold_alerts,
     mark_delivered,
     mark_failed,
     outstanding_alerts,
     raise_cascades,
     raised_bands,
-    record_verdict,
     settle_folds,
 )
-from itgraph.db.models import AlertDelivery, AlertKind, AlertVerdict
+from itgraph.db.models import AlertDelivery, AlertKind
 from itgraph.db.session import Database
 
 NOW = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
@@ -523,7 +523,9 @@ async def test_a_failed_send_stays_outstanding(database: Database) -> None:
         claimed = await claim_undelivered(session, limit=10)
 
     async with database.session() as session:
-        await mark_failed(session, claimed[0].id, error="network unreachable")
+        await mark_failed(
+            session, [claimed[0].id], error="network unreachable"
+        )
 
     async with database.session() as session:
         again = await claim_undelivered(session, limit=10)
@@ -532,35 +534,53 @@ async def test_a_failed_send_stays_outstanding(database: Database) -> None:
         assert await failing_alerts(session, attempts=1) == 1
 
 
-async def test_a_verdict_replaces_an_earlier_one(
+async def test_a_held_alert_is_the_digests_alone(database: Database) -> None:
+    """Held is claimed by the digest, and never again by the direct path —
+    ten of them at the head of the queue once stopped every direct send."""
+    await seed(database, reposters=3)
+    async with database.session() as session:
+        await raise_cascades(
+            session,
+            [
+                Cascade(post_key=(PUBLISHER, POST), band=2, value=2),
+                Cascade(post_key=(PUBLISHER, POST), band=3, value=3),
+            ],
+        )
+        first, second = await claim_undelivered(session, limit=10)
+
+    async with database.session() as session:
+        await hold_alerts(session, [first.id], at=NOW)
+
+    async with database.session() as session:
+        direct = await claim_undelivered(session, limit=10)
+        held = await claim_undelivered(session, limit=None, held=True)
+        waiting = await outstanding_alerts(session)
+
+    assert [alert.id for alert in direct] == [second.id]
+    assert [alert.id for alert in held] == [first.id]
+    assert (waiting.total, waiting.held, waiting.never_attempted) == (2, 1, 1)
+
+
+async def test_an_alert_that_keeps_failing_goes_behind_fresh_ones(
     database: Database,
 ) -> None:
-    await seed(database, reposters=2)
+    """One alert Telegram refuses must not stand in front of the rest."""
+    await seed(database, reposters=3)
     async with database.session() as session:
         await raise_cascades(
             session, [Cascade(post_key=(PUBLISHER, POST), band=2, value=2)]
         )
-        claimed = await claim_undelivered(session, limit=10)
-
     async with database.session() as session:
-        await record_verdict(
-            session,
-            alert_id=claimed[0].id,
-            verdict=AlertVerdict.USEFUL,
-            at=NOW,
-        )
-        await record_verdict(
-            session,
-            alert_id=claimed[0].id,
-            verdict=AlertVerdict.BORING,
-            at=NOW + timedelta(minutes=5),
+        (older,) = await claim_undelivered(session, limit=10)
+        await mark_failed(session, [older.id], error="Bad Request")
+        await raise_cascades(
+            session, [Cascade(post_key=(PUBLISHER, POST), band=3, value=3)]
         )
 
     async with database.session() as session:
-        rows = await session.execute(
-            text("SELECT verdict FROM alert_feedback")
-        )
-        assert [row[0] for row in rows.all()] == ["boring"]
+        (first,) = await claim_undelivered(session, limit=1)
+
+    assert first.id != older.id
 
 
 async def test_raised_bands_reports_what_exists(database: Database) -> None:

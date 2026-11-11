@@ -221,8 +221,16 @@ async def test_every_series_is_declared_on_an_empty_database(
     assert value(read, "itgraph_telegram_oldest_overdue_seconds") == 0
     assert value(read, "itgraph_telegram_failing_channels") == 0
     assert value(read, "itgraph_telegram_last_flood_timestamp_seconds") == 0
-    assert value(read, "itgraph_alerts_oldest_undelivered_seconds") == 0
-    assert value(read, "itgraph_alerts_failing") == 0
+    for platform in ("telegram", "youtube"):
+        assert (
+            value(
+                read,
+                "itgraph_alerts_oldest_undelivered_seconds",
+                platform=platform,
+            )
+            == 0
+        )
+        assert value(read, "itgraph_alerts_failing", platform=platform) == 0
     assert (
         value(read, "itgraph_youtube_last_complete_pass_timestamp_seconds")
         == 0
@@ -327,8 +335,53 @@ async def test_alerts(database: Database) -> None:
 
     read = await families(database)
 
-    assert value(read, "itgraph_alerts_oldest_undelivered_seconds") == 18000
-    assert value(read, "itgraph_alerts_failing") == 1
+    oldest = "itgraph_alerts_oldest_undelivered_seconds"
+    assert value(read, oldest, platform="telegram") == 18000
+    assert value(read, "itgraph_alerts_failing", platform="telegram") == 1
+    assert value(read, oldest, platform="youtube") == 0
+
+
+async def test_youtube_alerts_per_platform(database: Database) -> None:
+    """A held YouTube alert is waiting; an excluded one is not."""
+    from yt_alert_seed import seed_alert, seed_channel
+
+    from itgraph.db.models import YtAlert, YtAlertDelivery, YtLang
+
+    async with database.session() as session:
+        channel = await seed_channel(
+            session, 1, lang=YtLang.EN, fetched_at=NOW
+        )
+        held = await seed_alert(
+            session,
+            channel_id=channel,
+            video=1,
+            now=NOW,
+            raised_at=NOW - timedelta(hours=2),
+        )
+        excluded = await seed_alert(
+            session,
+            channel_id=channel,
+            video=2,
+            now=NOW,
+            raised_at=NOW - timedelta(hours=9),
+        )
+        await session.execute(
+            YtAlert.__table__.update()
+            .where(YtAlert.id == held)
+            .values(held_at=NOW, attempts=3)
+        )
+        await session.execute(
+            YtAlert.__table__.update()
+            .where(YtAlert.id == excluded)
+            .values(delivered_at=NOW, delivery=YtAlertDelivery.EXCLUDED)
+        )
+
+    read = await families(database)
+
+    oldest = "itgraph_alerts_oldest_undelivered_seconds"
+    assert value(read, oldest, platform="youtube") == 7200
+    assert value(read, "itgraph_alerts_failing", platform="youtube") == 1
+    assert value(read, oldest, platform="telegram") == 0
 
 
 async def test_a_scrape_changes_nothing(database: Database) -> None:
@@ -387,6 +440,8 @@ async def test_no_series_reads_the_big_tables_and_no_label_comes_from_data(
         "reading",
         "lookup",
         "featured",
+        "telegram",
+        "youtube",
     }
     body = render(read)
     for family in read:

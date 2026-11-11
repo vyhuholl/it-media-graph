@@ -68,11 +68,14 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `scoring/refresh.py` | The baseline refresh: fit, store, publish as one run. A refresh replaces rather than accumulates. Comments are fitted as counts: no mature fallback, a ratio-of-sums curve, and a dispersion per kind by likelihood beside the spread |
 | `scoring/run.py` | The scoring pass: load, score, raise, report. Replay is this same pass with an earlier moment. A comment count under `alert_spike_comments_min` is set aside before the post's best is chosen; a run without a comment dispersion is reported as not scoring comments |
 | `scoring/` | Recognizing that a post is doing unusually well for its channel and its age |
-| `bot/render.py` | An alert as a message a person reads; pure, so the wording is testable |
-| `bot/app.py` | Delivery: claim, send, mark. The poll is correctness, the notification is speed |
-| `bot/handlers.py` | The aiogram binding — the only module that imports aiogram or holds the token |
+| `bot/render.py` | An alert as a message a person reads, Telegram's and YouTube's; pure, so the wording is testable. Everything from a post, channel or video escaped; every alert under Telegram's 4,096; a digest in parts that each fit. A YouTube alert names YouTube, dates YouTube's counts and itgraph's score apart, and says the score is itgraph's |
+| `bot/destinations.py` | Where alerts go: a chat, and a topic or none, built from settings alone; each with its own cap, quiet window and digest. Pure |
+| `bot/queues.py` | The two queues behind the one interface delivery needs: which rows a destination claims, how an alert reads, what is excluded. Telegram's one chat; YouTube's topic per route |
+| `bot/app.py` | Delivery, the same for every queue and destination: claim, send, mark; hold what quiet hours or the cap set aside, so it never blocks what comes after; the digest in parts. The poll is correctness |
+| `bot/status.py` | What `/status` says, per platform: the chat is told about its own |
+| `bot/handlers.py` | The aiogram binding — the only module that imports aiogram or holds the token. Answers only in configured chats, in any topic; refuses at start a chat it cannot reach; answers and strips the old feedback buttons |
 | `bot/` | Telling the operator. Bot API only: no session, no lease, no collection writes |
-| `metrics/series.py` | What the shared monitoring reads, worked out at scrape time from what is recorded: never a counter in another process, never the big tables, never API data; label values are constants and enums alone |
+| `metrics/series.py` | What the shared monitoring reads, worked out at scrape time from what is recorded: never a counter in another process, never the big tables, never API data; label values are constants and enums alone. The alert series per platform |
 | `metrics/serve.py` | The exporter's listener: `GET /metrics` on 9090 and nothing else, with no framework; 503 when the database does not answer |
 | `metrics/` | Telling the shared monitoring how collection is doing. Read-only, under a role that can read nothing else |
 | `db/session.py` | `Database`: engine + session factory |
@@ -83,7 +86,8 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `db/edges.py` | The derived tables: `edges`, `pending_mentions` and the sources that order them |
 | `db/raw.py` | Writes into the raw layer; nothing here reads a payload |
 | `db/metrics.py` | Writes into the snapshot layer: append-only readings of a post's counters |
-| `db/alerts.py` | The alert queue: raising, claiming, delivering, and what the operator thought. A comment spike keeps its count and the expectation it was scored against |
+| `db/alerts.py` | Telegram's alert queue: raising, claiming, holding, delivering. A held alert is the digest's alone; one that failed is claimed after those never tried. A comment spike keeps its count and the expectation it was scored against |
+| `db/yt_alerts.py` | YouTube's alert queue: claiming per route through the channel's current label, excluding what no route takes, holding, delivering; the evidence a message reads, refused past 30 days. Raises nothing — scoring will — and copies nothing YouTube said onto an alert |
 | `db/baselines.py` | The baseline tables: what a post of a given age is expected to reach, and the run it was measured in. Comment readings keep their zeros and are read as posts are scored, an album by its first part and a burst by its first message; the comment dispersion is stored per kind |
 | `db/poll.py` | The poll queue: which channel is due, and when it is due again. Timing only |
 | `db/floods.py` | The record of rate limits: one row per wait, and the two questions asked of it |

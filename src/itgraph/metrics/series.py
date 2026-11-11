@@ -24,9 +24,11 @@ from sqlalchemy.orm import InstrumentedAttribute
 
 from itgraph import yt_policy
 from itgraph.config import settings
+from itgraph.db import yt_alerts
 from itgraph.db.alerts import failing_alerts, outstanding_alerts
 from itgraph.db.models import (
     FloodEvent,
+    Platform,
     PollState,
     YtPassOutcome,
     YtQuotaBucket,
@@ -197,25 +199,45 @@ async def _youtube(session: AsyncSession, now: datetime) -> list[Family]:
 
 
 async def _alerts(session: AsyncSession, now: datetime) -> list[Family]:
-    outstanding = await outstanding_alerts(session)
-    oldest = (
-        (now - outstanding.oldest_raised_at).total_seconds()
-        if outstanding.oldest_raised_at is not None
-        else 0.0
-    )
-    failing = await failing_alerts(
-        session, attempts=settings.alert_failure_report_after
-    )
-    return [
-        _gauge(
-            "itgraph_alerts_oldest_undelivered_seconds",
-            "How long the oldest alert not delivered has waited.",
-            oldest,
+    """Each queue by its platform: what waits longest, and what fails.
+
+    Held alerts count as waiting — a digest that never goes out is what
+    the series exists to catch — and excluded ones do not, since nothing
+    was meant to send them.
+    """
+    attempts = settings.alert_failure_report_after
+    queues = {
+        Platform.TELEGRAM: (
+            await outstanding_alerts(session),
+            await failing_alerts(session, attempts=attempts),
         ),
-        _gauge(
+        Platform.YOUTUBE: (
+            await yt_alerts.outstanding(session),
+            await yt_alerts.failing(session, attempts=attempts),
+        ),
+    }
+    return [
+        Family(
+            "itgraph_alerts_oldest_undelivered_seconds",
+            "How long the oldest alert not delivered has waited, by platform.",
+            [
+                (
+                    {"platform": platform.value},
+                    (now - waiting.oldest_raised_at).total_seconds()
+                    if waiting.oldest_raised_at is not None
+                    else 0.0,
+                )
+                for platform, (waiting, _) in queues.items()
+            ],
+        ),
+        Family(
             "itgraph_alerts_failing",
-            "Undelivered alerts past the attempts that get reported.",
-            float(failing),
+            "Undelivered alerts past the attempts that get reported, "
+            "by platform.",
+            [
+                ({"platform": platform.value}, float(failing))
+                for platform, (_, failing) in queues.items()
+            ],
         ),
     ]
 

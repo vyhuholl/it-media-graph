@@ -65,7 +65,7 @@ BEGIN
   FOR outside IN
     SELECT table_name FROM information_schema.tables
      WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
-       AND (table_name LIKE 'yt_raw_%' OR table_name IN ('yt_backfill_walks', 'yt_search_runs'))
+       AND (table_name LIKE 'yt_raw_%' OR table_name IN ('yt_backfill_walks', 'yt_search_runs', 'yt_alerts'))
   LOOP
     EXECUTE format('SELECT count(*) FROM %I', outside) INTO counted;
     IF counted > 0 THEN

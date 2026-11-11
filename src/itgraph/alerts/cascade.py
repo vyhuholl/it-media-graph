@@ -70,7 +70,7 @@ class Cascade:
     """A post that crossed a band, and by how much.
 
     ``value`` is the family count at the moment it was measured, which is
-    what the alert stores and what a later verdict is about. ``band`` is
+    what the alert stores and what a later replay compares. ``band`` is
     the threshold it crossed — the highest one it satisfies, so a post
     that arrives already at four families raises the bands beneath it
     too rather than skipping them.

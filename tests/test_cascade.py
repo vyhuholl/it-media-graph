@@ -154,7 +154,7 @@ def test_a_higher_band_is_still_offered_after_the_lower_one() -> None:
 
 
 def test_the_value_is_what_was_measured_not_the_band() -> None:
-    """The stored number is what a later verdict is about."""
+    """The stored number is what a later replay compares."""
     found = crossings(
         [repost(n) for n in (10, 20, 30, 40)],
         bands=(2,),

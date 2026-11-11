@@ -1,24 +1,25 @@
-"""The alert bot: reads a queue, sends to one person, records the answer.
+"""The alert bot: reads the queues, sends to the configured chats.
 
 The only process here that talks to Telegram over the Bot API rather than
 MTProto, and the difference is the point. It holds no Telethon session,
 takes no session lease, and therefore runs while collection runs. It also
 carries a token that may end up on a machine the operator does not own,
-which is why its database role can write nothing but the two alert
-tables — see the `bot database role` migration.
+which is why its database role can write nothing but the delivery state
+of the two alert queues.
 
-**The poll is the correctness mechanism; the notification is the latency
-optimisation.** Both loops exist and neither is redundant. ``NOTIFY`` is
-not durable: a bot that was down when one fired has no way to learn about
-it afterwards, and there is no replay. Every alert is delivered because
-the poll comes round, and delivered *quickly* because the notification
-usually arrives first. Removing the poll because "we have NOTIFY" would
-remove the half that works.
+**The poll is the correctness mechanism.** Every alert is delivered
+because the poll comes round; a notification, were one listened for,
+would only shorten the wait. ``NOTIFY`` is not durable: a bot that was
+down when one fired has no way to learn about it afterwards.
 
 The delivery ordering is claim → commit → send → mark, and it is spelled
 out in ``db/alerts.py``. The residual failure is a duplicate message, not
 a lost one, which is the right way round for something whose whole job is
 to tell you when something happened.
+
+Two queues — Telegram's posts, YouTube's videos — and a destination per
+chat or topic, each keeping its own account. Everything here is the same
+for all of them; what differs is in ``bot/queues.py``.
 """
 
 import asyncio
@@ -29,37 +30,34 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from itgraph.bot.render import (
-    Carrier,
-    RenderedAlert,
-    digest,
-    render_cascade,
-    render_spike,
+from itgraph.bot.destinations import (
+    Destination,
+    telegram_destination,
+    youtube_destinations,
 )
+from itgraph.bot.queues import Queue, TelegramQueue, YoutubeQueue
+from itgraph.bot.render import digest_parts
 from itgraph.config import settings
-from itgraph.db.alerts import (
-    PendingAlert,
-    alert_evidence,
-    claim_undelivered,
-    count_delivered_since,
-    digest_is_due,
-    folded_posts,
-    mark_delivered,
-    mark_failed,
-    settle_folds,
-)
-from itgraph.db.models import AlertDelivery, AlertKind
+from itgraph.db.alerts import digest_is_due
 from itgraph.db.session import Database
-from itgraph.schedule import in_quiet_window
 
-__all__ = ["BotStats", "Sender", "deliver_once", "run_bot", "supervise"]
+__all__ = [
+    "BotStats",
+    "Sender",
+    "configured_queues",
+    "deliver_once",
+    "run_bot",
+    "supervise",
+]
 
 logger = logging.getLogger(__name__)
 
-# How many alerts one pass will claim. Bounded so a burst — which the
-# scoring change will bring — is delivered in several passes rather than
-# as one wall of messages the operator scrolls past.
+# How many alerts one pass will claim for one destination. Bounded so a
+# burst is delivered in several passes rather than as one wall of
+# messages the reader scrolls past.
 BATCH = 10
+
+type Queues = Sequence[tuple[Queue[Any], Sequence[Destination]]]
 
 
 class Sender:
@@ -70,7 +68,7 @@ class Sender:
     that touches the Bot API is small enough to read in full.
     """
 
-    async def send(self, text: str, *, alert_id: int | None = None) -> None:
+    async def send(self, text: str, *, destination: Destination) -> None:
         raise NotImplementedError
 
 
@@ -80,72 +78,37 @@ class BotStats:
 
     sent: int = 0
     digested: int = 0
+    excluded: int = 0
     failed: int = 0
     cycles: int = 0
-    last_digest_at: datetime | None = None
-    seen: set[int] = field(default_factory=set)
+    # When each destination's digest last went out, by its key. In memory:
+    # a bot that restarts sends its next digest at the next hour, not at
+    # once, so restarting is not a way to make it repeat itself.
+    last_digest_at: dict[str, datetime] = field(default_factory=dict)
 
     def line(self) -> str:
         line = f"sent {self.sent}, digested {self.digested}"
+        if self.excluded:
+            line += f", {self.excluded} excluded"
         if self.failed:
             line += f", {self.failed} failed"
         return line
 
 
-async def _render(
-    database: Database, alert: PendingAlert, *, now: datetime
-) -> RenderedAlert | None:
-    """One alert as a message, or ``None`` if its post has vanished.
+def configured_queues() -> Queues:
+    """Each queue with the destinations the settings give it.
 
-    Dispatched on the kind, because a kind is exactly a claim about what
-    the message should say — the alternative is one wording that fits a
-    cascade and describes a view spike as three sources reposting.
-    Everything else about delivery is kind-blind and stays that way: the
-    claim, the cap, quiet hours and the retry never look at this.
+    YouTube's only where its chat is configured: without it no YouTube
+    alert is sent, and one raised waits, counted as undelivered.
     """
-    window = timedelta(hours=settings.alert_cascade_window_hours)
-    spike = alert.kind is not AlertKind.REPOST_CASCADE
-    async with database.session() as session:
-        evidence = await alert_evidence(
-            session,
-            channel_id=alert.channel_id,
-            msg_id=alert.msg_id,
-            window=window,
-        )
-        folded = await folded_posts(session, head=alert) if spike else 0
-    if evidence is None:
-        return None
-
-    if spike:
-        return render_spike(
-            alert_id=alert.id,
-            kind=alert.kind,
-            channel_title=evidence.channel_title,
-            channel_username=evidence.channel_username,
-            msg_id=alert.msg_id,
-            published_at=evidence.published_at,
-            now=now,
-            z=alert.value,
-            text=evidence.text,
-            folded=folded,
-            observed=alert.observed,
-            expected=alert.expected,
-        )
-
-    return render_cascade(
-        alert_id=alert.id,
-        channel_title=evidence.channel_title,
-        channel_username=evidence.channel_username,
-        msg_id=alert.msg_id,
-        published_at=evidence.published_at,
-        now=now,
-        families=int(alert.value),
-        carriers=[
-            Carrier(title=title, username=username)
-            for title, username in evidence.carriers
-        ],
-        text=evidence.text,
-    )
+    queues: list[tuple[Queue[Any], Sequence[Destination]]] = []
+    telegram = telegram_destination(settings)
+    if telegram is not None:
+        queues.append((TelegramQueue(), [telegram]))
+    youtube = youtube_destinations(settings)
+    if youtube:
+        queues.append((YoutubeQueue(), list(youtube.values())))
+    return queues
 
 
 async def deliver_once(
@@ -154,157 +117,216 @@ async def deliver_once(
     stats: BotStats,
     *,
     now: datetime | None = None,
+    queues: Queues | None = None,
 ) -> None:
-    """One pass over the queue: send what is due, hold what is not.
+    """One pass over every queue: send what is due, hold what is not.
 
-    Then settle every fold whose head has gone out — on every pass and
+    Per queue: first close what no destination takes, then for each
+    destination send what may go directly and the digest if it is due,
+    then settle every fold whose head has gone out — on every pass and
     whatever the pass did, so a fold recorded after its head was sent is
     settled by the same statement as one that was counted in it.
     """
-    await _deliver_due(database, sender, stats, now=now or datetime.now(UTC))
-    async with database.session() as session:
-        await settle_folds(session, at=datetime.now(UTC))
+    moment = now or datetime.now(UTC)
+    for queue, destinations in (
+        configured_queues() if queues is None else queues
+    ):
+        async with database.session() as session:
+            excluded = await queue.exclude(session, at=moment)
+        if excluded:
+            logger.info(
+                "%d %s alert(s) excluded: no topic for their language",
+                excluded,
+                queue.platform.value,
+            )
+            stats.excluded += excluded
+        for destination in destinations:
+            await _deliver_due(
+                database, queue, destination, sender, stats, now=moment
+            )
+            await _maybe_digest(
+                database, queue, destination, sender, stats, now=moment
+            )
+        async with database.session() as session:
+            await queue.settle(session, at=datetime.now(UTC))
 
 
 async def _deliver_due(
-    database: Database, sender: Sender, stats: BotStats, *, now: datetime
+    database: Database,
+    queue: Queue[Any],
+    destination: Destination,
+    sender: Sender,
+    stats: BotStats,
+    *,
+    now: datetime,
 ) -> None:
-    """Send what is due and hold the rest.
+    """Send what is due here and set aside what belongs to the digest.
 
-    Three reasons an alert is held rather than sent, and none of them is
-    a drop. Quiet hours mean the operator is asleep; the daily cap means
-    enough has been said today; and both leave ``delivered_at`` null, so
-    the digest picks the alert up and the reader is told how many there
-    were.
+    Two reasons an alert is held rather than sent, and neither is a drop.
+    Raised in quiet hours, it belongs to the digest even once the bot may
+    speak: otherwise the end of quiet hours would fire the whole night at
+    once, which is the burst the window exists to prevent, and a six-hour
+    old alert is a record rather than news. Past the day's cap, enough
+    has been said today. Either way it is marked held, so the next pass
+    claims what was raised after it rather than claiming it again — ten
+    of them at the head of the queue used to stop every direct send until
+    the digest.
     """
-    moment = now
-
     async with database.session() as session:
-        claimed = await claim_undelivered(session, limit=BATCH)
-
-    if not claimed:
-        await _maybe_digest(database, sender, stats, now=moment)
-        return
-
-    if _is_quiet(moment):
-        # Nothing goes out while the operator is asleep. Held, not
-        # dropped: `delivered_at` stays null, so the digest collects it.
-        logger.debug("%d alert(s) held — quiet hours", len(claimed))
-        await _maybe_digest(database, sender, stats, now=moment)
-        return
-
-    async with database.session() as session:
-        sent_today = await count_delivered_since(
-            session,
-            since=moment - timedelta(days=1),
-            delivery=AlertDelivery.DIRECT,
+        claimed = await queue.claim(
+            session, destination, held=False, limit=BATCH
         )
+    if not claimed:
+        return
 
-    for alert in claimed:
-        # An alert *raised* overnight belongs to the digest even now that
-        # the bot may speak. Otherwise the end of quiet hours would fire
-        # the whole night at once, which is the burst the window exists
-        # to prevent — and a six-hour-old cascade is a record rather than
-        # news, so batching it is also the honest presentation.
-        if _is_quiet(alert.raised_at):
-            continue
-        if sent_today >= settings.alert_daily_cap:
-            # Enough has been said today. The rest stay outstanding and
-            # reach the reader as a summary that says how many there were.
-            logger.debug("daily cap reached; holding the rest for the digest")
-            break
-        rendered = await _render(database, alert, now=moment)
-        if rendered is None:
-            logger.warning(
-                "alert %d refers to a post that is gone; skipping", alert.id
-            )
-            continue
-        try:
-            await sender.send(rendered.text, alert_id=alert.id)
-        except Exception as exc:
-            # Deliberately everything. A send failing for any reason must
-            # leave the alert outstanding rather than take the loop down;
-            # the alternative is a bot that dies on one malformed message
-            # and stops reporting anything at all.
-            logger.warning(
-                "could not deliver alert %d", alert.id, exc_info=True
-            )
-            async with database.session() as session:
-                await mark_failed(
-                    session, alert.id, error=f"{type(exc).__name__}: {exc}"
-                )
-            stats.failed += 1
-            continue
+    hold = [
+        alert.id for alert in claimed if destination.is_quiet(alert.raised_at)
+    ]
 
+    # While the window holds, nothing is sent. What was raised before it
+    # and not yet sent waits for it to end and goes directly then.
+    if not destination.is_quiet(now):
         async with database.session() as session:
-            await mark_delivered(
-                session,
-                [alert.id],
-                delivery=AlertDelivery.DIRECT,
-                at=datetime.now(UTC),
+            sent_today = await queue.sent_directly_since(
+                session, destination, since=now - timedelta(days=1)
             )
-        stats.sent += 1
-        sent_today += 1
+        for alert in claimed:
+            if alert.id in hold:
+                continue
+            if sent_today >= destination.daily_cap:
+                hold.append(alert.id)
+                continue
+            text = await queue.render(database, alert, destination, now=now)
+            if text is None:
+                logger.warning(
+                    "%s alert %d refers to something that is gone; skipping",
+                    queue.platform.value,
+                    alert.id,
+                )
+                continue
+            try:
+                await sender.send(text, destination=destination)
+            except Exception as exc:
+                # Deliberately everything. A send failing for any reason
+                # must leave the alert outstanding rather than take the
+                # loop down; the alternative is a bot that dies on one
+                # malformed message and stops reporting anything at all.
+                logger.warning(
+                    "could not deliver %s alert %d to %s",
+                    queue.platform.value,
+                    alert.id,
+                    destination.key,
+                    exc_info=True,
+                )
+                async with database.session() as session:
+                    await queue.failed(
+                        session,
+                        [alert.id],
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+                stats.failed += 1
+                continue
 
-    await _maybe_digest(database, sender, stats, now=moment)
+            async with database.session() as session:
+                await queue.delivered(
+                    session,
+                    [alert.id],
+                    destination,
+                    delivery="direct",
+                    at=datetime.now(UTC),
+                )
+            stats.sent += 1
+            sent_today += 1
 
-
-def _is_quiet(moment: datetime) -> bool:
-    """Whether the bot may not speak at this moment."""
-    return in_quiet_window(
-        moment,
-        start=settings.alert_quiet_from_hour,
-        end=settings.alert_quiet_to_hour,
-        zone=settings.watch_timezone,
-    )
+    if hold:
+        logger.debug(
+            "%d alert(s) held for %s's digest", len(hold), destination.key
+        )
+        async with database.session() as session:
+            await queue.hold(session, hold, at=now)
 
 
 async def _maybe_digest(
-    database: Database, sender: Sender, stats: BotStats, *, now: datetime
+    database: Database,
+    queue: Queue[Any],
+    destination: Destination,
+    sender: Sender,
+    stats: BotStats,
+    *,
+    now: datetime,
 ) -> None:
-    """Send the summary, if one is due and there is anything in it.
+    """Send a destination's summary, if one is due and it holds anything.
 
     A digest covering nothing is not sent: a daily message saying nothing
     happened trains the reader to ignore the channel, which is the one
     outcome that makes every other guarantee here worthless.
+
+    Every held alert goes, in as many parts as fit. A part that fails
+    counts a failed attempt on each of its alerts and is sent again on the
+    next pass; the parts already sent are marked and are not. The digest
+    counts as sent only once every part has gone.
     """
     if not digest_is_due(
         now,
-        hour=settings.alert_digest_hour,
-        last=stats.last_digest_at,
-        zone=settings.watch_timezone,
+        hour=destination.digest_hour,
+        last=stats.last_digest_at.get(destination.key),
+        zone=destination.zone,
     ):
         return
 
     async with database.session() as session:
-        held = await claim_undelivered(session, limit=BATCH * 10)
+        held = await queue.claim(session, destination, held=True, limit=None)
 
     if not held:
-        stats.last_digest_at = now
+        stats.last_digest_at[destination.key] = now
         return
 
-    rendered = [
-        entry
-        for entry in [
-            await _render(database, alert, now=now) for alert in held
-        ]
-        if entry is not None
-    ]
-    try:
-        await sender.send(digest(rendered, held=len(held)))
-    except Exception:
-        logger.warning("could not deliver the digest", exc_info=True)
-        return
+    entries: list[tuple[int, str]] = []
+    gone: list[int] = []
+    for alert in held:
+        text = await queue.render(database, alert, destination, now=now)
+        if text is None:
+            gone.append(alert.id)
+        else:
+            entries.append((alert.id, text))
 
-    async with database.session() as session:
-        await mark_delivered(
-            session,
-            [alert.id for alert in held],
-            delivery=AlertDelivery.DIGEST,
-            at=datetime.now(UTC),
-        )
-    stats.digested += len(held)
-    stats.last_digest_at = now
+    parts = digest_parts([text for _, text in entries], held=len(held))
+    complete = True
+    for number, part in enumerate(parts):
+        ids = [entries[index][0] for index in part.entries]
+        # What vanished is counted in the header and goes with the first
+        # part, so it is settled once the reader has been told the count.
+        if number == 0:
+            ids += gone
+        try:
+            await sender.send(part.text, destination=destination)
+        except Exception as exc:
+            logger.warning(
+                "could not deliver part %d of %d of %s's digest",
+                number + 1,
+                len(parts),
+                destination.key,
+                exc_info=True,
+            )
+            async with database.session() as session:
+                await queue.failed(
+                    session, ids, error=f"{type(exc).__name__}: {exc}"
+                )
+            stats.failed += len(ids)
+            complete = False
+            continue
+        async with database.session() as session:
+            await queue.delivered(
+                session,
+                ids,
+                destination,
+                delivery="digest",
+                at=datetime.now(UTC),
+            )
+        stats.digested += len(ids)
+
+    if complete:
+        stats.last_digest_at[destination.key] = now
 
 
 async def run_bot(
@@ -317,7 +339,7 @@ async def run_bot(
     """Deliver alerts until stopped.
 
     The poll interval is the only thing keeping this correct; a
-    notification, when the listener is wired, only shortens the wait.
+    notification, were one listened for, would only shorten the wait.
     """
     stats = BotStats()
     stop = stop or asyncio.Event()

@@ -9,6 +9,10 @@ INSERT INTO channels (tg_id, username, status, discovered_via, kind, kind_note, 
   (5, 'fake_rejected_other', 'rejected', 'forward', NULL, NULL, 'not_it', 'a fake reason');
 INSERT INTO yt_channels (channel_id, status, reject_reason, reject_note, kind_note, discovered_via)
   VALUES ('UCfake000000000000000000', 'rejected', 'not_it', 'a fake reason', 'a fake kind note', 'manual');
+-- A seed of each language a YouTube topic takes, for the restore's trial of both.
+INSERT INTO yt_channels (channel_id, status, kind, lang, discovered_via) VALUES
+  ('UCfakeSeedEnglish0000000', 'seed', 'personal', 'en', 'manual'),
+  ('UCfakeSeedRussian0000000', 'seed', 'personal', 'ru', 'manual');
 INSERT INTO affiliation_candidates (channel_a, channel_b, score, decision_note) VALUES (4, 5, 0.5, 'a fake note on a pair');
 INSERT INTO pending_mentions (username) VALUES ('fake_person');
 INSERT INTO raw_messages (channel_id, msg_id, payload) VALUES

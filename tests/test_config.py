@@ -576,3 +576,67 @@ def test_a_partial_offsite_configuration_is_refused(
         if name != only:
             assert name.lower() in message
     assert B2_ENV[only] not in message
+
+
+YOUTUBE_ALERTS = {
+    "YOUTUBE_ALERT_CHAT_ID": "-100000000000017",
+    "YOUTUBE_ALERT_TOPIC_EN": "11",
+    "YOUTUBE_ALERT_TOPIC_RU": "12",
+}
+
+
+def test_youtube_alerts_are_off_by_default(env: pytest.MonkeyPatch) -> None:
+    settings = build()
+    assert settings.youtube_alert_chat_id is None
+    assert settings.youtube_alert_daily_cap == 10
+
+
+def test_a_youtube_chat_with_both_topics_loads(
+    env: pytest.MonkeyPatch,
+) -> None:
+    for key, value in YOUTUBE_ALERTS.items():
+        env.setenv(key, value)
+
+    settings = build()
+
+    assert settings.youtube_alert_chat_id == -100000000000017
+    assert (
+        settings.youtube_alert_topic_en,
+        settings.youtube_alert_topic_ru,
+    ) == (
+        11,
+        12,
+    )
+
+
+@pytest.mark.parametrize("left_out", sorted(YOUTUBE_ALERTS))
+def test_a_youtube_chat_without_all_three_is_refused(
+    env: pytest.MonkeyPatch, left_out: str
+) -> None:
+    """Half of it would deliver one language and strand the other."""
+    for key, value in YOUTUBE_ALERTS.items():
+        if key != left_out:
+            env.setenv(key, value)
+
+    with pytest.raises(ValidationError) as caught:
+        build()
+
+    assert left_out.lower() in str(caught.value)
+
+
+def test_blank_youtube_alert_settings_are_unset(
+    env: pytest.MonkeyPatch,
+) -> None:
+    for key in YOUTUBE_ALERTS:
+        env.setenv(key, "")
+
+    assert build().youtube_alert_chat_id is None
+
+
+def test_youtubes_digest_inside_its_quiet_hours_is_refused(
+    env: pytest.MonkeyPatch,
+) -> None:
+    env.setenv("YOUTUBE_ALERT_DIGEST_HOUR", "3")
+
+    with pytest.raises(ValidationError, match="youtube_alert_digest_hour"):
+        build()

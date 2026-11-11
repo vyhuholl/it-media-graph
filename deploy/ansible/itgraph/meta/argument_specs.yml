@@ -64,7 +64,18 @@ argument_specs:
       itgraph_alert_chat_id:
         type: int
         required: true
-        description: The one chat the bot speaks in.
+        description: The chat Telegram's alerts go to.
+      itgraph_youtube_alert_chat_id:
+        type: int
+        description: >-
+          The forum chat YouTube's alerts go to; 0 for no YouTube alerts. Given with both topics
+          or with neither.
+      itgraph_youtube_alert_topic_en:
+        type: int
+        description: The topic of the YouTube chat for English-language channels; 0 with no chat.
+      itgraph_youtube_alert_topic_ru:
+        type: int
+        description: The topic of the YouTube chat for Russian-language channels; 0 with no chat.
       itgraph_postgres_password:
         type: str
         required: true

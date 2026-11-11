@@ -10,6 +10,12 @@ itgraph_restore_allowed: false
 # The Bot API's address; empty is Telegram's own.
 itgraph_telegram_api: ""
 
+# YouTube's alert chat and its two topics; 0 is none, and then no YouTube alert
+# is sent. All three or none (tasks/inputs.yml).
+itgraph_youtube_alert_chat_id: 0
+itgraph_youtube_alert_topic_en: 0
+itgraph_youtube_alert_topic_ru: 0
+
 # The off-site store's settings, with itgraph_backup_offsite: b2.
 itgraph_b2_key_id: ""
 itgraph_b2_application_key: ""

@@ -123,8 +123,17 @@ __itgraph_youtube_secret:
     YOUTUBE_API_KEY: "{{ itgraph_youtube_api_key }}"
 __itgraph_has_youtube: "{{ itgraph_youtube_api_key | length > 0 }}"
 __itgraph_has_offsite: "{{ itgraph_backup_offsite == 'b2' }}"
+# YouTube's alert chat and topics join the bot's Secret only where they are given,
+# so a bot with no YouTube chat holds no empty keys to misread.
+__itgraph_youtube_alert_keys:
+  itgraph-bot:
+    YOUTUBE_ALERT_CHAT_ID: "{{ itgraph_youtube_alert_chat_id | string }}"
+    YOUTUBE_ALERT_TOPIC_EN: "{{ itgraph_youtube_alert_topic_en | string }}"
+    YOUTUBE_ALERT_TOPIC_RU: "{{ itgraph_youtube_alert_topic_ru | string }}"
+__itgraph_has_youtube_alerts: "{{ itgraph_youtube_alert_chat_id | int != 0 }}"
 __itgraph_all_secrets: >-
   {{ __itgraph_secrets
+     | combine(__itgraph_youtube_alert_keys if __itgraph_has_youtube_alerts | bool else {}, recursive=true)
      | combine(__itgraph_offsite_secret if __itgraph_has_offsite | bool else {})
      | combine(__itgraph_youtube_secret if __itgraph_has_youtube | bool else {}) }}
 

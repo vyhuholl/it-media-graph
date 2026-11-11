@@ -12,26 +12,47 @@ this went, not how far it had gone when a scheduled job noticed. Do not
 "fix" it by copying the reposter list onto the alert row — that would put
 a derived measure into an observation table, which is the trade ``Edge``
 already refuses.
+
+**Everything taken from a post, a channel or a video is escaped.** The
+messages are HTML, and a title with ``<`` or ``&`` in it would otherwise
+be refused by Telegram — on every retry, for as long as the alert lived.
+
+**Every message fits in one Telegram message,** and a digest that does
+not is sent in parts (``digest_parts``): Telegram takes "1-4096
+characters" and refused the whole digest when one ran longer.
 """
 
+import html
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
-from itgraph.db.models import AlertKind
+from itgraph.db.models import AlertKind, YtAlertKind, YtAlertRoute
+from itgraph.derive.yt_videos import Counters
 
 __all__ = [
+    "MESSAGE_LIMIT",
     "Carrier",
+    "DigestPart",
     "RenderedAlert",
     "age_phrase",
-    "digest",
+    "digest_parts",
     "render_cascade",
     "render_spike",
+    "render_youtube",
+    "units",
 ]
 
 # How much of a post to quote. Long enough to recognise it, short enough
 # that a message about a post is not a copy of it.
 EXCERPT = 200
+
+# Telegram's limit on one message's text, and what one alert may take of
+# it: the rest is the room a digest's header and separator need, so that
+# any alert fits in a part of its own.
+MESSAGE_LIMIT = 4096
+ENTRY_LIMIT = 3800
 
 # What each spike is about, in the words a reader thinks in. Per kind
 # rather than one "необычная активность", because the four mean genuinely
@@ -45,6 +66,47 @@ SPIKE_LABEL = {
     AlertKind.COMMENT_SPIKE: "💬 Комментарии",
 }
 
+# YouTube's three signals, in the same words.
+YT_LABEL = {
+    YtAlertKind.VIEWS_SPIKE: "👁 Просмотры",
+    YtAlertKind.LIKE_SPIKE: "👍 Лайки",
+    YtAlertKind.COMMENT_SPIKE: "💬 Комментарии",
+}
+
+SEPARATOR = "\n\n———\n\n"
+
+
+def units(text: str) -> int:
+    """A text's length as Telegram counts it: in UTF-16 code units.
+
+    An emoji is two of them, and Python's ``len`` says one. Counted with
+    the markup in, which Telegram does not count, so this errs long.
+    """
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _fit(text: str, limit: int = ENTRY_LIMIT) -> str:
+    """The text, cut at a line boundary if it would not fit.
+
+    Lines are dropped from the end, where the excerpt and the list of
+    carriers are; the markup is all in the first lines, so a cut never
+    leaves a tag open.
+    """
+    if units(text) <= limit:
+        return text
+    kept: list[str] = []
+    for line in text.split("\n"):
+        if units("\n".join([*kept, line, "…"])) > limit:
+            break
+        kept.append(line)
+    if not kept:
+        return text[: limit // 2] + "…"
+    return "\n".join([*kept, "…"])
+
+
+def _escape(text: str) -> str:
+    return html.escape(text, quote=False)
+
 
 @dataclass(frozen=True, slots=True)
 class Carrier:
@@ -56,7 +118,7 @@ class Carrier:
     def label(self) -> str:
         if self.username:
             return f"@{self.username}"
-        return self.title or "неизвестный канал"
+        return _escape(self.title or "неизвестный канал")
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,8 +156,14 @@ def _excerpt(text: str | None) -> str:
         return ""
     collapsed = " ".join(text.split())
     if len(collapsed) <= EXCERPT:
-        return collapsed
-    return collapsed[:EXCERPT].rstrip() + "…"
+        return _escape(collapsed)
+    return _escape(collapsed[:EXCERPT].rstrip()) + "…"
+
+
+def _who(title: str | None, username: str | None) -> str:
+    if title:
+        return _escape(title)
+    return f"@{username}" if username else "канал"
 
 
 def render_cascade(
@@ -122,9 +190,7 @@ def render_cascade(
     that happened a minute ago, and a reader who expects minutes
     concludes the system is broken.
     """
-    who = channel_title or (
-        f"@{channel_username}" if channel_username else "канал"
-    )
+    who = _who(channel_title, channel_username)
     lines = [
         f"🔁 <b>{families}</b> независимых источника(ов) репостят",
         f"{who} · {age_phrase(now - published_at)}",
@@ -143,7 +209,7 @@ def render_cascade(
         lines.append("")
         lines.append("Кто перенёс: " + ", ".join(c.label() for c in carriers))
 
-    return RenderedAlert(alert_id=alert_id, text="\n".join(lines))
+    return RenderedAlert(alert_id=alert_id, text=_fit("\n".join(lines)))
 
 
 def _magnitude(z: float) -> str:
@@ -209,9 +275,6 @@ def render_spike(
     reads, unlike the multiple of a spread. Without them — an alert raised
     before they were kept — it reads like the other kinds.
     """
-    who = channel_title or (
-        f"@{channel_username}" if channel_username else "канал"
-    )
     label = SPIKE_LABEL.get(kind, "📈 Активность")
     if (
         kind is AlertKind.COMMENT_SPIKE
@@ -223,10 +286,8 @@ def render_spike(
         )
     else:
         headline = f"{label} — {_magnitude(z)} (z {z:.1f})"
-    lines = [
-        headline,
-        f"{who} · {age_phrase(now - published_at)}",
-    ]
+    who = _who(channel_title, channel_username)
+    lines = [headline, f"{who} · {age_phrase(now - published_at)}"]
 
     link = post_link(channel_username, msg_id)
     if link:
@@ -245,18 +306,159 @@ def render_spike(
             "накрутка), а не интерес к этому посту."
         )
 
-    return RenderedAlert(alert_id=alert_id, text="\n".join(lines))
+    return RenderedAlert(alert_id=alert_id, text=_fit("\n".join(lines)))
 
 
-def digest(rendered: Sequence[RenderedAlert], *, held: int) -> str:
-    """Everything held by the cap or by quiet hours, as one message.
+def _clock(moment: datetime, *, now: datetime, zone: str) -> str:
+    """A moment as a reader's clock reads it, with the date when it is
+    not today's: "14:05 MSK", or "12.11 14:05 MSK"."""
+    local = moment.astimezone(ZoneInfo(zone))
+    today = now.astimezone(ZoneInfo(zone)).date()
+    shape = "%H:%M %Z" if local.date() == today else "%d.%m %H:%M %Z"
+    return local.strftime(shape)
 
-    States how many it covers, always. What separates a digest from a
-    silent drop is that the reader can tell the difference, and a count
-    is the cheapest way to tell them.
+
+def _count(value: int) -> str:
+    """12400 as "12 400", the way a Russian reader groups digits."""
+    return f"{value:,}".replace(",", " ")
+
+
+def render_youtube(
+    *,
+    alert_id: int,
+    kind: YtAlertKind,
+    route: YtAlertRoute,
+    video_id: str,
+    title: str | None,
+    channel_title: str | None,
+    started_at: datetime | None,
+    counters: Counters,
+    counted_at: datetime | None,
+    z: float,
+    scored_at: datetime,
+    now: datetime,
+    zone: str,
+    observed: int | None = None,
+    expected: float | None = None,
+    folded: int = 0,
+) -> RenderedAlert:
+    """One video doing unusually well, as one message or digest entry.
+
+    What the site promises an alert holds, and what the Developer
+    Policies ask of it:
+
+    * **YouTube named as the source on this very message** — not once
+      for a digest, which III.F.2.a calls "one general set of
+      attribution" — by its name and a link to the video on YouTube.
+      Telegram's preview of that link shows YouTube's own card.
+    * **YouTube's counts with the moment they were read.** The newest
+      stored, which is "the most updated API Data available"; dated,
+      because a message stays in the chat and so becomes "historical API
+      Data", which may be shown "presented accurately in context of
+      time" (III.E.4.f). A counter YouTube did not report is left out,
+      never written as zero.
+    * **itgraph's score, said to be itgraph's,** with its own moment:
+      III.E.4.h's "clear and prominent disclosure" that it is "not from
+      YouTube", and the derived-metrics page's "distinguish these
+      metrics".
+
+    The channel's title is left out when its stored data has expired; the
+    rest of the message stands without it.
     """
-    header = f"📋 За прошедший период — {held} оповещение(й)"
-    if not rendered:
-        return header
-    body = "\n\n———\n\n".join(entry.text for entry in rendered)
-    return f"{header}\n\n{body}"
+    lines = [f"▶️ YouTube · {route.value.upper()}"]
+
+    about = f"<b>{_escape(title or 'видео без названия')}</b>"
+    if channel_title:
+        about += f" — {_escape(channel_title)}"
+    if started_at is not None:
+        about += f" · опубликовано {age_phrase(now - started_at)}"
+    lines.append(about)
+    lines.append(f"https://www.youtube.com/watch?v={video_id}")
+
+    counts = [
+        f"{name} {_count(value)}"
+        for name, value in (
+            ("просмотры", counters.views),
+            ("лайки", counters.likes),
+            ("комментарии", counters.comments),
+        )
+        if value is not None
+    ]
+    if counts and counted_at is not None:
+        lines.append(
+            f"Данные YouTube на {_clock(counted_at, now=now, zone=zone)}: "
+            + " · ".join(counts)
+        )
+
+    label = YT_LABEL[kind]
+    if (
+        kind is YtAlertKind.COMMENT_SPIKE
+        and observed is not None
+        and expected is not None
+    ):
+        what = f"{label} — {observed}, {_usual(expected)}"
+    else:
+        what = f"{label} — {_magnitude(z)} для канала"
+    lines.append(
+        f"📈 Оценка itgraph на {_clock(scored_at, now=now, zone=zone)} "
+        f"(рассчитана itgraph, не метрика YouTube): {what} (z {z:.1f})"
+    )
+
+    if folded:
+        lines.append(
+            f"📶 Вместе с ним выше нормы ещё {folded} видео канала — "
+            "похоже, вырос охват всего канала, а не интерес к этому видео."
+        )
+
+    return RenderedAlert(alert_id=alert_id, text=_fit("\n".join(lines)))
+
+
+@dataclass(frozen=True, slots=True)
+class DigestPart:
+    """One message of a digest, and which entries it carries."""
+
+    text: str
+    entries: tuple[int, ...]
+
+
+def digest_parts(
+    entries: Sequence[str], *, held: int, limit: int = MESSAGE_LIMIT
+) -> list[DigestPart]:
+    """Everything held by the cap or by quiet hours, as few messages as fit.
+
+    States how many it covers, always, in the first part. What separates
+    a digest from a silent drop is that the reader can tell the
+    difference, and a count is the cheapest way to tell them.
+
+    In parts because one message takes 4,096 characters, and a digest of
+    a busy night did not fit: Telegram refused it, and the alerts in it
+    waited until someone noticed. Each entry is whole in one part; an
+    entry never needs more than one, since a rendered alert is bounded
+    below the limit with room for a header.
+    """
+    first = f"📋 За прошедший период — {held} оповещение(й)"
+    later = "📋 Продолжение"
+    # Room for " (12/34)", whatever the numbers turn out to be.
+    suffix = 12
+
+    groups: list[list[int]] = [[]]
+    size = units(first) + suffix
+    for index, entry in enumerate(entries):
+        cost = units(SEPARATOR if groups[-1] else "\n\n") + units(entry)
+        if groups[-1] and size + cost > limit:
+            groups.append([])
+            size = units(later) + suffix
+            cost = units("\n\n") + units(entry)
+        groups[-1].append(index)
+        size += cost
+
+    count = len(groups)
+    parts: list[DigestPart] = []
+    for number, group in enumerate(groups, start=1):
+        header = first if number == 1 else later
+        if count > 1:
+            header += f" ({number}/{count})"
+        body = SEPARATOR.join(entries[index] for index in group)
+        text = f"{header}\n\n{body}" if body else header
+        parts.append(DigestPart(text=text, entries=tuple(group)))
+    return parts

@@ -657,6 +657,9 @@ def test_no_value_of_one_set_is_in_the_others_objects(
         "itgraph_telegram_api_hash",
         "itgraph_bot_token",
         "itgraph_alert_chat_id",
+        "itgraph_youtube_alert_chat_id",
+        "itgraph_youtube_alert_topic_en",
+        "itgraph_youtube_alert_topic_ru",
         "itgraph_postgres_password",
         "itgraph_bot_postgres_password",
         "itgraph_metrics_postgres_password",
@@ -737,6 +740,69 @@ def test_a_new_bot_token_changes_the_bots_template_alone(
             rendered["a"], "Deployment", name
         ), name
     assert changed["postgres"] == rendered["a"]["postgres"]
+
+
+YOUTUBE_ALERT_KEYS = {
+    "YOUTUBE_ALERT_CHAT_ID",
+    "YOUTUBE_ALERT_TOPIC_EN",
+    "YOUTUBE_ALERT_TOPIC_RU",
+}
+
+
+def test_the_bot_holds_the_youtube_chat_and_nothing_else_does(
+    rendered: dict[str, dict[str, Objects]],
+) -> None:
+    objects = everything(rendered["a"])
+
+    assert YOUTUBE_ALERT_KEYS <= keys_of(objects, "Deployment", "itgraph-bot")
+    for kind, name in (
+        ("Deployment", "itgraph-watch"),
+        ("Deployment", "itgraph-metrics"),
+        ("CronJob", "itgraph-detect"),
+    ):
+        keys = keys_of(objects, kind, name)
+        assert not keys & (YOUTUBE_ALERT_KEYS | {"ALERT_CHAT_ID"}), name
+
+
+def test_without_a_youtube_chat_the_bot_holds_no_youtube_keys(
+    tmp_path: Path,
+) -> None:
+    streams = render_set(
+        "a",
+        tmp_path / "no-youtube-chat",
+        extra={
+            "itgraph_youtube_alert_chat_id": 0,
+            "itgraph_youtube_alert_topic_en": 0,
+            "itgraph_youtube_alert_topic_ru": 0,
+        },
+    )
+
+    keys = keys_of(everything(streams), "Deployment", "itgraph-bot")
+    assert not keys & YOUTUBE_ALERT_KEYS
+    assert "ALERT_CHAT_ID" in keys
+
+
+def test_a_new_youtube_topic_restarts_the_bot_alone(
+    rendered: dict[str, dict[str, Objects]], tmp_path: Path
+) -> None:
+    changed = render_set(
+        "a",
+        tmp_path / "new-topic",
+        extra={"itgraph_youtube_alert_topic_ru": 7109},
+    )
+
+    def annotation(streams: dict[str, Objects], name: str) -> str:
+        obj = named(everything(streams), "Deployment", name)
+        checksum: str = obj["spec"]["template"]["metadata"]["annotations"][
+            "itgraph/config-checksum"
+        ]
+        return checksum
+
+    assert annotation(changed, "itgraph-bot") != annotation(
+        rendered["a"], "itgraph-bot"
+    )
+    for name in ("itgraph-watch", "itgraph-metrics", "itgraph-proxy"):
+        assert annotation(changed, name) == annotation(rendered["a"], name)
 
 
 def test_a_new_api_hash_restarts_the_collector_and_not_the_bot(
@@ -839,6 +905,18 @@ def test_defaults_are_held_to_the_code() -> None:
         == fields["watch_quiet_to_hour"].default
     )
     assert defaults["itgraph_alert_spike_z"] == fields["alert_spike_z"].default
+    # The restore's trial reads one window for whether the bot may speak:
+    # the bot's, for both platforms, is that same window in the same zone.
+    for platform in ("alert", "youtube_alert"):
+        for edge in ("from", "to"):
+            assert (
+                fields[f"{platform}_quiet_{edge}_hour"].default
+                == defaults[f"itgraph_quiet_{edge}_hour"]
+            ), (platform, edge)
+    assert (
+        fields["youtube_alert_timezone"].default
+        == defaults["itgraph_timezone"]
+    )
     for name, (schedule, _, _) in SCHEDULES.items():
         key = "itgraph_" + name.removeprefix("itgraph-").replace("-", "_")
         assert defaults[key + "_schedule"] == schedule, key

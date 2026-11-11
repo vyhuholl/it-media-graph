@@ -237,7 +237,12 @@ def test_no_dump_carries_youtube_api_data(
         for index, arg in enumerate(dump_command)
         if arg == "--exclude-table-data"
     ]
-    assert left_out == ["yt_raw_*", "yt_backfill_walks", "yt_search_runs"]
+    assert left_out == [
+        "yt_raw_*",
+        "yt_backfill_walks",
+        "yt_search_runs",
+        "yt_alerts",
+    ]
 
 
 def test_the_pattern_reaches_every_table_of_youtube_api_data() -> None:
@@ -272,6 +277,7 @@ def test_the_pattern_reaches_every_table_of_youtube_api_data() -> None:
         "yt_raw_video_stats",
         "yt_backfill_walks",
         "yt_search_runs",
+        "yt_alerts",
     }
     assert left_out <= youtube
     assert {table for table in youtube if excluded(table)} == left_out
@@ -569,6 +575,8 @@ def test_the_container_commands_are_unchanged(
         "yt_backfill_walks",
         "--exclude-table-data",
         "yt_search_runs",
+        "--exclude-table-data",
+        "yt_alerts",
     ]
     # Inside the container the client needs no password; the child
     # inherits the parent's environment as it always did.

@@ -16,6 +16,9 @@ itgraph_telegram_api_id: 20406080
 itgraph_telegram_api_hash: fakeApiHashSetB
 itgraph_bot_token: "222:fakeBotTokenSetB"
 itgraph_alert_chat_id: 100000002
+itgraph_youtube_alert_chat_id: -100000000000072
+itgraph_youtube_alert_topic_en: 7201
+itgraph_youtube_alert_topic_ru: 7202
 itgraph_postgres_password: fakeOwnerPasswordSetBbbbb
 itgraph_bot_postgres_password: fakeBotPasswordSetBbbbbbb
 itgraph_metrics_postgres_password: fakeMetricsPasswordSetBbb

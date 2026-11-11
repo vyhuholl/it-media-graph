@@ -132,3 +132,86 @@
     - name: Note the delivery
       ansible.builtin.set_fact:
         __itgraph_alert_report: an alert, to this environment's own chat
+
+# YouTube's topics, where this environment has a YouTube chat: a synthetic video of a
+# restored seed of each language, read now, and an alert scored on that reading. The
+# copy holds no API data, so the video is made up here and removed at the end, which
+# takes its reading and its alert with it. After the read-back, which has already
+# proven the copy held none.
+- name: Note that YouTube delivery is not configured
+  ansible.builtin.set_fact:
+    __itgraph_youtube_report: not configured in this environment
+  when: not (__itgraph_has_youtube_alerts | bool)
+
+- name: Note that the YouTube alerts could not be proven
+  ansible.builtin.set_fact:
+    __itgraph_youtube_report: "could not be proven: the bot holds alerts until {{ itgraph_quiet_to_hour }}:00 {{ itgraph_timezone }}"
+  when:
+    - __itgraph_has_youtube_alerts | bool
+    - __itgraph_hour_here | int >= itgraph_quiet_from_hour and __itgraph_hour_here | int < itgraph_quiet_to_hour
+
+- name: Deliver a YouTube alert to each topic
+  when:
+    - __itgraph_has_youtube_alerts | bool
+    - __itgraph_hour_here | int < itgraph_quiet_from_hour or __itgraph_hour_here | int >= itgraph_quiet_to_hour
+  block:
+    - name: Raise a synthetic YouTube alert for a seed of each language
+      ansible.builtin.command:
+        argv: "{{ __itgraph_psql_query + [__itgraph_raise_youtube_alerts] }}"
+      vars:
+        __itgraph_raise_youtube_alerts: >-
+          INSERT INTO yt_raw_videos (video_id, payload, fetched_at, discovered_at, discovered_via)
+          SELECT DISTINCT ON (lang) 'itgTrial' || initcap(lang::text) || '0',
+                 jsonb_build_object('snippet', jsonb_build_object(
+                   'channelId', channel_id, 'title', 'itgraph restore trial',
+                   'publishedAt', to_char((now() - interval '1 hour') AT TIME ZONE 'UTC',
+                                          'YYYY-MM-DD"T"HH24:MI:SS"Z"'))),
+                 now(), now(), 'count'
+          FROM yt_channels WHERE status = 'seed' AND lang IN ('en', 'ru')
+          ORDER BY lang, channel_id;
+          INSERT INTO yt_raw_video_stats (video_id, observed_at, views, likes, comments)
+          SELECT video_id, date_trunc('second', now()), 1, 1, 1
+          FROM yt_raw_videos WHERE video_id LIKE 'itgTrial%';
+          INSERT INTO yt_alerts (kind, video_id, scored_at, band, value)
+          SELECT 'views_spike', video_id, observed_at, 2147483647, 9.9
+          FROM yt_raw_video_stats WHERE video_id LIKE 'itgTrial%'
+      changed_when: true
+
+    # Raised|waiting|routes delivered, e.g. "2|0|en,ru".
+    - name: Wait for the bot to deliver each
+      ansible.builtin.command:
+        argv: >-
+          {{ __itgraph_psql_query + ["SELECT count(*) || '|' || count(*) FILTER (WHERE delivered_at IS NULL)
+          || '|' || coalesce(string_agg(route::text, ',' ORDER BY route), '')
+          FROM yt_alerts WHERE band = 2147483647"] }}
+      register: __itgraph_youtube_delivered
+      until: (__itgraph_youtube_delivered.stdout | trim).split('|')[1] | int == 0
+      retries: "{{ __itgraph_trial_retries | default(30) }}"
+      delay: "{{ __itgraph_trial_delay | default(10) }}"
+      changed_when: false
+      failed_when: false
+
+    - name: Read what reached the topics
+      ansible.builtin.set_fact:
+        __itgraph_youtube_seen: "{{ (__itgraph_youtube_delivered.stdout | trim).split('|') }}"
+
+    - name: Assert each reached its topic
+      ansible.builtin.assert:
+        that:
+          - __itgraph_youtube_seen[0] | int > 0
+          - __itgraph_youtube_seen[1] | int == 0
+        fail_msg: >-
+          {{ 'No YouTube alert was raised: no restored seed is labelled en or ru.'
+          if __itgraph_youtube_seen[0] | int == 0 else 'The bot delivered ' ~ __itgraph_youtube_seen[2]
+          ~ ' of ' ~ __itgraph_youtube_seen[0] ~ ' YouTube alerts in five minutes.' }} Its log: `kubectl -n
+          {{ itgraph_namespace }} logs deployment/itgraph-bot`; its chat and topics are this environment's own.
+        quiet: true
+
+    - name: Note the YouTube deliveries
+      ansible.builtin.set_fact:
+        __itgraph_youtube_report: "to the topics {{ __itgraph_youtube_seen[2] }} of this environment's own YouTube chat"
+  always:
+    - name: Remove the synthetic videos, their readings and their alerts
+      ansible.builtin.command:
+        argv: "{{ __itgraph_psql_query + [\"DELETE FROM yt_raw_videos WHERE video_id LIKE 'itgTrial%'\"] }}"
+      changed_when: true

@@ -122,6 +122,20 @@ telegram_calls() {
 		'import urllib.request; print(urllib.request.urlopen("http://127.0.0.1:8081/calls").read().decode())'
 }
 
+# Steers the stand-in: enqueue an update, refuse a topic, or reset what it saw.
+telegram_control() { # <action> [json body]
+	kubectl -n e2e-telegram exec deployment/telegram -- python3 -c \
+		'import sys, urllib.request; urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:8081/control/" + sys.argv[1], data=sys.argv[2].encode(), method="POST")).read()' \
+		"$1" "${2:-{\}}" >/dev/null
+}
+
+# How many messages the stand-in was sent for a chat and a topic, "none" for no topic.
+sent_to() { # <chat id> <topic id | none>
+	telegram_calls | jq -s --arg chat "$1" --arg topic "$2" '
+		[.[] | select(.method == "sendMessage" and .fields.chat_id == $chat
+			and (.fields.message_thread_id // "none") == $topic)] | length'
+}
+
 # The bot may reach the stand-in: a policy the suite alone applies.
 allow_stub() { # <namespace>
 	kubectl apply -f - >/dev/null <<YAML
@@ -628,7 +642,7 @@ read_rows() { psql_in "$namespace" "$1"; }
 [ "$(read_rows "SELECT count(*) FROM yt_channels WHERE reject_note IS NOT NULL OR kind_note IS NOT NULL")" = 0 ] || fail 'notes in the copy'
 [ "$(read_rows 'SELECT count(*) FROM affiliation_candidates WHERE decision_note IS NOT NULL')" = 0 ] || fail 'a note on a pair in the copy'
 [ "$(read_rows 'SELECT count(*) FROM affiliation_candidates')" = 1 ] || fail 'the decision on a pair did not come across'
-[ "$(read_rows 'SELECT count(*) FROM yt_channels')" = 1 ] || fail 'the YouTube records did not come across'
+[ "$(read_rows 'SELECT count(*) FROM yt_channels')" = 3 ] || fail 'the YouTube records did not come across'
 [ "$(read_rows 'SELECT count(*) FROM yt_raw_channels')" = 0 ] || fail 'API data in the copy'
 payload="$(read_rows "SELECT payload FROM raw_messages WHERE msg_id = 10")"
 case "$payload" in *777000111* | *"A Fake"* | *"Another Fake"*) fail "a person in the copy: $payload" ;; esac
@@ -659,14 +673,21 @@ ok 'a dump older than the reader comes out readable by it, and by nothing more'
 trial_alerts="$(read_rows 'SELECT count(*) FROM alerts WHERE band = 2147483647')"
 if grep -q 'Delivered through the bot: could not be proven' "$work/restore.log"; then
 	[ "$trial_alerts" = 0 ] || fail 'an alert raised in quiet hours'
-	ok 'inside quiet hours, the alert is reported as not proven'
+	grep -q 'YouTube: could not be proven' "$work/restore.log" || fail 'the YouTube trial was not reported as not proven'
+	[ "$(read_rows 'SELECT count(*) FROM yt_alerts')" = 0 ] || fail 'a YouTube alert raised in quiet hours'
+	ok 'inside quiet hours, the alerts are reported as not proven'
 else
 	[ "$(read_rows 'SELECT count(*) FROM alerts WHERE band = 2147483647 AND delivered_at IS NOT NULL')" = 1 ] ||
 		fail 'the bot did not deliver the synthetic alert'
 	telegram_calls >"$work/telegram.txt"
 	grep -q '"method": "sendMessage"' "$work/telegram.txt" || fail 'the stand-in saw no message'
-	[ "$(grep -c '"method": "sendMessage"' "$work/telegram.txt")" = 1 ] || fail 'the undelivered alert of the dump was sent'
-	ok 'the bot delivers one alert, the synthetic one, and none of the dump'
+	[ "$(sent_to 100000003 none)" = 1 ] || fail 'the undelivered alert of the dump was sent, or the synthetic one was not'
+	ok 'the bot delivers one alert, the synthetic one, and none of the dump, to the chat and no topic'
+	grep -q 'YouTube: to the topics en,ru' "$work/restore.log" || fail 'the YouTube trial did not reach both topics'
+	[ "$(sent_to -100000000000073 7301)" = 1 ] || fail 'the English topic did not receive the YouTube trial'
+	[ "$(sent_to -100000000000073 7302)" = 1 ] || fail 'the Russian topic did not receive the YouTube trial'
+	[ "$(read_rows "SELECT count(*) FROM yt_raw_videos")" = 0 ] || fail 'the synthetic videos were left behind'
+	ok 'a synthetic YouTube alert reaches each topic of the YouTube chat, and is removed after'
 fi
 [ "$(read_rows 'SELECT count(*) FROM baseline_runs WHERE completed_at IS NOT NULL')" -ge 1 ] || fail 'no baseline run on the copy'
 ok 'a baseline run was written on the copy'
@@ -739,6 +760,126 @@ role main >"$work/after.log" 2>&1 || {
 	fail 'the role could not bring the emptied environment back'
 }
 ok 'the next run brings an emptied environment back'
+
+# --- the bot's routes ----------------------------------------------------------------
+
+say 'the routes, a digest in parts, a refused topic, /status in a topic, an old button'
+# Settings of the suite's own on the bot, taken off at the end: no quiet hours, the
+# digest due at once, a quick poll, so that nothing here waits on the clock. Seeded
+# with the bot stopped, so that its first pass sees the rows: a first digest with
+# nothing held counts as today's.
+kubectl -n "$namespace" scale deployment itgraph-bot --replicas=0 >/dev/null
+kubectl -n "$namespace" wait --for=delete pod -l app=itgraph-bot --timeout=120s >/dev/null 2>&1 || true
+telegram_control reset
+telegram_control refuse '{"thread": 7302}'
+psql_in "$namespace" "
+	INSERT INTO yt_channels (channel_id, status, kind, lang, discovered_via) VALUES
+	  ('UCfakeSeedEnglish0000000', 'seed', 'personal', 'en', 'manual'),
+	  ('UCfakeSeedRussian0000000', 'seed', 'personal', 'ru', 'manual'),
+	  ('UCfakeSeedOther000000000', 'seed', 'personal', 'other', 'manual');
+	INSERT INTO yt_raw_videos (video_id, payload, fetched_at, discovered_at, discovered_via)
+	SELECT video, jsonb_build_object('snippet', jsonb_build_object('channelId', channel,
+	         'title', 'A synthetic video for the suite, number ' || video || ', long enough to fill a digest',
+	         'publishedAt', to_char((now() - interval '3 hours') AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'))),
+	       now(), now(), 'count'
+	FROM (SELECT 'e2eDigest' || lpad(n::text, 2, '0') AS video, 'UCfakeSeedEnglish0000000' AS channel
+	      FROM generate_series(1, 12) n
+	      UNION ALL SELECT 'e2eRefused0', 'UCfakeSeedRussian0000000'
+	      UNION ALL SELECT 'e2eOther000', 'UCfakeSeedOther000000000') v;
+	INSERT INTO yt_raw_video_stats (video_id, observed_at, views, likes, comments)
+	SELECT video_id, date_trunc('second', now()), 1000, 10, 1 FROM yt_raw_videos WHERE video_id LIKE 'e2e%';
+	INSERT INTO yt_alerts (kind, video_id, scored_at, band, value, held_at)
+	SELECT 'views_spike', video_id, observed_at, 1, 5.0,
+	       CASE WHEN video_id LIKE 'e2eDigest%' THEN now() END
+	FROM yt_raw_video_stats WHERE video_id LIKE 'e2e%'" >/dev/null
+kubectl -n "$namespace" set env deployment/itgraph-bot \
+	ALERT_QUIET_FROM_HOUR=0 ALERT_QUIET_TO_HOUR=0 \
+	YOUTUBE_ALERT_QUIET_FROM_HOUR=0 YOUTUBE_ALERT_QUIET_TO_HOUR=0 YOUTUBE_ALERT_DIGEST_HOUR=0 \
+	ALERT_POLL_SECONDS=2 >/dev/null
+kubectl -n "$namespace" scale deployment itgraph-bot --replicas=1 >/dev/null
+kubectl -n "$namespace" rollout status deployment/itgraph-bot --timeout=180s >/dev/null || fail 'the bot did not come back'
+
+until_true() { # <tries of a second> <what failed> <command...>
+	local tries=0 limit=$1 what=$2
+	shift 2
+	until "$@"; do
+		tries=$((tries + 1))
+		[ "$tries" -lt "$limit" ] || fail "$what"
+		sleep 1
+	done
+}
+read_rows() { psql_in "$namespace" "$1"; }
+
+digest_sent() { [ "$(read_rows "SELECT count(*) FROM yt_alerts WHERE video_id LIKE 'e2eDigest%' AND delivery = 'digest' AND route = 'en'")" = 12 ]; }
+until_true 120 'the digest of twelve held alerts did not go out' digest_sent
+telegram_calls >"$work/routes.txt"
+parts="$(jq -s '[.[] | select(.method == "sendMessage" and .fields.message_thread_id == "7301")] | length' "$work/routes.txt")"
+[ "$parts" -ge 2 ] || fail "the digest of twelve went as $parts message(s), not in parts"
+[ "$(jq -s '[.[] | select(.method == "sendMessage") | .fields.text | length | select(. > 4096)] | length' "$work/routes.txt")" = 0 ] ||
+	fail 'a message longer than Telegram takes'
+jq -s -r '[.[] | select(.method == "sendMessage" and .fields.message_thread_id == "7301")][0].fields.text' "$work/routes.txt" |
+	grep -q '12 оповещение' || fail 'the first part does not say how many it covers'
+[ "$(jq -s '[.[] | select(.method == "sendMessage") | .fields.text | select(test("e2eDigest"))] | length' "$work/routes.txt")" -ge 2 ] ||
+	fail 'the digest names no video'
+ok 'twelve held alerts arrive as a digest in parts, in the English topic, each part one Telegram takes'
+
+[ "$(read_rows "SELECT delivery FROM yt_alerts WHERE video_id = 'e2eOther000'")" = excluded ] || fail 'the other-language alert was not excluded'
+jq -s -e '[.[] | select(.method == "sendMessage") | .fields.text | select(test("e2eOther000"))] | length == 0' "$work/routes.txt" >/dev/null ||
+	fail 'the other-language alert was sent'
+ok 'an alert of another language is excluded and sent nowhere'
+
+refused_enough() { [ "$(read_rows "SELECT attempts >= 3 FROM yt_alerts WHERE video_id = 'e2eRefused0'")" = t ]; }
+until_true 120 'the alert for the refused topic was not tried and failed' refused_enough
+[ "$(read_rows "SELECT delivered_at IS NULL FROM yt_alerts WHERE video_id = 'e2eRefused0'")" = t ] || fail 'the refused alert counts as delivered'
+telegram_calls >"$work/routes.txt"
+# The stand-in records the refused sends too: what matters is that none went elsewhere.
+jq -s -e '[.[] | select(.method == "sendMessage" and .fields.message_thread_id != "7302")
+	| .fields.text | select(test("e2eRefused0"))] | length == 0' "$work/routes.txt" >/dev/null ||
+	fail 'the refused alert went somewhere else'
+# A few tries, as the scraper itself retries: the database was dropped and made anew
+# above, and the exporter's first query after that meets a connection the drop ended.
+scraped=0
+for _ in 1 2 3; do
+	if probe monitoring e2e-scraper '{"app.kubernetes.io/name": "prometheus"}' "$scrape" >"$work/series2.txt"; then
+		scraped=1
+		break
+	fi
+	sleep 5
+done
+[ "$scraped" = 1 ] || {
+	kubectl -n "$namespace" logs deployment/itgraph-metrics --tail=20 >&2 || true
+	fail "the scraper cannot read the series: $(tail -3 "$work/series2.txt")"
+}
+grep -Eq '^itgraph_alerts_failing\{platform="youtube"\} 1(\.0)?$' "$work/series2.txt" ||
+	fail "the refused topic does not show in the series: $(grep itgraph_alerts_failing "$work/series2.txt")"
+ok 'a refused topic fails the send, goes nowhere else, and shows in the series'
+
+telegram_control enqueue "$(jq -n --argjson at "$(date +%s)" '{message: {message_id: 5, date: $at,
+	chat: {id: -100000000000073, type: "supergroup", is_forum: true}, message_thread_id: 7301, is_topic_message: true,
+	from: {id: 7, is_bot: false, first_name: "fake"}, text: "/status@fake_bot",
+	entities: [{type: "bot_command", offset: 0, length: 16}]}}')"
+status_answered() {
+	telegram_calls | jq -s -e '[.[] | select(.method == "sendMessage" and .fields.message_thread_id == "7301"
+		and (.fields.text | test("оповещений YouTube всего")))] | length == 1' >/dev/null
+}
+until_true 60 '/status in the English topic was not answered there' status_answered
+ok '/status in a topic is answered in that topic, about YouTube'
+
+telegram_control enqueue "$(jq -n --argjson at "$(date +%s)" '{callback_query: {id: "1", chat_instance: "1",
+	from: {id: 7, is_bot: false, first_name: "fake"}, data: "useful:17",
+	message: {message_id: 33, date: $at, chat: {id: 100000003, type: "private"}, text: "an old alert"}}}')"
+button_retired() {
+	telegram_calls | jq -s -e '([.[] | select(.method == "answerCallbackQuery")] | length == 1)
+		and ([.[] | select(.method == "editMessageReplyMarkup" and .fields.message_id == "33")] | length == 1)' >/dev/null
+}
+until_true 60 'the old button was not answered and taken off' button_retired
+ok 'a press on an old button is answered, and its buttons taken off'
+
+kubectl -n "$namespace" set env deployment/itgraph-bot ALERT_QUIET_FROM_HOUR- ALERT_QUIET_TO_HOUR- \
+	YOUTUBE_ALERT_QUIET_FROM_HOUR- YOUTUBE_ALERT_QUIET_TO_HOUR- YOUTUBE_ALERT_DIGEST_HOUR- ALERT_POLL_SECONDS- >/dev/null
+telegram_control reset
+psql_in "$namespace" "DELETE FROM yt_raw_videos WHERE video_id LIKE 'e2e%'; DELETE FROM yt_channels WHERE channel_id LIKE 'UCfakeSeed%'" >/dev/null
+kubectl -n "$namespace" rollout status deployment/itgraph-bot --timeout=180s >/dev/null
 
 # --- taking over what the previous path made ---------------------------------------
 

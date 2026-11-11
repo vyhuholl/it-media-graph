@@ -39,9 +39,7 @@ __all__ = [
     "AffiliationRun",
     "Alert",
     "AlertDelivery",
-    "AlertFeedback",
     "AlertKind",
-    "AlertVerdict",
     "BackfillState",
     "BackfillStatus",
     "Base",
@@ -64,10 +62,15 @@ __all__ = [
     "MetricBaseline",
     "PendingMention",
     "PendingMentionSource",
+    "Platform",
     "PollState",
     "RawChannel",
     "RawMessage",
     "RejectReason",
+    "YtAlert",
+    "YtAlertDelivery",
+    "YtAlertKind",
+    "YtAlertRoute",
     "YtChannel",
     "YtChannelKind",
     "YtChannelPoll",
@@ -305,19 +308,6 @@ class BaselineReference(enum.StrEnum):
     MATURE = "mature"
 
 
-class AlertVerdict(enum.StrEnum):
-    """What the operator thought of an alert.
-
-    The only labelled data any later threshold work will have, which is
-    why the buttons exist from the first message rather than from the
-    first complaint about volume. An alert with no row here is
-    unanswered, which is deliberately not the same as ``BORING``.
-    """
-
-    USEFUL = "useful"
-    BORING = "boring"
-
-
 class BackfillStatus(enum.StrEnum):
     """How far a channel got in the last backfill run.
 
@@ -461,6 +451,56 @@ class YtLang(enum.StrEnum):
     EN = "en"
     RU = "ru"
     OTHER = "other"
+
+
+class YtAlertKind(enum.StrEnum):
+    """What a YouTube alert is about: YouTube's three signals.
+
+    No forward, which YouTube does not have. Declared before the scoring
+    that will raise them, against ``AlertKind``'s rule, because the
+    wording of each is the delivery change's and is tried on synthetic
+    alerts before any real one can exist.
+    """
+
+    VIEWS_SPIKE = "views_spike"
+    LIKE_SPIKE = "like_spike"
+    COMMENT_SPIKE = "comment_spike"
+
+
+class YtAlertDelivery(enum.StrEnum):
+    """How a YouTube alert left the queue.
+
+    Telegram's three, and ``EXCLUDED``: closed unsent because its
+    channel's language has no topic. Its own type, so that a Telegram
+    alert can never be excluded — ``YtChannelKind``'s reasoning.
+    """
+
+    DIRECT = "direct"
+    DIGEST = "digest"
+    FOLDED = "folded"
+    EXCLUDED = "excluded"
+
+
+class Platform(enum.StrEnum):
+    """Whose alerts: a queue, the chat that receives it, the series' label.
+
+    Not a column type. Here beside the queues it names, so that the bot
+    and the exporter both read it without one importing the other.
+    """
+
+    TELEGRAM = "telegram"
+    YOUTUBE = "youtube"
+
+
+class YtAlertRoute(enum.StrEnum):
+    """Which topic of the YouTube chat an alert went to.
+
+    The languages that have one. ``other`` is not a route: an alert about
+    a channel in another language is excluded instead.
+    """
+
+    EN = "en"
+    RU = "ru"
 
 
 class YtQuotaPool(enum.StrEnum):
@@ -1345,8 +1385,9 @@ class Alert(Base):
     would put a derived measure in an observation table, the trade
     ``Edge`` already refuses when it carries two dates and declines to
     store the interval between them. ``value`` is the exception and
-    earns it: it is the number that crossed the threshold, and the
-    feedback record has to be about something that does not move.
+    earns it: it is the number that crossed the threshold, and a replay
+    at another threshold has to compare against something that does not
+    move.
 
     The visible consequence is that a digest read in the morning shows
     fresher numbers than the moment the alert was raised. That is
@@ -1414,7 +1455,7 @@ class Alert(Base):
 
     # Which configured threshold tier this crossed, and what the measure
     # actually was. The band is what makes escalation a row rather than a
-    # decision; the value is what the operator's verdict was about.
+    # decision; the value is what a replay compares against.
     band: Mapped[int] = mapped_column(Integer)
     value: Mapped[float] = mapped_column(Float)
 
@@ -1440,6 +1481,13 @@ class Alert(Base):
         _pg_enum(AlertDelivery, "alert_delivery")
     )
 
+    # When the bot set it aside for the digest: raised in quiet hours, or
+    # past the day's cap. Null for an alert the direct path may still
+    # send. A held alert is claimed by the digest alone, so a night's
+    # worth of them never stands at the head of what the direct path
+    # claims — before this column, ten did and blocked every direct send.
+    held_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     attempts: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     last_error: Mapped[str | None] = mapped_column(Text)
 
@@ -1455,41 +1503,6 @@ class Alert(Base):
         return (
             f"Alert(kind={self.kind.value!r}, channel_id={self.channel_id}, "
             f"msg_id={self.msg_id}, band={self.band})"
-        )
-
-
-class AlertFeedback(Base):
-    """What the operator thought of one alert.
-
-    Keyed by the alert rather than appended, so a changed mind replaces
-    an earlier verdict instead of accumulating beside it — the question
-    this table answers is "what do they think", not "what have they
-    thought".
-
-    An alert with no row here is **unanswered**, which is not a neutral
-    verdict and must not be read as one. Most alerts will have no row;
-    treating that as mild approval would make the labelled data say the
-    opposite of what happened.
-    """
-
-    __tablename__ = "alert_feedback"
-
-    alert_id: Mapped[int] = mapped_column(
-        ForeignKey("alerts.id", ondelete="CASCADE"),
-        primary_key=True,
-        autoincrement=False,
-    )
-    verdict: Mapped[AlertVerdict] = mapped_column(
-        _pg_enum(AlertVerdict, "alert_verdict")
-    )
-    given_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-
-    def __repr__(self) -> str:
-        return (
-            f"AlertFeedback(alert_id={self.alert_id}, "
-            f"verdict={self.verdict.value!r})"
         )
 
 
@@ -2217,6 +2230,93 @@ class YtWatchPass(Base):
         return (
             f"YtWatchPass(started_at={self.started_at}, "
             f"outcome={self.outcome.value!r})"
+        )
+
+
+class YtAlert(Base):
+    """One thing worth telling the YouTube chat about a video.
+
+    Telegram's ``Alert`` with a video for a post, in a table of its own:
+    ``alerts`` references ``raw_messages``, and an alert about something
+    Telegram never collected should stay unrepresentable there.
+
+    **It lives as long as the reading it was scored on.** The reading is
+    a row of ``yt_raw_video_stats``, which goes with its video's payload,
+    so a video YouTube stops returning takes its alerts at once, expiry
+    stays one ``DELETE``, and no clock of this table's own can keep a
+    video named past its data. That is also why no dump holds it: a dump
+    leaves the readings out, and would carry video ids with nothing to
+    hang them on.
+
+    **It copies nothing YouTube said.** No title, channel name or count:
+    the message reads them from their one home when it is sent, and the
+    count that crossed is read back through ``scored_at``. ``value`` and
+    ``expected`` are itgraph's own numbers, derived metrics that only
+    exist once the derived-metrics use case is accepted.
+
+    Where it goes is the channel's language at the moment of sending, not
+    of raising: ``route`` records where it went, and is written by the bot.
+    """
+
+    __tablename__ = "yt_alerts"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["video_id", "scored_at"],
+            ["yt_raw_video_stats.video_id", "yt_raw_video_stats.observed_at"],
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "kind", "video_id", "band", name="uq_yt_alerts_video_band"
+        ),
+        # What the bot asks on every tick: what is still outstanding.
+        Index(
+            "ix_yt_alerts_undelivered",
+            "raised_at",
+            postgresql_where=text("delivered_at IS NULL"),
+        ),
+        Index(
+            "ix_yt_alerts_folded_into",
+            "folded_into",
+            postgresql_where=text("folded_into IS NOT NULL"),
+        ),
+        CheckConstraint("folded_into <> id", name="not_folded_into_itself"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    kind: Mapped[YtAlertKind] = mapped_column(
+        _pg_enum(YtAlertKind, "yt_alert_kind")
+    )
+    video_id: Mapped[str] = mapped_column(Text)
+    # The moment of the reading it was scored on: a pointer into
+    # `yt_raw_video_stats`, never a copy of what that reading says.
+    scored_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    band: Mapped[int] = mapped_column(Integer)
+    value: Mapped[float] = mapped_column(Float)
+    # A comment spike's expectation, as Telegram's keeps one.
+    expected: Mapped[float | None] = mapped_column(Float)
+    raised_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    held_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    delivery: Mapped[YtAlertDelivery | None] = mapped_column(
+        _pg_enum(YtAlertDelivery, "yt_alert_delivery")
+    )
+    route: Mapped[YtAlertRoute | None] = mapped_column(
+        _pg_enum(YtAlertRoute, "yt_alert_route")
+    )
+    attempts: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    folded_into: Mapped[int | None] = mapped_column(
+        ForeignKey("yt_alerts.id", ondelete="CASCADE")
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"YtAlert(kind={self.kind.value!r}, video_id={self.video_id!r}, "
+            f"band={self.band})"
         )
 
 

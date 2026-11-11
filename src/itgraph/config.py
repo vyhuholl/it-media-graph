@@ -552,6 +552,26 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr | None = None
     alert_chat_id: int | None = None
 
+    # YouTube's alerts go to a forum chat of their own, a topic per
+    # language: the chat and both topics are set together or not at all,
+    # and unset means no YouTube alert is sent. The topics are made by the
+    # operator and named here; the bot is no administrator and creates
+    # none, so a leaked token cannot rename, close or delete them.
+    youtube_alert_chat_id: int | None = None
+    youtube_alert_topic_en: int | None = None
+    youtube_alert_topic_ru: int | None = None
+
+    # YouTube's account, kept by each of its topics on its own — a topic's
+    # cap, quiet window and digest — and set once for both, since their
+    # readers are one group in one zone. The cap is a guard rather than a
+    # measurement: the volume is the scoring's to price, and Telegram's
+    # readers live with about ten messages a day in one chat.
+    youtube_alert_daily_cap: int = Field(default=10, ge=1)
+    youtube_alert_quiet_from_hour: int = Field(default=2, ge=0, le=23)
+    youtube_alert_quiet_to_hour: int = Field(default=7, ge=0, le=23)
+    youtube_alert_digest_hour: int = Field(default=9, ge=0, le=23)
+    youtube_alert_timezone: str = "Europe/Moscow"
+
     # The bot's own connection, under the restricted `itgraph_bot` role.
     # A *separate* setting rather than "point DATABASE_URL at the bot
     # role when you run the bot", because that instruction is one the
@@ -946,22 +966,63 @@ class Settings(BaseSettings):
         second guard in the delivery path would turn a bad configuration
         into a bot that runs correctly and says nothing, which is the one
         failure this whole feature is least able to notice.
-        """
-        start = self.alert_quiet_from_hour
-        end = self.alert_quiet_to_hour
-        if start == end:
-            return self
 
-        hour = self.alert_digest_hour
-        inside = (
-            start <= hour < end if start < end else hour >= start or hour < end
-        )
-        if inside:
+        Each platform's digest against its own window.
+        """
+        for prefix in ("alert", "youtube_alert"):
+            start: int = getattr(self, f"{prefix}_quiet_from_hour")
+            end: int = getattr(self, f"{prefix}_quiet_to_hour")
+            hour: int = getattr(self, f"{prefix}_digest_hour")
+            if start == end:
+                continue
+            inside = (
+                start <= hour < end
+                if start < end
+                else hour >= start or hour < end
+            )
+            if inside:
+                raise ValueError(
+                    f"{prefix}_digest_hour ({hour}) falls inside the bot's "
+                    f"quiet window ({start}:00–{end}:00): the digest would be "
+                    "held by the same rule it exists to compensate for, and "
+                    "nothing held would ever be delivered"
+                )
+        return self
+
+    @field_validator(
+        "youtube_alert_chat_id",
+        "youtube_alert_topic_en",
+        "youtube_alert_topic_ru",
+        mode="before",
+    )
+    @classmethod
+    def _a_blank_id_is_no_id(cls, value: object) -> object:
+        """Read ``YOUTUBE_ALERT_CHAT_ID=`` as unset, as `.env.example`
+        writes it, rather than as an id that fails to parse."""
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def _youtube_chat_comes_with_both_topics(self) -> Self:
+        """Refuse a YouTube chat without both its topics, or a topic alone.
+
+        Half of it would deliver one language and leave the other's alerts
+        waiting with nowhere to go — or, with no chat, name a topic of
+        nothing. Either is a mistake in the configuration, and the moment
+        to say so is when it loads, not at the first alert.
+        """
+        parts = {
+            "youtube_alert_chat_id": self.youtube_alert_chat_id,
+            "youtube_alert_topic_en": self.youtube_alert_topic_en,
+            "youtube_alert_topic_ru": self.youtube_alert_topic_ru,
+        }
+        missing = [name for name, value in parts.items() if value is None]
+        if missing and len(missing) < len(parts):
             raise ValueError(
-                f"alert_digest_hour ({hour}) falls inside the bot's quiet "
-                f"window ({start}:00–{end}:00): the digest would be held by "
-                "the same rule it exists to compensate for, and nothing "
-                "held would ever be delivered"
+                f"{', '.join(missing)} not set with the other YouTube alert "
+                "settings: YouTube's alerts need its chat and both topics, "
+                "or none of the three, meaning no YouTube alerts"
             )
         return self
 

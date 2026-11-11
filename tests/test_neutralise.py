@@ -445,6 +445,29 @@ async def test_api_data_in_a_copy_fails_the_read_back_naming_the_table(
         await connection.close()
 
 
+async def test_a_youtube_alert_in_a_copy_fails_the_read_back(
+    database: Database, database_url: str
+) -> None:
+    """Named among what the read-back found, beside the readings it
+    could not be restored without."""
+    video = "fakeVid0001"
+    connection = await connect(database_url)
+    try:
+        await connection.execute(
+            f"INSERT INTO yt_raw_videos (video_id, payload, fetched_at, "
+            f"discovered_at, discovered_via) "
+            f"VALUES ('{video}', '{{}}', now(), now(), 'count');"
+            f"INSERT INTO yt_raw_video_stats (video_id, observed_at, views) "
+            f"VALUES ('{video}', '2026-11-11 10:00+00', 1);"
+            f"INSERT INTO yt_alerts (kind, video_id, scored_at, band, value) "
+            f"VALUES ('views_spike', '{video}', '2026-11-11 10:00+00', 1, 4)"
+        )
+        with pytest.raises(asyncpg.RaiseError, match="yt_alerts: 1"):
+            await connection.execute(READBACK)
+    finally:
+        await connection.close()
+
+
 def test_the_read_back_covers_what_dumps_leave_out() -> None:
     for pattern in EXCLUDED_DATA:
         assert pattern.replace("*", "") in READBACK, pattern

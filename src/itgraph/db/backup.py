@@ -73,8 +73,16 @@ INVENTORY_TABLES = (
 # walks that are not there — and nothing would walk them again.
 # `yt_search_runs` is left out for the same reason: restored without the
 # results it describes, a run would say a query was answered, and the
-# query would not be asked again for 30 days.
-EXCLUDED_DATA = ("yt_raw_*", "yt_backfill_walks", "yt_search_runs")
+# query would not be asked again for 30 days. `yt_alerts` names videos by
+# id and lives as long as the readings it was scored on, which no dump
+# keeps: restored, it would name videos with nothing to hang them on, and
+# its foreign key could not be restored at all.
+EXCLUDED_DATA = (
+    "yt_raw_*",
+    "yt_backfill_walks",
+    "yt_search_runs",
+    "yt_alerts",
+)
 
 # UTC, and said so in the name: a dump taken at 13:08 local is stamped
 # 10:08, and without the Z that reads as a machine with the wrong clock.

@@ -1690,6 +1690,47 @@ def test_bot_refuses_without_a_token(
     assert "TELEGRAM_BOT_TOKEN" in result.output
 
 
+def test_bot_refuses_a_chat_it_cannot_reach_before_delivering(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    """Named by its setting, before anything is delivered or polled."""
+    from pydantic import SecretStr
+
+    from itgraph.bot import app as bot_app
+    from itgraph.bot import handlers
+    from itgraph.config import settings as live_settings
+
+    # The bot builds its database from its own URL, given one; the test's.
+    monkeypatch.setattr(live_settings, "bot_database_url", database_url)
+    monkeypatch.setattr(
+        live_settings,
+        "telegram_bot_token",
+        SecretStr("42:fake-bot-token-for-the-test"),
+    )
+    monkeypatch.setattr(live_settings, "alert_chat_id", 100000001)
+    monkeypatch.setattr(
+        live_settings, "youtube_alert_chat_id", -100000000000071
+    )
+    monkeypatch.setattr(live_settings, "youtube_alert_topic_en", 7101)
+    monkeypatch.setattr(live_settings, "youtube_alert_topic_ru", 7102)
+
+    async def unreachable(bot: Any, destinations: Any) -> None:
+        raise handlers.ChatUnreachableError(
+            "YOUTUBE_ALERT_CHAT_ID", "the chat is not a forum"
+        )
+
+    async def never(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("nothing may be delivered")
+
+    monkeypatch.setattr(handlers, "check_chats", unreachable)
+    monkeypatch.setattr(bot_app, "run_bot", never)
+
+    result = runner.invoke(app, ["bot"])
+
+    assert result.exit_code == 1
+    assert "YOUTUBE_ALERT_CHAT_ID" in result.output
+
+
 def test_neither_alert_command_connects_to_telegram(
     monkeypatch: pytest.MonkeyPatch, database_url: str
 ) -> None:

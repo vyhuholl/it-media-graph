@@ -1,56 +1,55 @@
 """The aiogram binding: the one place that touches the Bot API.
 
 Kept small on purpose. Everything worth testing — what a message says,
-when it is held, how the queue is claimed — lives in modules that do not
-import aiogram, so the untested surface here is a token, a chat id and
-two callbacks.
+when it is held, how the queue is claimed, what `/status` reports — lives
+in modules that do not import aiogram, so the untested surface here is a
+token, the configured chats and a few callbacks.
 
-Two guarantees are enforced at this boundary rather than deeper, because
-this is where an outsider can first be seen:
+Three guarantees are enforced at this boundary rather than deeper,
+because this is where an outsider can first be seen:
 
-* **One recipient.** Alerts go to the configured chat and to no other.
-* **Nobody else is answered.** A message from any other chat is dropped
-  before a handler runs. The bot's username is discoverable, so strangers
-  will find it, and the inventory is the operator's own subscriptions.
+* **Only configured places.** Alerts go to the destinations the settings
+  name — a chat, and a topic within it or none — and to no other.
+* **Nobody else is answered.** A message from a chat that is not
+  configured is dropped before a handler runs. The bot's username is
+  discoverable, so strangers will find it, and the inventory is the
+  operator's own subscriptions.
+* **A chat the bot cannot reach stops it at start,** not at the first
+  alert, hours or days later.
 """
 
 import logging
-from datetime import UTC, datetime, timedelta
-from zoneinfo import ZoneInfo
+from collections.abc import Mapping, Sequence
+from contextlib import suppress
+from datetime import UTC, datetime
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command
-from aiogram.types import (
-    CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Message,
-)
-from sqlalchemy import func, select
+from aiogram.types import CallbackQuery, Message
 
 from itgraph.bot.app import Sender
-from itgraph.bot.render import age_phrase
+from itgraph.bot.destinations import Destination, Platform
+from itgraph.bot.status import telegram_status, youtube_status
 from itgraph.config import settings
-from itgraph.db.alerts import (
-    failing_alerts,
-    outstanding_alerts,
-    record_verdict,
-)
-from itgraph.db.models import Alert, AlertVerdict
-from itgraph.db.poll import queue_lag
+from itgraph.db.models import YtAlertRoute
 from itgraph.db.session import Database
-from itgraph.schedule import quiet_until
 
-__all__ = ["BotSender", "build_bot", "build_dispatcher", "verdict_keyboard"]
+__all__ = [
+    "BotSender",
+    "ChatUnreachableError",
+    "build_bot",
+    "build_dispatcher",
+    "check_chats",
+]
 
 logger = logging.getLogger(__name__)
 
-USEFUL = "useful"
-BORING = "boring"
-
-MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+# What the feedback buttons sent, under messages from before they were
+# removed. Matched only to retire them.
+OLD_BUTTON = r"^(useful|boring):\d+$"
 
 
 def build_bot(token: str) -> Bot:
@@ -62,178 +61,135 @@ def build_bot(token: str) -> Bot:
     return Bot(token=token, session=AiohttpSession(api=server))
 
 
-def verdict_keyboard(alert_id: int) -> InlineKeyboardMarkup:
-    """The two buttons under every alert.
-
-    Two, not three: there is no mute here. Muting manages volume, volume
-    arrives with the scoring change, and a suppression rule designed
-    against one alert a day would look correct because nothing tested it.
-
-    What these collect cannot be collected retroactively — a threshold
-    argued about in three weeks wants the operator's verdict on the
-    alerts that fired in the meantime, and those verdicts exist only if
-    the buttons were there from the first message.
-    """
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="👍 по делу", callback_data=f"{USEFUL}:{alert_id}"
-                ),
-                InlineKeyboardButton(
-                    text="👎 мимо", callback_data=f"{BORING}:{alert_id}"
-                ),
-            ]
-        ]
-    )
-
-
 class BotSender(Sender):
-    """Sends through the Bot API, to the one configured chat."""
+    """Sends through the Bot API, to the destination it is handed."""
 
-    def __init__(self, bot: Bot, chat_id: int) -> None:
+    def __init__(self, bot: Bot) -> None:
         self._bot = bot
-        self._chat_id = chat_id
 
-    async def send(self, text: str, *, alert_id: int | None = None) -> None:
+    async def send(self, text: str, *, destination: Destination) -> None:
+        # No buttons: feedback was asked of every alert from the first
+        # one, pressed once in three months, and removed.
         await self._bot.send_message(
-            self._chat_id,
+            destination.chat_id,
             text,
+            message_thread_id=destination.topic_id,
             parse_mode="HTML",
             disable_web_page_preview=False,
-            reply_markup=(
-                verdict_keyboard(alert_id) if alert_id is not None else None
-            ),
         )
 
 
-def build_dispatcher(database: Database, chat_id: int) -> Dispatcher:
-    """The handlers, filtered to the one chat before any of them runs."""
+class ChatUnreachableError(RuntimeError):
+    """A configured chat the bot cannot deliver to, named by its setting."""
+
+    def __init__(self, setting: str, why: str) -> None:
+        super().__init__(f"{setting}: {why}")
+        self.setting = setting
+
+
+async def check_chats(bot: Bot, destinations: Sequence[Destination]) -> None:
+    """Ask Telegram about every configured chat before delivering anything.
+
+    A chat the bot is not in, or a chat named with topics that is not a
+    forum, would otherwise surface at the first alert — for YouTube, after
+    an acceptance that may be months away. Refused by the setting's name,
+    which is what an operator changes. Whether a topic exists the Bot API
+    cannot say without sending to it.
+    """
+    chats: dict[int, tuple[str, bool]] = {}
+    for destination in destinations:
+        setting, wants_topics = chats.get(
+            destination.chat_id, (destination.setting, False)
+        )
+        chats[destination.chat_id] = (
+            setting,
+            wants_topics or destination.topic_id is not None,
+        )
+
+    for chat_id, (setting, wants_topics) in chats.items():
+        try:
+            chat = await bot.get_chat(chat_id)
+        except TelegramAPIError as exc:
+            raise ChatUnreachableError(
+                setting, f"Telegram does not give the bot this chat ({exc})"
+            ) from exc
+        if wants_topics and not chat.is_forum:
+            raise ChatUnreachableError(
+                setting, "topics are configured, and the chat is not a forum"
+            )
+
+
+def build_dispatcher(
+    database: Database, destinations: Sequence[Destination]
+) -> Dispatcher:
+    """The handlers, filtered to the configured chats before any runs."""
     dispatcher = Dispatcher()
+    platforms: Mapping[int, Platform] = {
+        d.chat_id: d.platform for d in destinations
+    }
+    telegram = next(
+        (d for d in destinations if d.platform is Platform.TELEGRAM), None
+    )
+    youtube: dict[YtAlertRoute, Destination] = {
+        d.route: d
+        for d in destinations
+        if d.platform is Platform.YOUTUBE and d.route is not None
+    }
+    chats = frozenset(platforms)
 
     # Applied as a filter rather than checked inside each handler: a
-    # handler added later inherits it instead of having to remember.
-    dispatcher.message.filter(F.chat.id == chat_id)
-    dispatcher.callback_query.filter(F.message.chat.id == chat_id)
+    # handler added later inherits it instead of having to remember. Any
+    # topic of a configured chat counts, General included.
+    dispatcher.message.filter(F.chat.id.in_(chats))
+    dispatcher.callback_query.filter(F.message.chat.id.in_(chats))
 
     @dispatcher.message(Command("status"))
     async def status(message: Message) -> None:
-        """What the alerting is doing, so quiet and broken differ.
-
-        This matters more here than anywhere else in the project: a
-        healthy alert bot says nothing for days, and without a way to ask,
-        "no alerts" and "the pass has not run since Tuesday" look
-        identical.
+        """What the alerting of this chat's platform is doing.
 
         ``Command`` rather than an exact text match, and the difference
         only shows up in a group. Telegram requires a command there to
         name the bot — ``/status@name`` — and an equality test against
-        ``"/status"`` rejects exactly the form a group has to send. So the
-        obvious filter works in a private chat and silently breaks the
-        moment the alerts are shared with anyone, which is the way round
-        that gets discovered late.
+        ``"/status"`` rejects exactly the form a group has to send.
 
         The other half of working in a group is a BotFather setting
         rather than code: with privacy mode on — the default — a bot is
         only handed commands addressed to it, which is precisely the
-        ``/status@name`` form this now accepts. Button presses arrive
-        either way.
+        ``/status@name`` form this accepts.
+
+        Answered with ``Message.answer``, which keeps the topic the
+        command came from.
         """
         now = datetime.now(UTC)
         async with database.session() as session:
-            lag = await queue_lag(session, now=now)
-            stuck = await failing_alerts(
-                session, attempts=settings.alert_failure_report_after
-            )
-            waiting = await outstanding_alerts(session)
-            raised, folded, newest = (
-                await session.execute(
-                    select(
-                        func.count(Alert.id),
-                        func.count(Alert.id).filter(
-                            Alert.folded_into.is_not(None)
-                        ),
-                        func.max(Alert.raised_at),
-                    )
+            if platforms[message.chat.id] is Platform.YOUTUBE:
+                text = await youtube_status(
+                    session, now=now, destinations=youtube
                 )
-            ).one()
+            elif telegram is not None:
+                text = await telegram_status(
+                    session, now=now, destination=telegram
+                )
+            else:  # pragma: no cover - a configured chat has a platform
+                return
+        await message.answer(text)
 
-        # Folds are counted apart because they are alerts nobody was sent
-        # on their own: without the figure, "raised" overstates how many
-        # messages there were, and the difference reads as a loss.
-        lines = [
-            (
-                f"оповещений всего: {raised} (из них свёрнуто в серии: "
-                f"{folded}), не доставлено: {waiting.total}"
-            ),
-            (
-                f"последнее поднято: {newest.astimezone(MOSCOW_TZ):%Y-%m-%d %H:%M} MSK"
-                if newest
-                else "ни одного оповещения ещё не было"
-            ),
-            (
-                f"каналов в очереди опроса: {lag.tracked}, "
-                f"просрочено: {lag.overdue}"
-            ),
-        ]
+    @dispatcher.callback_query(F.data.regexp(OLD_BUTTON))
+    async def retired_button(query: CallbackQuery) -> None:
+        """A press on a button from before feedback was removed.
 
-        # Quiet hours are the benign reason for a queue that is not
-        # moving, and saying so is what stops "waiting" from reading as
-        # "broken". Without this line the two are the same observation.
-        release = quiet_until(
-            now,
-            start=settings.alert_quiet_from_hour,
-            end=settings.alert_quiet_to_hour,
-            zone=settings.watch_timezone,
-        )
-        if release is not None:
-            lines.append(
-                f"🌙 тихие часы до {release:%H:%M} — доставка приостановлена"
+        Recorded nowhere. Answered, so the client stops showing the press
+        as loading, and the message's buttons taken off, which the Bot
+        API allows at any age for the bot's own messages.
+        """
+        await query.answer("отзывы больше не собираются")
+        if query.message is None or query.bot is None:
+            return
+        with suppress(TelegramBadRequest):
+            await query.bot.edit_message_reply_markup(
+                chat_id=query.message.chat.id,
+                message_id=query.message.message_id,
+                reply_markup=None,
             )
-
-        waited = waiting.oldest_wait(now)
-        if waiting.total:
-            line = f"ждут отправки: {waiting.total}"
-            if waited is not None:
-                line += f", самое старое {age_phrase(waited)}"
-            if waiting.never_attempted:
-                line += f", попыток не было у {waiting.never_attempted}"
-            lines.append(line)
-
-        # Nothing has tried, nothing is holding them back, and they have
-        # been there far longer than a poll interval: that is a delivery
-        # loop which is not running, and it is invisible in every other
-        # signal — the service is `active` and this command answers.
-        if (
-            release is None
-            and waiting.total
-            and waiting.never_attempted == waiting.total
-            and waited is not None
-            and waited > timedelta(seconds=settings.alert_poll_seconds * 10)
-        ):
-            lines.append(
-                "⚠️ ни одной попытки отправки — похоже, доставка не работает"
-            )
-
-        if stuck:
-            lines.append(f"⚠️ застряло при отправке: {stuck}")
-        await message.answer("\n".join(lines))
-
-    @dispatcher.callback_query(F.data.regexp(rf"^({USEFUL}|{BORING}):\d+$"))
-    async def verdict(query: CallbackQuery) -> None:
-        assert query.data is not None
-        kind, _, raw = query.data.partition(":")
-        async with database.session() as session:
-            await record_verdict(
-                session,
-                alert_id=int(raw),
-                verdict=(
-                    AlertVerdict.USEFUL
-                    if kind == USEFUL
-                    else AlertVerdict.BORING
-                ),
-                at=datetime.now(UTC),
-            )
-        await query.answer("записано")
 
     return dispatcher

@@ -90,6 +90,14 @@ def pod_answers(
         ({"itgraph_proxy_outbound": {"protocol": "freedom"}}, "`freedom`"),
         ({"itgraph_b2_application_key": ""}, "all four"),
         ({"itgraph_backup_age_recipient": ""}, "all four"),
+        (
+            {"itgraph_youtube_alert_topic_ru": 0},
+            "itgraph_youtube_alert_topic_ru go together",
+        ),
+        (
+            {"itgraph_youtube_alert_chat_id": 0},
+            "itgraph_youtube_alert_topic_ru go together",
+        ),
     ],
 )
 def test_a_bad_input_is_refused_before_anything_is_called(
@@ -1663,6 +1671,7 @@ def restore_rules() -> list[dict[str, Any]]:
         ),
         rule("count\\(\\*\\) FROM baseline_runs", "1\n", times=1),
         rule("count\\(\\*\\) FROM baseline_runs", "2\n"),
+        rule("yt_alerts WHERE band = 2147483647", "2|0|en,ru\n"),
         rule("band = 2147483647", "1\n"),
         rule("pg_restore", "public.channels 12\n"),
     ]
@@ -1754,7 +1763,64 @@ def test_a_restore_in_order(tmp_path: Path) -> None:
     assert '{"spec": {"suspend": false}}' in " ".join(joined)
     assert run.called("delete", "lease")
     assert "Delivered through the bot: an alert" in run.output
+    # A synthetic video per language after Telegram's, delivered to both
+    # topics, and removed whatever came of it.
+    assert first("INSERT INTO alerts") < first("INSERT INTO yt_raw_videos")
+    [youtube] = [call for call in joined if "INSERT INTO yt_alerts" in call]
+    assert "lang IN ('en', 'ru')" in youtube
+    assert first("INSERT INTO yt_raw_videos") < first(
+        "DELETE FROM yt_raw_videos WHERE video_id LIKE 'itgTrial%'"
+    )
+    assert "YouTube: to the topics en,ru" in run.output
     assert_no_secret_anywhere(run, "b")
+
+
+def test_a_restore_without_a_youtube_chat_says_so(tmp_path: Path) -> None:
+    dump = tmp_path / "real.dump"
+    dump.write_bytes(b"fake dump bytes\n")
+    run = run_role(
+        tmp_path,
+        "restore",
+        inputs="b",
+        rules=restore_rules(),
+        extra={
+            **RESTORE,
+            "itgraph_restore_from": str(dump),
+            "itgraph_youtube_alert_chat_id": 0,
+            "itgraph_youtube_alert_topic_en": 0,
+            "itgraph_youtube_alert_topic_ru": 0,
+        },
+    )
+
+    assert not run.failed, run.output
+    assert "YouTube: not configured in this environment" in run.output
+    assert not [c for c in run.joined() if "yt_raw_videos" in c]
+
+
+def test_a_youtube_alert_not_delivered_fails_the_restore(
+    tmp_path: Path,
+) -> None:
+    dump = tmp_path / "real.dump"
+    dump.write_bytes(b"fake dump bytes\n")
+    run = run_role(
+        tmp_path,
+        "restore",
+        inputs="b",
+        rules=[
+            rule("yt_alerts WHERE band = 2147483647", "2|1|en\n", times=None),
+            *restore_rules(),
+        ],
+        extra={**RESTORE, "itgraph_restore_from": str(dump)},
+    )
+
+    assert run.failed
+    assert "delivered en of 2 YouTube alerts" in run.output
+    # The synthetic videos are removed even so.
+    assert [
+        c
+        for c in run.joined()
+        if "DELETE FROM yt_raw_videos WHERE video_id LIKE 'itgTrial%'" in c
+    ]
 
 
 def test_a_read_back_that_fails_empties_the_database(tmp_path: Path) -> None:
@@ -1833,3 +1899,5 @@ def test_inside_quiet_hours_the_alert_is_reported_as_not_proven(
     assert not run.failed, run.output
     assert "could not be proven" in run.output
     assert [c for c in run.joined() if "INSERT INTO alerts" in c] == []
+    assert "YouTube: could not be proven" in run.output
+    assert [c for c in run.joined() if "INSERT INTO yt_raw_videos" in c] == []

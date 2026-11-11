@@ -849,7 +849,7 @@ def _hours(age: timedelta) -> str:
 
 @app.command()
 def bot() -> None:
-    """Deliver alerts to the operator, and record what they thought.
+    """Deliver alerts to the configured chats: Telegram's, and YouTube's.
 
     Talks to the Bot API, holds no Telethon session and takes no session
     lease, so it runs while collection runs. Point it at the database
@@ -859,7 +859,17 @@ def bot() -> None:
     import signal
 
     from itgraph.bot.app import run_bot, supervise
-    from itgraph.bot.handlers import BotSender, build_bot, build_dispatcher
+    from itgraph.bot.destinations import (
+        telegram_destination,
+        youtube_destinations,
+    )
+    from itgraph.bot.handlers import (
+        BotSender,
+        ChatUnreachableError,
+        build_bot,
+        build_dispatcher,
+        check_chats,
+    )
 
     # Inside the body, like every other import that reads the
     # environment: `itgraph --help` has to work on a machine that has no
@@ -877,7 +887,9 @@ def bot() -> None:
         raise typer.Exit(1)
 
     token = settings.telegram_bot_token.get_secret_value()
-    chat_id = settings.alert_chat_id
+    telegram_chat = telegram_destination(settings)
+    assert telegram_chat is not None  # checked above
+    destinations = [telegram_chat, *youtube_destinations(settings).values()]
 
     # The bot's own connection when one is configured. Reported either
     # way: running under the collector's credentials is a supported
@@ -894,19 +906,30 @@ def bot() -> None:
         database = Database(url)
         telegram = build_bot(token)
         stop = asyncio.Event()
-        dispatcher = build_dispatcher(database, chat_id)
+        dispatcher = build_dispatcher(database, destinations)
         try:
+            # Before anything is delivered: a chat the bot cannot reach is
+            # refused now, by the setting an operator changes, rather than
+            # at the first alert for it.
+            try:
+                await check_chats(telegram, destinations)
+            except ChatUnreachableError as exc:
+                typer.secho(
+                    f"refusing to start: {exc}", fg=typer.colors.RED, err=True
+                )
+                raise typer.Exit(1) from exc
+
             loop = asyncio.get_running_loop()
             for received in (signal.SIGINT, signal.SIGTERM):
                 with suppress(NotImplementedError):
                     loop.add_signal_handler(received, stop.set)
 
             # Delivery and the handlers are separate concerns on one
-            # connection: one pushes alerts out, the other takes the
-            # operator's answers back. Neither may stall the other, so
-            # they run as siblings rather than in sequence.
+            # connection: one pushes alerts out, the other answers
+            # `/status`. Neither may stall the other, so they run as
+            # siblings rather than in sequence.
             delivery = asyncio.create_task(
-                run_bot(database, BotSender(telegram, chat_id), stop=stop)
+                run_bot(database, BotSender(telegram), stop=stop)
             )
             polling = asyncio.create_task(
                 dispatcher.start_polling(telegram, handle_signals=False)

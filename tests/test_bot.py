@@ -6,6 +6,7 @@ lives behind the `Sender` seam, which is the reason that seam exists.
 """
 
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -14,42 +15,67 @@ from test_alerts_db import PUBLISHER, delivery_of, seed, seed_series
 
 from itgraph.alerts.cascade import Cascade
 from itgraph.bot.app import BotStats, Sender, deliver_once
+from itgraph.bot.destinations import Destination
 from itgraph.bot.render import (
+    MESSAGE_LIMIT,
     Carrier,
     RenderedAlert,
-    digest,
+    digest_parts,
     render_cascade,
     render_spike,
+    units,
 )
 from itgraph.config import settings
-from itgraph.db.alerts import claim_undelivered, raise_cascades
+from itgraph.db.alerts import (
+    claim_undelivered,
+    outstanding_alerts,
+    raise_cascades,
+)
 from itgraph.db.models import AlertKind
 from itgraph.db.session import Database
 
 NOW = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
 POST = 500
+CHAT = 100000001
 
 
 class Recorder(Sender):
-    """A sender that remembers instead of sending."""
+    """A sender that remembers instead of sending.
 
-    def __init__(self, *, fail: bool = False) -> None:
-        self.messages: list[tuple[str, int | None]] = []
+    ``fail_on`` fails the sends of those numbers, counted from one, and
+    lets the rest through: a digest's second part failing is a case of
+    its own.
+    """
+
+    def __init__(
+        self, *, fail: bool = False, fail_on: frozenset[int] = frozenset()
+    ) -> None:
+        self.messages: list[tuple[str, Destination]] = []
         self.fail = fail
+        self.fail_on = fail_on
+        self.calls = 0
 
-    async def send(self, text: str, *, alert_id: int | None = None) -> None:
-        if self.fail:
+    async def send(self, text: str, *, destination: Destination) -> None:
+        self.calls += 1
+        if self.fail or self.calls in self.fail_on:
             raise RuntimeError("telegram is unreachable")
-        self.messages.append((text, alert_id))
+        self.messages.append((text, destination))
 
 
 @pytest.fixture(autouse=True)
-def no_quiet_hours(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Off by default, so a test's outcome does not depend on the clock."""
+def configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Telegram's chat alone, and quiet hours off.
+
+    Off by default, so a test's outcome does not depend on the clock; the
+    digest far from any NOW a test uses, so it does not fire by accident
+    in tests about direct delivery.
+    """
+    monkeypatch.setattr(settings, "alert_chat_id", CHAT)
+    monkeypatch.setattr(settings, "youtube_alert_chat_id", None)
+    monkeypatch.setattr(settings, "youtube_alert_topic_en", None)
+    monkeypatch.setattr(settings, "youtube_alert_topic_ru", None)
     monkeypatch.setattr(settings, "alert_quiet_from_hour", 0)
     monkeypatch.setattr(settings, "alert_quiet_to_hour", 0)
-    # Far from any NOW a test uses, so the digest does not fire by
-    # accident in tests that are about direct delivery.
     monkeypatch.setattr(settings, "alert_digest_hour", 23)
 
 
@@ -108,6 +134,29 @@ def test_a_long_post_is_excerpted() -> None:
 
 def test_a_post_with_no_text_still_renders() -> None:
     assert "3" in rendered(text=None).text
+
+
+def test_what_a_post_says_is_escaped() -> None:
+    """The messages are HTML. A `<` in a post's text, or `&` in a title,
+    was a message Telegram refused on every retry."""
+    text = rendered(channel_title="Dev & Ops", text="if a < b && c > d").text
+
+    assert "Dev &amp; Ops" in text
+    assert "a &lt; b &amp;&amp; c &gt; d" in text
+    assert "<b>3</b>" in text
+
+
+def test_a_cascade_with_every_channel_carrying_it_still_fits() -> None:
+    """Dropped from the end, a line at a time; the markup stays whole."""
+    many = [
+        Carrier(title=None, username=f"channel_number_{n:04d}")
+        for n in range(400)
+    ]
+    text = rendered(carriers=many).text
+
+    assert units(text) <= MESSAGE_LIMIT
+    assert text.endswith("…")
+    assert "<b>3</b>" in text
 
 
 def spike(**overrides: object) -> RenderedAlert:
@@ -209,14 +258,51 @@ def test_the_other_kinds_never_state_a_count() -> None:
     assert "выше обычного" in text
 
 
+def test_the_longest_spike_fits_in_a_message() -> None:
+    longest = spike(
+        channel_title="Т" * 255,
+        text="слово " * 5000,
+        folded=999,
+        kind=AlertKind.COMMENT_SPIKE,
+        observed=10**9,
+        expected=10.0**8,
+    ).text
+    assert units(longest) <= MESSAGE_LIMIT
+
+
+# --- the digest ------------------------------------------------------
+
+
 def test_the_digest_says_how_many_it_covers() -> None:
     """What separates a digest from a silent drop."""
-    body = digest([rendered()], held=7)
-    assert "7" in body
+    (part,) = digest_parts([rendered().text], held=7)
+    assert "7" in part.text
+    assert part.entries == (0,)
 
 
 def test_an_empty_digest_is_still_labelled() -> None:
-    assert "0" in digest([], held=0)
+    (part,) = digest_parts([], held=0)
+    assert "0" in part.text
+
+
+def test_a_long_digest_arrives_in_parts() -> None:
+    """Thirty entries of a busy night: every one in some part, each part
+    a message Telegram takes, the first saying how many the whole is."""
+    entries = [spike(alert_id=n, text="слово " * 40).text for n in range(30)]
+
+    parts = digest_parts(entries, held=30)
+
+    assert len(parts) > 1
+    assert all(units(part.text) <= MESSAGE_LIMIT for part in parts)
+    assert sorted(i for part in parts for i in part.entries) == list(range(30))
+    assert "30 оповещение" in parts[0].text
+    assert f"(1/{len(parts)})" in parts[0].text
+    assert "Продолжение" in parts[1].text
+
+
+def test_a_short_digest_is_one_message_without_numbering() -> None:
+    (part,) = digest_parts([spike().text, spike().text], held=2)
+    assert "(1/" not in part.text
 
 
 # --- delivery -------------------------------------------------------
@@ -231,6 +317,42 @@ async def prepare(database: Database, bands: tuple[int, ...] = (2,)) -> None:
         )
 
 
+async def raise_spikes(
+    database: Database, *, count: int, raised_at: datetime, first: int = 1
+) -> None:
+    """Spikes on posts of their own, all raised at one moment."""
+    async with database.session() as session:
+        for offset in range(first, first + count):
+            payload = {
+                "_": "Message",
+                "id": POST + offset,
+                "date": (raised_at - timedelta(hours=1)).isoformat(),
+                "message": "слово " * 40,
+            }
+            await session.execute(
+                text(
+                    "INSERT INTO raw_messages (channel_id, msg_id, payload) "
+                    "VALUES (:c, :m, CAST(:p AS jsonb))"
+                ),
+                {"c": PUBLISHER, "m": POST + offset, "p": json.dumps(payload)},
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO alerts (kind, channel_id, msg_id, band, "
+                    "value, raised_at) VALUES "
+                    "('views_spike', :c, :m, 1, 5.0, :at)"
+                ),
+                {"c": PUBLISHER, "m": POST + offset, "at": raised_at},
+            )
+
+
+async def waiting(database: Database) -> tuple[int, int]:
+    """How many are outstanding, and how many of those are held."""
+    async with database.session() as session:
+        outstanding = await outstanding_alerts(session)
+    return outstanding.total, outstanding.held
+
+
 async def test_an_alert_is_sent_and_marked(database: Database) -> None:
     await prepare(database)
     sender = Recorder()
@@ -238,8 +360,19 @@ async def test_an_alert_is_sent_and_marked(database: Database) -> None:
     await deliver_once(database, sender, BotStats(), now=NOW)
 
     assert len(sender.messages) == 1
-    async with database.session() as session:
-        assert await claim_undelivered(session, limit=10) == []
+    assert await waiting(database) == (0, 0)
+
+
+async def test_the_message_goes_to_the_configured_chat(
+    database: Database,
+) -> None:
+    await prepare(database)
+    sender = Recorder()
+
+    await deliver_once(database, sender, BotStats(), now=NOW)
+
+    ((_, destination),) = sender.messages
+    assert (destination.chat_id, destination.topic_id) == (CHAT, None)
 
 
 async def test_a_failed_send_leaves_the_alert_outstanding(
@@ -264,14 +397,19 @@ async def test_quiet_hours_hold_rather_than_drop(
     await prepare(database)
     monkeypatch.setattr(settings, "alert_quiet_from_hour", 2)
     monkeypatch.setattr(settings, "alert_quiet_to_hour", 7)
+    monkeypatch.setattr(settings, "watch_timezone", "UTC")
+    async with database.session() as session:
+        await session.execute(
+            text("UPDATE alerts SET raised_at = :at"),
+            {"at": NOW.replace(hour=3)},
+        )
     sender = Recorder()
 
     await deliver_once(database, sender, BotStats(), now=NOW.replace(hour=3))
 
     assert sender.messages == []
-    # Held, not dropped — still outstanding for the digest.
-    async with database.session() as session:
-        assert len(await claim_undelivered(session, limit=10)) == 1
+    # Held, not dropped — still outstanding, for the digest.
+    assert await waiting(database) == (1, 1)
 
 
 async def test_the_cap_holds_rather_than_drops(
@@ -293,8 +431,61 @@ async def test_the_cap_holds_rather_than_drops(
     await deliver_once(database, sender, BotStats(), now=NOW)
 
     assert sender.messages == []
+    assert await waiting(database) == (1, 1)
+
+
+async def test_held_stays_held_when_the_cap_frees_up(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once set aside for the summary, an alert arrives in the summary."""
+    await prepare(database)
+    monkeypatch.setattr(settings, "alert_daily_cap", 1)
     async with database.session() as session:
-        assert len(await claim_undelivered(session, limit=10)) == 1
+        await session.execute(
+            text("UPDATE alerts SET delivered_at = :at, delivery = 'direct'"),
+            {"at": NOW - timedelta(hours=1)},
+        )
+        await raise_cascades(
+            session, [Cascade(post_key=(PUBLISHER, POST), band=3, value=3)]
+        )
+    sender = Recorder()
+    await deliver_once(database, sender, BotStats(), now=NOW)
+
+    await deliver_once(
+        database, sender, BotStats(), now=NOW + timedelta(hours=25)
+    )
+
+    assert sender.messages == []
+    assert await waiting(database) == (1, 1)
+
+
+async def test_a_busy_night_does_not_delay_the_morning(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Twelve held overnight, one raised at 08:00: it goes at once.
+
+    Before held alerts were marked, the direct path claimed the ten
+    oldest, found them all the digest's, and sent nothing until 09:00.
+    """
+    await seed(database)
+    monkeypatch.setattr(settings, "watch_timezone", "UTC")
+    monkeypatch.setattr(settings, "alert_quiet_from_hour", 2)
+    monkeypatch.setattr(settings, "alert_quiet_to_hour", 7)
+    monkeypatch.setattr(settings, "alert_digest_hour", 9)
+    night = NOW.replace(hour=3)
+    await raise_spikes(database, count=12, raised_at=night)
+    sender = Recorder()
+    stats = BotStats()
+    await deliver_once(database, sender, stats, now=night)
+    await deliver_once(database, sender, stats, now=night)
+
+    morning = NOW.replace(hour=8)
+    await raise_spikes(database, count=1, raised_at=morning, first=100)
+    await deliver_once(database, sender, stats, now=morning)
+
+    assert len(sender.messages) == 1
+    assert str(POST + 100) in sender.messages[0][0]
+    assert await waiting(database) == (12, 12)
 
 
 async def test_the_digest_delivers_what_quiet_hours_held(
@@ -307,6 +498,7 @@ async def test_the_digest_delivers_what_quiet_hours_held(
     the summary can actually be sent.
     """
     await prepare(database)
+    monkeypatch.setattr(settings, "watch_timezone", "UTC")
     monkeypatch.setattr(settings, "alert_quiet_from_hour", 2)
     monkeypatch.setattr(settings, "alert_quiet_to_hour", 7)
     monkeypatch.setattr(settings, "alert_digest_hour", 9)
@@ -323,16 +515,77 @@ async def test_the_digest_delivers_what_quiet_hours_held(
 
     await deliver_once(database, sender, stats, now=night)
     assert sender.messages == []
-    async with database.session() as session:
-        assert len(await claim_undelivered(session, limit=10)) == 1
+    assert await waiting(database) == (1, 1)
 
     morning = NOW.replace(hour=9, minute=30)
     await deliver_once(database, sender, stats, now=morning)
 
     assert stats.digested == 1
     assert "оповещение" in sender.messages[0][0]
+    assert await waiting(database) == (0, 0)
+
+
+async def test_a_long_digest_goes_out_whole_in_parts(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Thirty held alerts: several messages, each one Telegram takes."""
+    await seed(database)
+    monkeypatch.setattr(settings, "watch_timezone", "UTC")
+    monkeypatch.setattr(settings, "alert_quiet_from_hour", 2)
+    monkeypatch.setattr(settings, "alert_quiet_to_hour", 7)
+    monkeypatch.setattr(settings, "alert_digest_hour", 9)
+    night = NOW.replace(hour=3)
+    await raise_spikes(database, count=30, raised_at=night)
+    sender = Recorder()
+    stats = BotStats()
+    for _ in range(3):
+        await deliver_once(database, sender, stats, now=night)
+
+    await deliver_once(database, sender, stats, now=NOW.replace(hour=9))
+
+    assert len(sender.messages) > 1
+    assert all(units(text) <= MESSAGE_LIMIT for text, _ in sender.messages)
+    assert "30 оповещение" in sender.messages[0][0]
+    assert stats.digested == 30
+    assert await waiting(database) == (0, 0)
+
+
+async def test_a_failed_part_is_sent_again_and_the_rest_are_not(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await seed(database)
+    monkeypatch.setattr(settings, "watch_timezone", "UTC")
+    monkeypatch.setattr(settings, "alert_quiet_from_hour", 2)
+    monkeypatch.setattr(settings, "alert_quiet_to_hour", 7)
+    monkeypatch.setattr(settings, "alert_digest_hour", 9)
+    night = NOW.replace(hour=3)
+    await raise_spikes(database, count=30, raised_at=night)
+    stats = BotStats()
+    for _ in range(3):
+        await deliver_once(database, Recorder(), stats, now=night)
+
+    flaky = Recorder(fail_on=frozenset({2}))
+    await deliver_once(database, flaky, stats, now=NOW.replace(hour=9))
+
+    sent_first = len(flaky.messages)
+    remaining, _ = await waiting(database)
+    assert 0 < remaining < 30
     async with database.session() as session:
-        assert await claim_undelivered(session, limit=10) == []
+        attempts = await session.scalar(
+            text("SELECT count(*) FROM alerts WHERE attempts = 1")
+        )
+    assert attempts == remaining
+    # The digest is not counted as sent, so the next pass tries the rest.
+    assert "telegram" not in stats.last_digest_at
+
+    retry = Recorder()
+    await deliver_once(
+        database, retry, stats, now=NOW.replace(hour=9, minute=1)
+    )
+
+    assert sent_first >= 1
+    assert len(retry.messages) >= 1
+    assert await waiting(database) == (0, 0)
 
 
 async def test_the_digest_goes_at_its_hour_in_the_operators_zone(
@@ -357,6 +610,7 @@ async def test_the_digest_goes_at_its_hour_in_the_operators_zone(
             text("UPDATE alerts SET raised_at = :at"), {"at": night}
         )
 
+    await deliver_once(database, sender, stats, now=night)
     await deliver_once(
         database, sender, stats, now=NOW.replace(hour=5, minute=30)
     )
@@ -366,8 +620,7 @@ async def test_the_digest_goes_at_its_hour_in_the_operators_zone(
         database, sender, stats, now=NOW.replace(hour=6, minute=30)
     )
     assert stats.digested == 1  # 09:30 in Moscow
-    async with database.session() as session:
-        assert await claim_undelivered(session, limit=10) == []
+    assert await waiting(database) == (0, 0)
 
 
 async def test_a_digest_covering_nothing_is_not_sent(
@@ -398,16 +651,17 @@ async def test_an_alert_whose_post_vanished_is_skipped(
     assert sender.messages == []
 
 
-async def test_the_alert_id_travels_with_the_message(
-    database: Database,
+async def test_without_a_chat_nothing_is_sent(
+    database: Database, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The feedback buttons need it; without it a verdict has no subject."""
     await prepare(database)
+    monkeypatch.setattr(settings, "alert_chat_id", None)
     sender = Recorder()
 
     await deliver_once(database, sender, BotStats(), now=NOW)
 
-    assert sender.messages[0][1] is not None
+    assert sender.messages == []
+    assert await waiting(database) == (1, 0)
 
 
 # --- supervision ----------------------------------------------------
@@ -547,6 +801,7 @@ async def test_folds_of_a_held_head_wait_with_it(
     await seed_series(database)
     monkeypatch.setattr(settings, "alert_quiet_from_hour", 2)
     monkeypatch.setattr(settings, "alert_quiet_to_hour", 7)
+    monkeypatch.setattr(settings, "watch_timezone", "UTC")
 
     await deliver_once(
         database, Recorder(), BotStats(), now=NOW.replace(hour=3)

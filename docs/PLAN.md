@@ -295,7 +295,34 @@ Bare `@handle` mentions are YouTube's own feature, chosen from a list in titles 
 
 ### Alerts
 
-The same bot, a separate chat per platform. YouTube gets its own queue table — the existing `alerts` table references Telegram's `raw_messages`, and an alert about a post nothing collected should stay unrepresentable — and its own chat id beside `alert_chat_id`. Where alerts about Russian-language YouTube go — the YouTube chat, a chat of their own, or nowhere — is open.
+The same bot, a separate chat per platform. YouTube gets its own queue table, `yt_alerts` — the existing `alerts` table references Telegram's `raw_messages`, and an alert about a post nothing collected should stay unrepresentable — and its own chat beside `alert_chat_id`.
+
+**Decided by the operator on 2026-11-11, built by `route-alerts-by-platform`:**
+
+- **One forum chat for YouTube, a topic per language,** English and Russian; the readers of both are the same people. Topics are made by hand and named to the role; the bot is no administrator.
+- **The topic is the channel's language at the moment of sending,** so a relabelled channel's alert follows the label, and one whose channel stopped being a seed is still delivered.
+- **Channels labelled `other` get no alerts.** An alert whose channel turned `other` while it waited is closed as excluded, counted and not sent. For change 7: `other` channels are not scored at all. Collection, the history walk and the mention graph keep reading them.
+- **A YouTube alert lives as long as the reading it was scored on,** and so with its video's data, and is in no dump. It copies nothing YouTube said. Its message names YouTube with a link to the video, dates YouTube's counts and itgraph's score separately (III.E.4.f's "in context of time"), and states that the score is itgraph's (III.E.4.h).
+- **A message in the chat is display, not storage.** Nothing is deleted or edited later. The Bot API could not do the first anyway: a bot deletes a message only within 48 hours of sending it.
+- **Each destination keeps its own account** — cap, quiet hours, digest — with YouTube's two topics set alike, cap 10 a day.
+- **No feedback buttons.** In three months one verdict was given, a test on the first day. Thresholds were argued from alerts read offline.
+
+What it was decided on: Telegram's alerts over the 28 days to 2026-11-11, Moscow time, as aggregates.
+
+```
+  heads raised a day           mean 10.1, median 8, p90 21, max 28
+  sent directly                9.6 a day; the cap of 20 reached on a burst day
+  into the digest              0.5 a day — 11 of 13 over the cap, 2 from quiet hours
+  by hour                      16–20 h hold 126 of 271; 02–07 h hold 3, the collector being asleep then
+  verdicts                     1 of 813 since 2026-08-08
+```
+
+At 500 English and 169 Russian seeds, the upload rates above give about 165 and 98 videos a day. At Telegram's share of about 1.7% of posts, that is about 3 and 1.7 alerts a day. Change 7's replay prices the real volume. YouTube is polled around the clock, so unlike Telegram it will raise alerts at night: at Moscow's quiet hours, much of the English topic will arrive in the 09:00 digest.
+
+Two defects of the delivery loop were fixed on the way:
+
+- **A digest longer than Telegram's 4,096 characters failed forever,** and kept every held alert undelivered. Digests now go in parts.
+- **Ten alerts held overnight blocked every direct send until the digest.** Held alerts are now marked, and are no longer claimed for direct sending.
 
 ### Order of changes
 
@@ -307,7 +334,7 @@ The same bot, a separate chat per platform. YouTube gets its own queue table —
 | 4 | `add-youtube-mention-graph` | Title and description references → edges and pending targets, worked out on reading and never stored; bare mentions against the inventory only; no network; the history walk switched on |
 | 4a | `add-youtube-candidates-from-telegram` | The Telegram seeds' own YouTube links → candidates: links read from posts already collected, the channels behind linked videos and handles looked up for their id alone and kept 30 days, ranked by distinct families on reading, the top hundred added for review; nothing joined stored |
 | 5 | `add-youtube-discovery` | Three review queues of YouTube's own beside Telegram's: the seeds' references looked up and ranked by distinct seeds, their featured lists read with the refresh, and search with the operator's queries in a bucket of its own; the ledger's exhaustion per bucket; the round to 500 English seeds as a runbook |
-| 6 | `route-alerts-by-platform` | The YouTube alert queue, a chat per platform, rendering, the bot role's grants |
+| 6 | `route-alerts-by-platform` | The YouTube alert queue, gone with its video's reading; a forum chat for YouTube with a topic per language, `other` excluded; each destination's own cap, quiet hours and digest; rendering; the bot role's grants; digests in parts, held alerts marked, the feedback buttons removed |
 | 7 | `add-youtube-virality-scoring` | Curves, spreads and threshold measured on YouTube data; `scoring/` made platform-blind |
 
 **Left to change 5's explore by change 4, and how each closed (2026-11-01, measured at 175 seeds):**
