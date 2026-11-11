@@ -1,6 +1,6 @@
 # Infrastructure requirements
 
-**Status: target.** Nothing below describes how things stand today. The infrastructure is being reworked towards it, and until that is done the rules in "While this is the target" decide what to do with work that does not meet it. Once the rework is done, this line will say so, and everything here becomes the state to keep.
+**Status: in force since 2026-11-11.** The rework towards it is done: everything below describes how things stand, and is the state to keep. "Keeping it" says what to do with work that would not meet it.
 
 This file is the same, byte for byte, in every repository it applies to: `docs/INFRASTRUCTURE.md`, or `.claude/constitution/65-infrastructure.md` in the Go projects. A change to it is made in all of them at once. It names no host, no address and no project, because some of those repositories are public.
 
@@ -71,10 +71,10 @@ Made by the operators on top of the requirements. The number in brackets is the 
 - The graphs are on dashboards of their own, apart from any project's.
 - Alerts go to a Telegram bot of their own, read by both operators, and to no project's bot: a project's bot already says enough of its own.
 
-## While this is the target
+## Keeping it
 
-1. **Nothing is brought into line on the agent's own initiative**, not even a small thing in passing. Rework comes as items of the plan, one at a time, once the user picks one. There is no test environment yet, so a fix made for one requirement now goes straight to production and breaks requirement 2.
-2. **New and changed work does not move further from the target.** A new pod is read-only and unprivileged, a new service goes in through Ansible, and no new root access appears. When a task cannot be done to the requirements without wider rework, stop and ask; never make a silent exception.
-3. **Where the means to meet a requirement do not exist yet** — no test environment, no alerting — say so plainly. Never present the work as meeting it.
-4. **A violation noticed in what is being touched is named in the reply** — what it is, and which requirement — and not fixed. The plan is the list of violations, and it lives in the shared server's infrastructure repository; one that is not on it yet is named all the same.
-5. **Where this file and another rule of the repository disagree, the other rule describes today.** It is not changed in passing. A new change that would follow it against this file is a question for the user. The rework rewrites those rules.
+1. **New and changed work meets every requirement and decision here.** A new service goes in through Ansible and through a test environment first, a new pod is read-only and unprivileged, a new regular job or daemon comes with its graphs and alerts, and no new root access appears. When a task cannot be done to them, stop and ask; never make a silent exception.
+2. **An exception is only one this file allows, written down beside what needs it, with its reason.** One with no reason written is a violation.
+3. **A violation noticed is named in the reply** — what it is, and which requirement — and fixed as work of its own once the user picks it, through a test environment first, never in passing.
+4. **Where this file and another rule of a repository disagree, this file holds.** The other rule is a mistake: name it, and change it with the user's word.
+5. **A change to the requirements or the decisions is the operators' to make,** in every repository at once.
