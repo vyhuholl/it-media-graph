@@ -134,10 +134,9 @@
         __itgraph_alert_report: an alert, to this environment's own chat
 
 # YouTube's topics, where this environment has a YouTube chat: a synthetic video of a
-# restored seed of each language, read now, and an alert scored on that reading. The
-# copy holds no API data, so the video is made up here and removed at the end, which
-# takes its reading and its alert with it. After the read-back, which has already
-# proven the copy held none.
+# restored seed of each language, read now, and an alert scored on that reading. Made
+# up rather than taken from the copy, which need not hold a video of a seed of each
+# language; removed at the end, which takes its reading and its alert with it.
 - name: Note that YouTube delivery is not configured
   ansible.builtin.set_fact:
     __itgraph_youtube_report: not configured in this environment

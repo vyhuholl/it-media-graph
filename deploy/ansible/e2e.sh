@@ -594,7 +594,7 @@ dump_from_claim "$work/seeded.dump"
 [ -s "$work/seeded.dump" ] || fail 'no dump came out of the claim'
 ok 'a backup made a dump of the seeded rows'
 
-say 'dumps with API data in them are refused, and bad files touch nothing'
+say 'bad files are refused, and touch nothing'
 counts_before="$(psql_in "$namespace" 'SELECT count(*) FROM channels')"
 role restore -e itgraph_restore_from="$work/no-such-file.dump" >"$work/missing.log" 2>&1 && fail 'a missing file was restored'
 printf 'not a dump\n' >"$work/text.dump"
@@ -643,7 +643,7 @@ read_rows() { psql_in "$namespace" "$1"; }
 [ "$(read_rows 'SELECT count(*) FROM affiliation_candidates WHERE decision_note IS NOT NULL')" = 0 ] || fail 'a note on a pair in the copy'
 [ "$(read_rows 'SELECT count(*) FROM affiliation_candidates')" = 1 ] || fail 'the decision on a pair did not come across'
 [ "$(read_rows 'SELECT count(*) FROM yt_channels')" = 3 ] || fail 'the YouTube records did not come across'
-[ "$(read_rows 'SELECT count(*) FROM yt_raw_channels')" = 0 ] || fail 'API data in the copy'
+[ "$(read_rows 'SELECT count(*) FROM yt_raw_channels')" = 1 ] || fail 'the YouTube data did not come across'
 payload="$(read_rows "SELECT payload FROM raw_messages WHERE msg_id = 10")"
 case "$payload" in *777000111* | *"A Fake"* | *"Another Fake"*) fail "a person in the copy: $payload" ;; esac
 case "$payload" in *"a public post"*) ;; *) fail 'the text did not come across' ;; esac
@@ -652,7 +652,7 @@ case "$payload" in *"a public post"*) ;; *) fail 'the text did not come across' 
 	fail 'the paid reactors did not come across as the channel alone'
 [ "$(read_rows "SELECT jsonb_array_length(payload->'reactions'->'top_reactors') FROM raw_messages WHERE msg_id = 10")" = 1 ] ||
 	fail 'a paid reactor who is a person came across'
-ok 'on the real rows, the copy names nobody and holds no API data, and the graph is there'
+ok 'on the real rows, the copy names nobody, and the YouTube data and the graph are there'
 
 # Over the local socket, as the owner: the reader's grants, not its login.
 reader_reads_the_copy() {
@@ -736,20 +736,13 @@ role restore -e itgraph_restore_from="$work/through-age.dump" >"$work/restore3.l
 }
 ok 'a copy through age restores as any other dump'
 
-say 'a dump with API data in it, or a person at head, empties the database rather than keeping it'
+say 'a person at head empties the database rather than keeping it'
 # A person at head means production holds one: the collector's rule missed a shape,
 # at a path no statement ever named. Dumped while the copy is whole, then taken out.
 psql_in "$namespace" "INSERT INTO raw_messages (channel_id, msg_id, payload) VALUES (4, 12, '{\"_\": \"Message\", \"id\": 12, \"reply_to\": {\"_\": \"MessageReplyHeader\", \"reply_to_peer_id\": {\"_\": \"PeerUser\", \"user_id\": 777000111}}}')" >/dev/null
 kubectl -n "$namespace" exec statefulset/itgraph-postgres -c postgres -- \
 	pg_dump -U itgraph -d itgraph --format=custom >"$work/with-a-person.dump"
 psql_in "$namespace" "DELETE FROM raw_messages WHERE msg_id = 12" >/dev/null
-psql_in "$namespace" "INSERT INTO yt_raw_channels (channel_id, payload, fetched_at) VALUES ('UCfake000000000000000000', '{}', now())" >/dev/null
-kubectl -n "$namespace" exec statefulset/itgraph-postgres -c postgres -- \
-	pg_dump -U itgraph -d itgraph --format=custom >"$work/with-api-data.dump"
-role restore -e itgraph_restore_from="$work/with-api-data.dump" >"$work/restore4.log" 2>&1 && fail 'a dump with API data was restored'
-grep -q 'emptied' "$work/restore4.log" || fail 'the failure did not say the database was emptied'
-[ "$(read_rows "SELECT to_regclass('public.channels') IS NULL")" = t ] || fail 'the database was not emptied'
-ok 'a dump with API data is refused, and leaves the database empty'
 role restore -e itgraph_restore_from="$work/with-a-person.dump" >"$work/restore5.log" 2>&1 && fail 'a dump naming a person at head was restored'
 grep -q 'users in posts: 1' "$work/restore5.log" || fail 'the failure did not name the person it found'
 grep -q 'emptied' "$work/restore5.log" || fail 'the failure did not say the database was emptied'

@@ -35,5 +35,5 @@ INSERT INTO message_metrics (channel_id, msg_id, observed_at, views)
   SELECT 4, 10, now() - interval '2 days' - g * interval '1 second', (random() * 1000000)::int
   FROM generate_series(1, 5000) g;
 INSERT INTO alerts (kind, channel_id, msg_id, band, value, raised_at) VALUES ('views_spike', 4, 10, 1, 4.2, now() - interval '1 hour');
--- Yt API data, which dumps must leave out: if it reaches a copy, the restore fails.
+-- YouTube's data: full dumps carry it, and a copy keeps it.
 INSERT INTO yt_raw_channels (channel_id, payload, fetched_at) VALUES ('UCfake000000000000000000', '{"snippet": {"title": "a fake title"}}', now());
