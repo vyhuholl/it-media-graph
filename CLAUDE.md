@@ -90,3 +90,15 @@ When the prompt and the actual behaviour of a library or of the code disagree, d
 ## Style
 - ruff and mypy settings are deliberate. Do not loosen config or sprinkle `# type: ignore` to make an error disappear — fix the code, or ask.
 - Code, identifiers and comments in English. Docs and commit messages may be Russian.
+
+## Database access
+During explore you may read the production database as `itgraph_reader`, a read-only user. The tunnel is open, and the password is in `.pgpass`: do not look for it or print it.
+```bash
+PGOPTIONS='-c statement_timeout=60s' /opt/homebrew/opt/libpq/bin/psql -h localhost -p 15433 -U itgraph_reader -d itgraph
+```
+Rules:
+* This is the working database, and the collector writes to it while you read. Read large tables through aggregates and with `LIMIT`. If a query hits `statement_timeout`, narrow it rather than lifting the limit.
+* This user may not write. Do not work around a refusal or look for other credentials.
+* Do not point `DATABASE_URL` or `.env` at this tunnel. Do not run alembic, the `itgraph` CLI or the tests against this database.
+* You may read everything, YouTube data and notes included. But no value from the database goes into the repository's files, OpenSpec artifacts, commits or pull requests: the repository is public, and YouTube API data lives only in `yt_raw_*`, for at most 30 days. Artifacts get only the schema and aggregates: counts, distributions, JSON keys.
+* Save no exports to files unless explicitly asked to by the operator.
