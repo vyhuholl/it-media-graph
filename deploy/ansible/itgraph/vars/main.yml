@@ -81,6 +81,7 @@ __itgraph_config: >-
        'TZ': itgraph_timezone,
        'WATCH_TIMEZONE': itgraph_timezone,
        'ALERT_SPIKE_Z': itgraph_alert_spike_z | string,
+       'YOUTUBE_ALERT_SPIKE_Z': itgraph_youtube_alert_spike_z | string,
        'BACKUP_DIR': '/backups',
        'POSTGRES_CONTAINER': '',
        'TELEGRAM_SESSION': itgraph_session_path,
@@ -305,6 +306,33 @@ __itgraph_cronjobs_always:
         env_from: ["{{ __itgraph_from_config }}", "{{ __itgraph_from_database }}"]
         # The heaviest pass: the fit holds every channel's history at once.
         resources: "{{ __itgraph_heavy_job_resources }}"
+    mounts: []
+    volumes: []
+  # YouTube's scoring needs no key and reaches the database alone, so it runs
+  # in every environment: a test environment tries it on restored readings.
+  - name: itgraph-yt-score
+    schedule: "{{ itgraph_yt_score_schedule }}"
+    starting_deadline: 600
+    # Ten minutes, as the poll pass it follows: a pass is seconds of work.
+    active_deadline: 600
+    labels: "{{ __itgraph_may_reach_database }}"
+    containers:
+      - name: itgraph
+        args: [yt, score]
+        env_from: ["{{ __itgraph_from_config }}", "{{ __itgraph_from_database }}"]
+        resources: "{{ __itgraph_job_resources }}"
+    mounts: []
+    volumes: []
+  - name: itgraph-yt-baselines
+    schedule: "{{ itgraph_yt_baselines_schedule }}"
+    starting_deadline: 82800
+    active_deadline: 10800
+    labels: "{{ __itgraph_may_reach_database }}"
+    containers:
+      - name: itgraph
+        args: [yt, baselines]
+        env_from: ["{{ __itgraph_from_config }}", "{{ __itgraph_from_database }}"]
+        resources: "{{ __itgraph_job_resources }}"
     mounts: []
     volumes: []
   - name: itgraph-backup

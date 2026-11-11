@@ -49,6 +49,55 @@
     fail_msg: "The baseline refresh wrote no run on the restored data: {{ __itgraph_baseline_trial.logs | truncate(800) }}"
     quiet: true
 
+- name: Count the YouTube baseline runs
+  ansible.builtin.command:
+    argv: "{{ __itgraph_psql_query + ['SELECT count(*) FROM yt_baseline_runs WHERE completed_at IS NOT NULL'] }}"
+  register: __itgraph_yt_runs_before
+  changed_when: false
+
+# YouTube's refresh needs no key and reaches the database alone: tried here as
+# Telegram's is, on the restored readings.
+- name: Run a YouTube baseline refresh
+  ansible.builtin.include_tasks: one_shot.yml
+  vars:
+    __itgraph_shot:
+      name: itgraph-trial-yt-baselines
+      labels: "{{ __itgraph_may_reach_database }}"
+      spec:
+        restartPolicy: Never
+        activeDeadlineSeconds: 3600
+        automountServiceAccountToken: false
+        securityContext: "{{ __itgraph_pod_security }}"
+        containers:
+          - name: itgraph
+            image: "{{ itgraph_image }}"
+            args: [yt, baselines]
+            envFrom:
+              - "{{ __itgraph_from_config }}"
+              - "{{ __itgraph_from_database }}"
+            securityContext: "{{ __itgraph_container_security }}"
+            resources: "{{ __itgraph_job_resources }}"
+            volumeMounts: ["{{ __itgraph_tmp_mount }}"]
+        volumes: ["{{ __itgraph_tmp_volume }}"]
+
+- name: Keep how the YouTube refresh ended
+  ansible.builtin.set_fact:
+    __itgraph_yt_baseline_trial: "{{ __itgraph_shot_result }}"
+
+- name: Count the YouTube baseline runs again
+  ansible.builtin.command:
+    argv: "{{ __itgraph_psql_query + ['SELECT count(*) FROM yt_baseline_runs WHERE completed_at IS NOT NULL'] }}"
+  register: __itgraph_yt_runs_after
+  changed_when: false
+
+- name: Assert the YouTube refresh wrote its run
+  ansible.builtin.assert:
+    that:
+      - __itgraph_yt_baseline_trial.phase == 'Succeeded'
+      - __itgraph_yt_runs_after.stdout | trim | int == (__itgraph_yt_runs_before.stdout | trim | int) + 1
+    fail_msg: "The YouTube baseline refresh wrote no run on the restored data: {{ __itgraph_yt_baseline_trial.logs | truncate(800) }}"
+    quiet: true
+
 - name: Run a full dump
   ansible.builtin.include_tasks: one_shot.yml
   vars:

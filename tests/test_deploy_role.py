@@ -272,6 +272,10 @@ SCHEDULES = {
     "itgraph-backup": ("40 */4 * * *", 10800, 7200),
     "itgraph-baselines": ("30 4 * * *", 82800, 10800),
     "itgraph-yt-refresh": ("0 5 * * *", 82800, 10800),
+    # Six minutes after each poll pass; ten to finish, as the pass it follows.
+    "itgraph-yt-score": ("6-59/15 * * * *", 600, 600),
+    # Half an hour after the refresh, which brings the settled readings.
+    "itgraph-yt-baselines": ("30 5 * * *", 82800, 10800),
     # After the Pacific reset in either season.
     "itgraph-yt-backfill": ("30 11 * * *", 82800, 3000),
 }
@@ -399,6 +403,8 @@ SECRET_KEYS = {
         ("Deployment", "itgraph-metrics", set()),
         ("CronJob", "itgraph-detect", set()),
         ("CronJob", "itgraph-baselines", set()),
+        ("CronJob", "itgraph-yt-score", set()),
+        ("CronJob", "itgraph-yt-baselines", set()),
         ("CronJob", "itgraph-backup", {"B2_APPLICATION_KEY"}),
         ("CronJob", "itgraph-yt-watch", {"YOUTUBE_API_KEY"}),
         ("CronJob", "itgraph-yt-refresh", {"YOUTUBE_API_KEY"}),
@@ -445,6 +451,7 @@ def test_the_environment_points_where_it_must(
     assert config["BACKUP_DIR"] == "/backups"
     assert config["TELEGRAM_SESSION"].startswith("/session/")
     assert config["YOUTUBE_BACKFILL_ENABLED"] == "true"
+    assert config["YOUTUBE_ALERT_SPIKE_Z"] == "3.7"
     assert "TELEGRAM_BOT_API_URL" not in config
     telegram = named(objects, "Secret", "itgraph-telegram")["stringData"]
     assert telegram["PROXY_HOST"] == "itgraph-proxy"
@@ -458,7 +465,14 @@ def test_a_key_absent_means_no_youtube_job_and_no_key(
 ) -> None:
     objects = everything(rendered["b"])
     jobs = {job["metadata"]["name"] for job in of(objects, "CronJob")}
-    assert jobs == {"itgraph-detect", "itgraph-baselines", "itgraph-backup"}
+    # YouTube's scoring needs no key, and runs whatever the key.
+    assert jobs == {
+        "itgraph-detect",
+        "itgraph-baselines",
+        "itgraph-backup",
+        "itgraph-yt-score",
+        "itgraph-yt-baselines",
+    }
     assert not [
         s
         for s in of(objects, "Secret")
@@ -488,6 +502,8 @@ REACH = {
     "itgraph-metrics": {"itgraph/database"},
     "itgraph-detect": {"itgraph/database"},
     "itgraph-baselines": {"itgraph/database"},
+    "itgraph-yt-score": {"itgraph/database"},
+    "itgraph-yt-baselines": {"itgraph/database"},
     "itgraph-backup": {"itgraph/database", "itgraph/internet"},
     "itgraph-yt-watch": {"itgraph/database", "itgraph/internet"},
     "itgraph-yt-refresh": {"itgraph/database", "itgraph/internet"},
@@ -904,6 +920,10 @@ def test_defaults_are_held_to_the_code() -> None:
         == fields["watch_quiet_to_hour"].default
     )
     assert defaults["itgraph_alert_spike_z"] == fields["alert_spike_z"].default
+    assert (
+        defaults["itgraph_youtube_alert_spike_z"]
+        == fields["youtube_alert_spike_z"].default
+    )
     # The restore's trial reads one window for whether the bot may speak:
     # the bot's, for both platforms, is that same window in the same zone.
     for platform in ("alert", "youtube_alert"):

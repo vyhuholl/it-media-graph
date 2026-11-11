@@ -690,13 +690,22 @@ else
 	ok 'a synthetic YouTube alert reaches each topic of the YouTube chat, and is removed after'
 fi
 [ "$(read_rows 'SELECT count(*) FROM baseline_runs WHERE completed_at IS NOT NULL')" -ge 1 ] || fail 'no baseline run on the copy'
-ok 'a baseline run was written on the copy'
+[ "$(read_rows 'SELECT count(*) FROM yt_baseline_runs WHERE completed_at IS NOT NULL')" -ge 1 ] || fail 'no YouTube baseline run on the copy'
+grep -q 'A baseline run of each platform' "$work/restore.log" || fail 'the restore did not report a run of each platform'
+ok 'a baseline run of each platform was written on the copy'
 
 say 'the passes on a copy that receives nothing new'
 kubectl -n "$namespace" create job e2e-detect --from=cronjob/itgraph-detect >/dev/null
 kubectl -n "$namespace" wait --for=condition=complete job/e2e-detect --timeout=180s >/dev/null || fail 'detection failed on the copy'
 kubectl -n "$namespace" delete job e2e-detect >/dev/null
 ok 'detection runs on the copy'
+kubectl -n "$namespace" get cronjob itgraph-yt-watch >/dev/null 2>&1 && fail 'a YouTube collection job without a key'
+for job in yt-baselines yt-score; do
+	kubectl -n "$namespace" create job "e2e-$job" --from="cronjob/itgraph-$job" >/dev/null
+	kubectl -n "$namespace" wait --for=condition=complete "job/e2e-$job" --timeout=180s >/dev/null || fail "$job failed on the copy"
+	kubectl -n "$namespace" delete job "e2e-$job" >/dev/null
+done
+ok "YouTube's scoring and its refresh run on the copy, with no key"
 
 say 'a second restore, from a dump of the neutralised copy'
 dump_from_claim "$work/neutralised.dump"
@@ -846,6 +855,49 @@ done
 grep -Eq '^itgraph_alerts_failing\{platform="youtube"\} 1(\.0)?$' "$work/series2.txt" ||
 	fail "the refused topic does not show in the series: $(grep itgraph_alerts_failing "$work/series2.txt")"
 ok 'a refused topic fails the send, goes nowhere else, and shows in the series'
+
+# A baseline run of the suite's own, newest of all, for an English seed of its own:
+# the digest's alerts above are another seed's open event, which these would fold
+# into. Its long-form videos reach a hundred views a day; two of its talks a day
+# old read five thousand.
+psql_in "$namespace" "INSERT INTO yt_channels (channel_id, status, kind, lang, discovered_via)
+	VALUES ('UCfakeSeedScoring0000000', 'seed', 'personal', 'en', 'manual')" >/dev/null
+yt_run="$(read_rows "
+	WITH run AS (
+	  INSERT INTO yt_baseline_runs (completed_at, window_days, mature_days, mature_max_days,
+	    min_channel_videos, recent_videos, recent_min_videos, recent_max_days, min_band_samples,
+	    min_band_spread_posts, channels_in_scope, channels_with_baseline, channels_on_fallback)
+	  VALUES (now(), 28, 29, 120, 10, 20, 10, 180, 20, 100, 1, 1, 0) RETURNING id),
+	ref AS (INSERT INTO yt_channel_baselines (run_id, channel_id, format, metric, median, samples, reference)
+	  SELECT id, 'UCfakeSeedScoring0000000', 'long', 'views', 100, 20, 'recent' FROM run),
+	ruler AS (INSERT INTO yt_metric_baselines (run_id, kind, format, metric, factor, spread, samples)
+	  SELECT id, 'personal', 'long', 'views', 1, 0.5, 500 FROM run),
+	point AS (INSERT INTO yt_curve_points (run_id, kind, format, metric, band, fraction, samples)
+	  SELECT id, 'personal', 'long', 'views', '1260m', 1, 500 FROM run)
+	SELECT id FROM run")"
+psql_in "$namespace" "
+	INSERT INTO yt_raw_videos (video_id, payload, fetched_at, discovered_at, discovered_via)
+	SELECT video, jsonb_build_object('snippet', jsonb_build_object('channelId', 'UCfakeSeedScoring0000000',
+	         'title', 'A synthetic talk ' || video,
+	         'publishedAt', to_char((now() - interval '26 hours') AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')),
+	         'contentDetails', jsonb_build_object('duration', 'PT42M')),
+	       now(), now(), 'count'
+	FROM (VALUES ('e2eScoreA01'), ('e2eScoreA02')) v(video);
+	INSERT INTO yt_raw_video_stats (video_id, observed_at, views, likes, comments)
+	SELECT video_id, date_trunc('second', now() - interval '2 hours'), 5000, NULL, NULL
+	FROM yt_raw_videos WHERE video_id LIKE 'e2eScoreA%'" >/dev/null
+kubectl -n "$namespace" create job e2e-yt-score-raise --from=cronjob/itgraph-yt-score >/dev/null
+kubectl -n "$namespace" wait --for=condition=complete job/e2e-yt-score-raise --timeout=180s >/dev/null || fail 'the YouTube scoring pass failed'
+kubectl -n "$namespace" delete job e2e-yt-score-raise >/dev/null
+[ "$(read_rows "SELECT count(*) || '/' || count(folded_into) FROM yt_alerts WHERE video_id LIKE 'e2eScoreA%'")" = 2/1 ] ||
+	fail "the two talks were not raised as one event: $(read_rows "SELECT count(*) || '/' || count(folded_into) FROM yt_alerts WHERE video_id LIKE 'e2eScoreA%'")"
+event_sent() {
+	telegram_calls | jq -s -e '[.[] | select(.method == "sendMessage" and .fields.message_thread_id == "7301"
+		and (.fields.text | test("e2eScoreA0")) and (.fields.text | test("ещё 1 видео")))] | length == 1' >/dev/null
+}
+until_true 120 'the scored event did not reach the English topic as one message' event_sent
+psql_in "$namespace" "DELETE FROM yt_baseline_runs WHERE id = $yt_run" >/dev/null
+ok 'a scoring pass raises two talks of one channel as one event, told once in its topic'
 
 telegram_control enqueue "$(jq -n --argjson at "$(date +%s)" '{message: {message_id: 5, date: $at,
 	chat: {id: -100000000000073, type: "supergroup", is_forum: true}, message_thread_id: 7301, is_topic_message: true,

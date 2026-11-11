@@ -1665,12 +1665,15 @@ def restore_rules() -> list[dict[str, Any]]:
         *state_rules(version=OLD),
         *pod_answers("itgraph-migrate"),
         *pod_answers("itgraph-trial-baselines"),
+        *pod_answers("itgraph-trial-yt-baselines"),
         *pod_answers(
             "itgraph-trial-backup",
             logs="/backups/weekly/full-20261106T090000Z.dump",
         ),
         rule("count\\(\\*\\) FROM baseline_runs", "1\n", times=1),
         rule("count\\(\\*\\) FROM baseline_runs", "2\n"),
+        rule("count\\(\\*\\) FROM yt_baseline_runs", "0\n", times=1),
+        rule("count\\(\\*\\) FROM yt_baseline_runs", "1\n"),
         rule("yt_alerts WHERE band = 2147483647", "2|0|en,ru\n"),
         rule("band = 2147483647", "1\n"),
         rule("pg_restore", "public.channels 12\n"),
@@ -1743,6 +1746,11 @@ def test_a_restore_in_order(tmp_path: Path) -> None:
     assert first("scale deployment itgraph-bot --replicas=1") < first(
         "get pod itgraph-trial-baselines"
     )
+    # YouTube's refresh is tried on the copy too, after Telegram's.
+    assert first("get pod itgraph-trial-baselines") < first(
+        "get pod itgraph-trial-yt-baselines"
+    )
+    assert "A baseline run of each platform" in run.output
     # The alert is raised on a restored post, and read back as delivered.
     assert first("get pod itgraph-trial-backup") < first("INSERT INTO alerts")
     [raised] = [call for call in joined if "INSERT INTO alerts" in call]
@@ -1855,6 +1863,26 @@ def test_a_read_back_that_fails_empties_the_database(tmp_path: Path) -> None:
     assert '{"spec": {"suspend": false}}' in " ".join(run.joined())
     assert run.called("delete", "lease")
     assert "The bot is left stopped" in run.output
+
+
+def test_a_youtube_refresh_that_writes_nothing_fails_the_restore(
+    tmp_path: Path,
+) -> None:
+    dump = tmp_path / "real.dump"
+    dump.write_bytes(b"fake dump bytes\n")
+    run = run_role(
+        tmp_path,
+        "restore",
+        inputs="b",
+        rules=[
+            rule("count\\(\\*\\) FROM yt_baseline_runs", "0\n"),
+            *restore_rules(),
+        ],
+        extra={**RESTORE, "itgraph_restore_from": str(dump)},
+    )
+
+    assert run.failed
+    assert "YouTube baseline refresh wrote no run" in run.output
 
 
 def test_a_trial_that_writes_nothing_fails_the_restore(tmp_path: Path) -> None:
