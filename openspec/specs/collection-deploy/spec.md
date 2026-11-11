@@ -242,6 +242,18 @@ A deploy SHALL be a run of the role in this repository, by an operator, at a rel
 - **WHEN** the role runs
 - **THEN** it fails naming the input, before any call that changes the cluster
 
+#### Scenario: A YouTube chat without both its topics
+
+- **GIVEN** a YouTube alert chat given without its English or its Russian topic, or a topic given without the chat
+- **WHEN** the role runs
+- **THEN** it fails naming the inputs, before any call that changes the cluster
+
+#### Scenario: No YouTube chat
+
+- **GIVEN** none of the YouTube alert chat and its topics given
+- **WHEN** the role runs
+- **THEN** it deploys, and the bot's pod holds no YouTube chat or topic
+
 #### Scenario: Nothing deploys by itself
 
 - **WHEN** a commit is pushed to `master` or a tag is pushed
@@ -350,7 +362,7 @@ Each workload's pods SHALL receive only the configuration that workload reads. A
 #### Scenario: The bot's pod
 
 - **WHEN** the bot's pod is rendered
-- **THEN** it holds its own database role's URL, the bot's token and the chat id
+- **THEN** it holds its own database role's URL, the bot's token, the Telegram chat's id and, where given, the YouTube chat's id and its two topics' ids
 - **AND** no superuser URL, Telegram API credential, proxy password, B2 key or YouTube key
 
 #### Scenario: The analysis jobs
@@ -362,12 +374,17 @@ Each workload's pods SHALL receive only the configuration that workload reads. A
 
 - **WHEN** the collector's pod is rendered
 - **THEN** it holds the database's URL, the Telegram API credentials and the proxy's settings
-- **AND** no bot token, B2 key or YouTube key
+- **AND** no bot token, B2 key, YouTube key or alert chat id
 
 #### Scenario: A new bot token
 
 - **WHEN** the bot's token changes and the role runs
 - **THEN** the bot restarts and the collector does not
+
+#### Scenario: A new YouTube topic
+
+- **WHEN** a YouTube alert topic's id changes and the role runs
+- **THEN** the bot restarts and no other workload does
 
 #### Scenario: A new password for the bot's own role
 

@@ -81,20 +81,20 @@ Tasks marked **(operator)** reach a server, a chat or the test environment, and 
 
 ## 12. The operator's
 
-- [ ] 12.1 **(operator)** Push `master`, wait for the image, tag a release. **A published release cannot be changed.**
-- [ ] 12.2 **(operator)** Test environment:
+- [x] 12.1 **(operator)** Push `master`, wait for the image, tag a release. **A published release cannot be changed.**
+- [x] 12.2 **(operator)** Test environment:
   - a forum chat with an English and a Russian topic, the test bot a member and no administrator, the three inputs in the test inventory;
   - the role at the release, then a restore.
 
   Verify: the report shows Telegram's synthetic alert and one in each topic delivered, in the right places; `/status` in both chats.
-- [ ] 12.3 **(operator)** In the test chat, record here what the Bot API answers to a send into General without a topic id, into a closed topic, and into a deleted one. Verify: the three answers recorded; if a send into a closed topic succeeds, design.md says so.
-- [ ] 12.4 **(operator)** The request of 11.1 on the infrastructure repository's side. Verify: the rules fire per platform on a test of their own, and the dashboard shows both.
-- [ ] 12.5 **(operator)** Production:
+- [x] 12.3 **(operator)** In the test chat, record here what the Bot API answers to a send into General without a topic id, into a closed topic, and into a deleted one. Verify: the three answers recorded; if a send into a closed topic succeeds, design.md says so.
+- [x] 12.4 **(operator)** The request of 11.1 on the infrastructure repository's side. Verify: the rules fire per platform on a test of their own, and the dashboard shows both.
+- [x] 12.5 **(operator)** Production:
   - the forum chat, its two topics and the bot as a member; the inputs on the controller;
   - promote the pin and run the role. Its migration takes the full dump and then **drops `alert_feedback`**.
 
   Verify: the bot starts; `/status` answers in both chats; a press on an old button removes its keyboard.
-- [ ] 12.6 **(operator)** A week after 12.5: Telegram's held alerts and digest parts read in `/status` and the series. Verify: recorded here.
+- [x] 12.6 **(operator)** A week after 12.5: Telegram's held alerts and digest parts read in `/status` and the series. Verify: recorded here.
 
 ## Workflow follow-up
 

@@ -61,8 +61,8 @@ Every series SHALL be worked out at scrape time from durable state in the databa
 | `itgraph_youtube_quota_exhausted{bucket}` | gauge | 1 when this quota day was declared over for that bucket |
 | `itgraph_youtube_last_complete_pass_timestamp_seconds` | gauge | the newest poll pass that completed, 0 when none |
 | `itgraph_youtube_oldest_payload_age_seconds{kind}` | gauge | the oldest fetch time of each kind of stored API data, absent when there is none |
-| `itgraph_alerts_oldest_undelivered_seconds` | gauge | the oldest alert not delivered, 0 when none |
-| `itgraph_alerts_failing` | gauge | undelivered alerts past the failure-report attempts |
+| `itgraph_alerts_oldest_undelivered_seconds{platform}` | gauge | the oldest alert of that platform's queue not delivered, held ones included, 0 when none |
+| `itgraph_alerts_failing{platform}` | gauge | undelivered alerts of that platform's queue past the failure-report attempts |
 
 #### Scenario: Quiet hours
 
@@ -70,14 +70,32 @@ Every series SHALL be worked out at scrape time from durable state in the databa
 - **WHEN** a client scrapes
 - **THEN** `itgraph_telegram_quiet_hours` is 1
 
+#### Scenario: The alert series per platform
+
+- **GIVEN** an undelivered Telegram alert raised an hour ago and no undelivered YouTube alert
+- **WHEN** a client scrapes
+- **THEN** `itgraph_alerts_oldest_undelivered_seconds{platform="telegram"}` is about 3600 and `{platform="youtube"}` is 0
+
+#### Scenario: An excluded YouTube alert
+
+- **GIVEN** a YouTube alert closed as excluded
+- **WHEN** a client scrapes
+- **THEN** it counts in neither alert series
+
 ### Requirement: Metrics Carry No API Data
 
-No series SHALL carry a title, handle, description, channel id, video id or statistic read from YouTube, and none SHALL aggregate statistics across channels. What the exporter reads of API data SHALL be limited to when each row was fetched, enforced by the database role it connects as.
+No series SHALL carry a title, handle, description, channel id, video id or statistic read from YouTube, and none SHALL aggregate statistics across channels. What the exporter reads of API data SHALL be limited to when each row was fetched, enforced by the database role it connects as. Of a YouTube alert it SHALL read only its moments and delivery state.
 
 #### Scenario: The role cannot read a title
 
 - **GIVEN** the exporter's database role
 - **WHEN** it selects `payload` from any `yt_raw_*` table
+- **THEN** the database refuses with a permission error
+
+#### Scenario: The role cannot read what an alert is about
+
+- **GIVEN** the exporter's database role
+- **WHEN** it selects the video, the reading or the score of a YouTube alert
 - **THEN** the database refuses with a permission error
 
 #### Scenario: The role can write nothing

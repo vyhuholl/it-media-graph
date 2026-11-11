@@ -200,7 +200,7 @@ The system SHALL treat a channel YouTube no longer returns when asked for by id,
 
 ### Requirement: Backups Carry No API Data
 
-Database dumps SHALL NOT contain YouTube API data, nor the history walk's records or the search runs, which describe API data the dumps leave out. The daily inventory dump SHALL contain the YouTube channel records and the operator's search queries; restoring any dump SHALL leave payloads, readings, lookups, featured lists, search runs and results, and walk records empty until YouTube is asked again.
+Database dumps SHALL NOT contain YouTube API data, nor the history walk's records, the search runs or the YouTube alerts, which describe API data the dumps leave out. The daily inventory dump SHALL contain the YouTube channel records and the operator's search queries; restoring any dump SHALL leave payloads, readings, lookups, featured lists, search runs and results, walk records and YouTube alerts empty until YouTube is asked again.
 
 #### Scenario: A full dump leaves the payloads out
 
@@ -226,6 +226,11 @@ Database dumps SHALL NOT contain YouTube API data, nor the history walk's record
 
 - **WHEN** a full dump is taken
 - **THEN** it holds the definitions of the featured lists', search runs' and search results' tables and none of their rows
+
+#### Scenario: A full dump leaves the YouTube alerts out
+
+- **WHEN** a full dump is taken
+- **THEN** it holds the definition of the YouTube alerts' table and none of its rows
 
 #### Scenario: The inventory dump keeps the review
 
@@ -422,7 +427,7 @@ After a restore into a test environment, every table whose rows dumps leave out 
 
 #### Scenario: Restoring a real dump
 
-- **GIVEN** a full dump of a database with payloads, readings, lookups, featured lists, search runs and walk records
+- **GIVEN** a full dump of a database with payloads, readings, lookups, featured lists, search runs, walk records and YouTube alerts
 - **WHEN** it is restored
 - **THEN** each of those tables holds no row
 - **AND** the YouTube channel records and their review are there
@@ -432,6 +437,12 @@ After a restore into a test environment, every table whose rows dumps leave out 
 - **GIVEN** a dump holding a row in a `yt_raw_*` table
 - **WHEN** it is restored
 - **THEN** the restore fails naming the table, and the database is left empty
+
+#### Scenario: A dump that carries a YouTube alert by mistake
+
+- **GIVEN** a dump holding a YouTube alert
+- **WHEN** it is restored
+- **THEN** the restore fails, naming the alerts' table among what it found, and the database is left empty
 
 #### Scenario: The list of tables cannot drift
 
