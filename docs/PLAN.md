@@ -304,6 +304,26 @@ Two defects of the delivery loop were fixed on the way:
 - **A digest longer than Telegram's 4,096 characters failed forever,** and kept every held alert undelivered. Digests now go in parts.
 - **Ten alerts held overnight blocked every direct send until the digest.** Held alerts are now marked, and are no longer claimed for direct sending.
 
+### Scoring
+
+Change 7 scores a video as Telegram scores a post — `expected = reference × factor × curve(age)`, views and likes as log-ratios over their spread, comments as negative-binomial counts — under numbers measured on YouTube. Measured on 2026-11-11, from readings since 2026-11-01 alone (the move to the server restored the YouTube tables empty, dumps then carrying no YouTube rows) and the history walk's payloads, which held no counters:
+
+- **The upload rate is lower than assumed:** 134 videos a day in English and 43 in Russian over 28 days, not 165 and 98; 40% of the English seeds and 32% of the Russian published nothing in 90 days, and the ten busiest Russian channels publish 46% of the Russian videos.
+- **Uploads come in batches:** of one channel's consecutive uploads over 90 days, 14% follow the last by under a minute and 65% by under a day — conference channels publish talks together.
+- **Formats:** 28% of uploads run 60 s or less, 17% 61–180 s, 47% longer, 8% are broadcasts. Within one channel at a day old, 61–180 s videos read like the 60-second ones (0.73 and 0.76 of the long-form median), not like long-form, so short-form is everything up to 180 s; `#shorts` marks one short video in eight and is not read.
+- **The first hours of the view counter lag:** zero views on a tenth of videos at one hour, no movement between readings on a quarter at two, then ×3.5 from two hours to four against likes' ×1.5. Nothing is scored before three hours.
+- **Views still grow at a week:** at seven days long-form videos hold 1.70 of their day's views, Shorts 1.59 — no saturation like Telegram's at eight hours.
+- **Comments:** zero on 46.5% of long-form videos at a day old; likes absent on 2.7%, comments on 5.4%.
+
+What was decided on it (the explore of 2026-11-11, the operator's answers in `add-youtube-virality-scoring`'s proposal):
+
+- **Short-form and long-form are scored apart,** each with its own references, curves and spreads; streams and premieres are not scored, and are counted.
+- **The reference is a channel's own newest videos at a day old** — 20 of them, at least 10, none older than 180 days — and otherwise its settled videos, one reading each, the latest at 29–120 days, at least 10, times its kind's factor. [29; 120] covers 84% and 79% of the last 90 days' long-form uploads in English and Russian, 89% and 97% of the short-form. Comments take no settled fallback, as on Telegram.
+- **Bands from three hours to eight and a half days,** one scheduled reading in each; alerts raised from 3 hours to 7 days of age.
+- **A channel's spikes within 24 hours are one event,** not six hours: readings are hours to days apart. No burst collapse — a batch of talks is distinct videos, which folding already makes one message.
+- **One threshold for both languages,** YouTube's own, priced by a replay that refits the baselines for each day it scores; 3.7 until then is provisional. The target is about 2–5 messages a day in English and 1–2 in Russian.
+- **Settled readings were made at once** by a one-off refresh of every past upload on 2026-11-11 (1,715 units), rather than waiting for the refresh cycle; the next comes 25 days later.
+
 ### Order of changes
 
 | # | Change | What it delivers |
@@ -315,7 +335,7 @@ Two defects of the delivery loop were fixed on the way:
 | 4a | `add-youtube-candidates-from-telegram` | The Telegram seeds' own YouTube links → candidates: links read from posts already collected, the channels behind linked videos and handles looked up for their id alone, ranked by distinct families on reading, the top hundred added for review; nothing joined stored |
 | 5 | `add-youtube-discovery` | Three review queues of YouTube's own beside Telegram's: the seeds' references looked up and ranked by distinct seeds, their featured lists read with the refresh, and search with the operator's queries in a bucket of its own; the ledger's exhaustion per bucket; the round to 500 English seeds as a runbook |
 | 6 | `route-alerts-by-platform` | The YouTube alert queue, gone with its video's reading; a forum chat for YouTube with a topic per language, `other` excluded; each destination's own cap, quiet hours and digest; rendering; the bot role's grants; digests in parts, held alerts marked, the feedback buttons removed |
-| 7 | `add-youtube-virality-scoring` | Curves, spreads and threshold measured on YouTube data; `scoring/` made platform-blind |
+| 7 | `add-youtube-virality-scoring` | Curves, spreads and threshold measured on YouTube data, short-form and long-form apart, broadcasts left out; a channel's own reference at a day old or its settled videos; a day's spikes of a channel one event; the replay refitting day by day; `scoring/` made platform-blind, Telegram's answers pinned by a record; two passes in every environment; a series of each platform's baseline runs |
 
 **Left to change 5's explore by change 4, and how each closed (2026-11-01, measured at 175 seeds):**
 - **`brandPartner`: not read, and not probed.** It is a sponsorship grant, not a reference, and answers none of the three questions. A probe could not have settled whether an API key receives it: an empty answer reads the same as "this video has none", and no video is known to carry one.

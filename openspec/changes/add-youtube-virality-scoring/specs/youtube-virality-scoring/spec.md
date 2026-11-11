@@ -235,6 +235,25 @@ The system SHALL score stored readings as of past moments, refitting the baselin
 - **THEN** it reports per language and day what would have been raised and folded at that threshold
 - **AND** no baseline run and no alert is written
 
+#### Scenario: A crossing followed to its newest reading
+
+- **GIVEN** a replayed video that crossed at eight hours old
+- **WHEN** its newest reading, five days old, is still three times its expectation
+- **THEN** the replay reports it as held
+- **AND** one whose newest reading that old is back near its expectation as faded, and one with no reading three days old as too early
+
+#### Scenario: Several thresholds in one run
+
+- **WHEN** a replay is given several thresholds and a comment minimum
+- **THEN** it reports each threshold's volume and outcomes, the baselines fitted once
+
+#### Scenario: Settled readings taken after the day, on request
+
+- **GIVEN** settled readings first taken yesterday, and a video that crossed five days ago
+- **WHEN** a replay is asked to let each day's fit take settled readings taken later
+- **THEN** the video crosses on its own day, and the report says settled readings taken later were used
+- **AND** without the request it cannot cross before those readings exist
+
 #### Scenario: The day's own baselines
 
 - **GIVEN** a video published on the fifth day of a replay
