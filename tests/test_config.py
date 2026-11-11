@@ -623,3 +623,54 @@ def test_youtubes_digest_inside_its_quiet_hours_is_refused(
 
     with pytest.raises(ValidationError, match="youtube_alert_digest_hour"):
         build()
+
+
+# --- YouTube scoring -------------------------------------------------
+
+
+def test_youtube_scoring_defaults_are_its_own(env: pytest.MonkeyPatch) -> None:
+    settings = build()
+    assert settings.youtube_alert_spike_fold_hours == 24.0
+    assert settings.youtube_scoring_short_max_seconds == 180
+    assert (
+        settings.youtube_baseline_mature_days,
+        settings.youtube_baseline_mature_max_days,
+    ) == (29, 120)
+
+
+def test_an_empty_youtube_settled_window_is_refused(
+    env: pytest.MonkeyPatch,
+) -> None:
+    env.setenv("YOUTUBE_BASELINE_MATURE_DAYS", "120")
+    env.setenv("YOUTUBE_BASELINE_MATURE_MAX_DAYS", "120")
+    with pytest.raises(ValidationError, match="settled window"):
+        build()
+
+
+def test_a_youtube_minimum_above_the_newest_count_is_refused(
+    env: pytest.MonkeyPatch,
+) -> None:
+    env.setenv("YOUTUBE_BASELINE_RECENT_VIDEOS", "5")
+    env.setenv("YOUTUBE_BASELINE_RECENT_MIN_VIDEOS", "6")
+    with pytest.raises(ValidationError, match="reference of its own"):
+        build()
+
+
+def test_no_youtube_signal_to_alert_on_is_refused(
+    env: pytest.MonkeyPatch,
+) -> None:
+    env.setenv("YOUTUBE_ALERT_SPIKE_METRICS", "[]")
+    with pytest.raises(ValidationError, match="youtube_alert_spike_metrics"):
+        build()
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["YOUTUBE_ALERT_SPIKE_Z", "YOUTUBE_ALERT_SPIKE_FOLD_HOURS"],
+)
+def test_a_youtube_threshold_or_window_must_be_positive(
+    env: pytest.MonkeyPatch, name: str
+) -> None:
+    env.setenv(name, "0")
+    with pytest.raises(ValidationError):
+        build()

@@ -18,7 +18,7 @@ from pydantic import (
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from itgraph.db.models import Metric
+from itgraph.db.models import Metric, YtMetric
 from itgraph.yt_quota import general_cap, search_cap
 
 __all__ = ["ProxyType", "Settings", "settings"]
@@ -702,6 +702,49 @@ class Settings(BaseSettings):
     # limit.
     youtube_backfill_general_floor: int = Field(default=2_000, ge=0)
 
+    # --- YouTube scoring ---------------------------------------------
+    #
+    # YouTube's own, apart from Telegram's: views accrue over days rather
+    # than hours, a third of the uploads are Shorts, and none of Telegram's
+    # numbers carried over (`add-youtube-virality-scoring`). One threshold
+    # for both languages: a z is comparable across channels because each is
+    # divided by its own spread, and a threshold per language would undo it.
+
+    # Provisional: Telegram's nominal tail, until a replay of YouTube's
+    # readings prices it. The release that carries this value goes to a
+    # test environment alone.
+    youtube_alert_spike_z: float = Field(default=3.7, gt=0)
+    youtube_alert_spike_metrics: tuple[YtMetric, ...] = (
+        YtMetric.VIEWS,
+        YtMetric.LIKES,
+        YtMetric.COMMENTS,
+    )
+    # Telegram's minimum, to start: the replay prices YouTube's own.
+    youtube_alert_spike_comments_min: int = Field(default=10, ge=0)
+    # A day, not Telegram's six hours: readings are hours to days apart, so
+    # one channel-wide event's videos cross at different scheduled ages.
+    youtube_alert_spike_fold_hours: float = Field(default=24.0, gt=0)
+    # The longest a short-form video runs: YouTube's limit for a Short since
+    # October 2024. Measured, videos of 61–180 s read like those of a
+    # minute, not like long-form ones.
+    youtube_scoring_short_max_seconds: int = Field(default=180, ge=1)
+    youtube_scoring_replay_days: float = Field(default=14.0, gt=0)
+    # How much reading history the curves are fitted from.
+    youtube_baseline_window_days: int = Field(default=28, ge=1)
+    # A channel's settled videos, its fallback reference: one reading each,
+    # the latest taken inside this window of age, and at least this many.
+    youtube_baseline_mature_days: int = Field(default=29, ge=1)
+    youtube_baseline_mature_max_days: int = Field(default=120, ge=2)
+    youtube_baseline_min_channel_videos: int = Field(default=10, ge=1)
+    # A channel's own reference: its newest videos of a format at a day old.
+    youtube_baseline_recent_videos: int = Field(default=20, ge=1)
+    youtube_baseline_recent_min_videos: int = Field(default=10, ge=1)
+    youtube_baseline_recent_max_days: int = Field(default=180, ge=1)
+    youtube_baseline_min_band_samples: int = Field(default=20, ge=1)
+    youtube_baseline_min_band_spread_posts: int = Field(default=100, ge=1)
+    # Baselines older than this are named stale by the scoring pass.
+    youtube_baseline_refresh_days: float = Field(default=2.0, gt=0)
+
     backup_dir: Path = DEFAULT_BACKUP_DIR
 
     # Where the PostgreSQL tools run. The Mac keeps Postgres in a
@@ -1226,6 +1269,44 @@ class Settings(BaseSettings):
                 "alert_spike_metrics is empty: the scoring pass would run, "
                 "compute every baseline and raise nothing, which is "
                 "indistinguishable from a quiet day"
+            )
+        if not self.youtube_alert_spike_metrics:
+            raise ValueError(
+                "youtube_alert_spike_metrics is empty: the YouTube scoring "
+                "pass would raise nothing, which is indistinguishable from a "
+                "quiet day"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _youtube_references_can_be_taken(self) -> Self:
+        """Refuse windows that select nothing, and a minimum past the count.
+
+        Either would leave every channel without a reference at once, and
+        the pass would report it as an inventory with no history — the one
+        thing it cannot be told apart from anywhere but here.
+        """
+        if (
+            self.youtube_baseline_mature_max_days
+            <= self.youtube_baseline_mature_days
+        ):
+            raise ValueError(
+                "youtube_baseline_mature_max_days "
+                f"({self.youtube_baseline_mature_max_days}) is not above "
+                "youtube_baseline_mature_days "
+                f"({self.youtube_baseline_mature_days}): the settled window "
+                "would be empty"
+            )
+        if (
+            self.youtube_baseline_recent_min_videos
+            > self.youtube_baseline_recent_videos
+        ):
+            raise ValueError(
+                "youtube_baseline_recent_min_videos "
+                f"({self.youtube_baseline_recent_min_videos}) is above "
+                "youtube_baseline_recent_videos "
+                f"({self.youtube_baseline_recent_videos}): no channel could "
+                "take a reference of its own"
             )
         return self
 

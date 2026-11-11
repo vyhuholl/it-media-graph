@@ -1718,6 +1718,65 @@ def test_now_is_hidden() -> None:
     assert "--now" not in runner.invoke(app, ["score", "--help"]).output
 
 
+def test_youtube_scoring_needs_no_key_and_asks_youtube_nothing(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    """Both run in a test environment, which holds no YouTube key."""
+    from itgraph.config import settings
+    from itgraph.yt import client as yt_client
+
+    use_test_database(monkeypatch, database_url)
+    monkeypatch.setattr(settings, "youtube_api_key", None)
+
+    def refuse(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("YouTube scoring must make no request")
+
+    monkeypatch.setattr(yt_client, "youtube", refuse)
+
+    refreshed = runner.invoke(app, ["yt", "baselines"])
+    assert refreshed.exit_code == 0, refreshed.output
+    assert "have a baseline" in refreshed.output
+
+    scored = runner.invoke(app, ["yt", "score"])
+    assert scored.exit_code == 0, scored.output
+
+    replayed = runner.invoke(app, ["yt", "score", "--replay", "--since", "2"])
+    assert replayed.exit_code == 0, replayed.output
+    assert "replay of 2 day(s)" in replayed.output
+
+
+def test_youtube_score_says_so_without_baselines(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+
+    result = runner.invoke(app, ["yt", "score"])
+
+    assert result.exit_code == 0, result.output
+    assert "itgraph yt baselines" in result.output
+
+
+@pytest.mark.parametrize(
+    "option",
+    [
+        ["--since", "3"],
+        ["--list"],
+        ["--comments-min", "5"],
+        ["--late-settled"],
+        ["--threshold", "3.7", "--threshold", "4.5"],
+    ],
+)
+def test_youtube_replay_options_need_replay(
+    monkeypatch: pytest.MonkeyPatch, database_url: str, option: list[str]
+) -> None:
+    use_test_database(monkeypatch, database_url)
+
+    result = runner.invoke(app, ["yt", "score", *option])
+
+    assert result.exit_code != 0
+    assert "--replay" in result.output
+
+
 def test_neither_scoring_command_connects_to_telegram(
     monkeypatch: pytest.MonkeyPatch, database_url: str
 ) -> None:
@@ -2057,3 +2116,30 @@ def test_backup_without_offsite_configuration_makes_no_request(
 
     assert result.exit_code == 0
     copy.assert_not_called()
+
+
+def test_a_youtube_replay_compares_thresholds_in_one_run(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+
+    result = runner.invoke(
+        app,
+        [
+            "yt",
+            "score",
+            "--replay",
+            "--since",
+            "2",
+            "--threshold",
+            "3.7",
+            "--threshold",
+            "4.5",
+            "--comments-min",
+            "5",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "at z 3.7, comments from 5" in result.output
+    assert "at z 4.5, comments from 5" in result.output

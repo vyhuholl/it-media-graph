@@ -465,6 +465,41 @@ class YtAlertKind(enum.StrEnum):
     COMMENT_SPIKE = "comment_spike"
 
 
+class YtMetric(enum.StrEnum):
+    """The three counters a video is scored on, each against its own curve.
+
+    YouTube's own type, as ``YtChannelKind`` is: there is no forward, and a
+    like is not a reaction. The values match the columns of
+    ``yt_raw_video_stats`` and the fields of ``derive.yt_videos.Counters``,
+    so the three never need translating.
+    """
+
+    VIEWS = "views"
+    LIKES = "likes"
+    COMMENTS = "comments"
+
+    def alert_kind(self) -> YtAlertKind:
+        """The alert this metric raises when it is a video's best score."""
+        return {
+            YtMetric.VIEWS: YtAlertKind.VIEWS_SPIKE,
+            YtMetric.LIKES: YtAlertKind.LIKE_SPIKE,
+            YtMetric.COMMENTS: YtAlertKind.COMMENT_SPIKE,
+        }[self]
+
+
+class YtVideoFormat(enum.StrEnum):
+    """Which population a video is scored in, by its duration.
+
+    Worked out from the stored payload whenever a video is scored, and
+    never stored per video: what is kept under it is a channel's reference
+    and a kind's curve, which say nothing of any one video. A broadcast —
+    a stream or a premiere — is in neither and is not scored.
+    """
+
+    SHORT = "short"
+    LONG = "long"
+
+
 class YtAlertDelivery(enum.StrEnum):
     """How a YouTube alert left the queue.
 
@@ -2293,6 +2328,172 @@ class YtAlert(Base):
         return (
             f"YtAlert(kind={self.kind.value!r}, video_id={self.video_id!r}, "
             f"band={self.band})"
+        )
+
+
+class YtBaselineRun(Base):
+    """One refresh of YouTube's baselines, and the parameters it used.
+
+    Telegram's ``BaselineRun`` for videos: everything a refresh writes
+    points here, the newest *completed* run is what scoring reads, and an
+    interrupted one is never read. Older runs stay, so a threshold argued
+    about later can be held against the baselines it was argued with.
+
+    The three channel counts are the run's own, and are what the shared
+    monitoring reads of it — no reference, curve or factor.
+    """
+
+    __tablename__ = "yt_baseline_runs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+    # How far back videos are read for the curves, and how a channel's
+    # references were taken: its settled videos inside [mature_days,
+    # mature_max_days] of age, at least min_channel_videos of them; its own
+    # newest recent_videos, at least recent_min_videos, none older than
+    # recent_max_days.
+    window_days: Mapped[int] = mapped_column(Integer)
+    mature_days: Mapped[int] = mapped_column(Integer)
+    mature_max_days: Mapped[int] = mapped_column(Integer)
+    min_channel_videos: Mapped[int] = mapped_column(Integer)
+    recent_videos: Mapped[int] = mapped_column(Integer)
+    recent_min_videos: Mapped[int] = mapped_column(Integer)
+    recent_max_days: Mapped[int] = mapped_column(Integer)
+    # Below these a band is not fitted, or keeps no spread of its own.
+    min_band_samples: Mapped[int] = mapped_column(Integer)
+    min_band_spread_posts: Mapped[int] = mapped_column(Integer)
+
+    channels_in_scope: Mapped[int] = mapped_column(Integer)
+    channels_with_baseline: Mapped[int] = mapped_column(Integer)
+    channels_on_fallback: Mapped[int] = mapped_column(Integer)
+
+    def __repr__(self) -> str:
+        return f"YtBaselineRun(id={self.id}, started_at={self.started_at!r})"
+
+
+class YtChannelBaseline(Base):
+    """What one channel's videos of one format normally reach, per metric.
+
+    ``reference`` says what it is a median of: the channel's own newest
+    videos at a day old, or its settled videos, which become a day's figure
+    only through the kind's factor — Telegram's type, whose two values mean
+    the same here. For comments it is a mean, zeros kept.
+
+    An itgraph number about a channel, derived from readings and refitted
+    from them, as an alert's expectation is; it copies nothing YouTube said
+    about any one video.
+    """
+
+    __tablename__ = "yt_channel_baselines"
+
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("yt_baseline_runs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    channel_id: Mapped[str] = mapped_column(
+        ForeignKey("yt_channels.channel_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    format: Mapped[YtVideoFormat] = mapped_column(
+        _pg_enum(YtVideoFormat, "yt_video_format"), primary_key=True
+    )
+    metric: Mapped[YtMetric] = mapped_column(
+        _pg_enum(YtMetric, "yt_metric"), primary_key=True
+    )
+
+    median: Mapped[float] = mapped_column(Float)
+    samples: Mapped[int] = mapped_column(Integer)
+    reference: Mapped[BaselineReference] = mapped_column(
+        _pg_enum(BaselineReference, "baseline_reference")
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"YtChannelBaseline(channel_id={self.channel_id!r}, "
+            f"format={self.format.value!r}, metric={self.metric.value!r})"
+        )
+
+
+class YtMetricBaseline(Base):
+    """How a metric behaves on a kind of channel in one format.
+
+    Telegram's ``MetricBaseline`` with the format beside the kind: the
+    factor joining a day's value to a settled median, the pooled spread a
+    thin band falls back to, a counted metric's dispersion, and whether the
+    fit was borrowed from the format's pool because the kind was too thin.
+    """
+
+    __tablename__ = "yt_metric_baselines"
+
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("yt_baseline_runs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    kind: Mapped[YtChannelKind] = mapped_column(
+        _pg_enum(YtChannelKind, "yt_channel_kind"), primary_key=True
+    )
+    format: Mapped[YtVideoFormat] = mapped_column(
+        _pg_enum(YtVideoFormat, "yt_video_format"), primary_key=True
+    )
+    metric: Mapped[YtMetric] = mapped_column(
+        _pg_enum(YtMetric, "yt_metric"), primary_key=True
+    )
+
+    factor: Mapped[float] = mapped_column(Float)
+    spread: Mapped[float] = mapped_column(Float)
+    samples: Mapped[int] = mapped_column(Integer)
+    dispersion: Mapped[float | None] = mapped_column(Float)
+    borrowed: Mapped[bool] = mapped_column(
+        Boolean, server_default=false(), default=False
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"YtMetricBaseline(kind={self.kind.value!r}, "
+            f"format={self.format.value!r}, metric={self.metric.value!r})"
+        )
+
+
+class YtCurvePoint(Base):
+    """One point of a YouTube growth curve: the fraction reached by a band.
+
+    A fraction of the video's own value at a day old, and past it more than
+    one: YouTube's views still grow at a week. ``spread`` is the band's own
+    dispersion, ``NULL`` where too few videos were seen to measure it.
+    """
+
+    __tablename__ = "yt_curve_points"
+
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("yt_baseline_runs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    kind: Mapped[YtChannelKind] = mapped_column(
+        _pg_enum(YtChannelKind, "yt_channel_kind"), primary_key=True
+    )
+    format: Mapped[YtVideoFormat] = mapped_column(
+        _pg_enum(YtVideoFormat, "yt_video_format"), primary_key=True
+    )
+    metric: Mapped[YtMetric] = mapped_column(
+        _pg_enum(YtMetric, "yt_metric"), primary_key=True
+    )
+    band: Mapped[str] = mapped_column(Text, primary_key=True)
+
+    fraction: Mapped[float] = mapped_column(Float)
+    spread: Mapped[float | None] = mapped_column(Float)
+    samples: Mapped[int] = mapped_column(Integer)
+
+    def __repr__(self) -> str:
+        return (
+            f"YtCurvePoint(kind={self.kind.value!r}, "
+            f"format={self.format.value!r}, metric={self.metric.value!r}, "
+            f"band={self.band!r})"
         )
 
 

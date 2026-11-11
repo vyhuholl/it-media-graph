@@ -150,6 +150,40 @@ def test_the_role_cannot_read_what_it_has_no_use_for(
         asyncio.run(as_role(migrated, statement))
 
 
+@pytest.mark.parametrize("table", ["baseline_runs", "yt_baseline_runs"])
+def test_the_role_reads_when_a_run_completed_and_what_it_counted(
+    migrated: URL, table: str
+) -> None:
+    asyncio.run(
+        as_role(
+            migrated,
+            "SELECT completed_at, channels_in_scope, channels_with_baseline "
+            f"FROM {table}",
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "SELECT median FROM channel_baselines",
+        "SELECT median FROM yt_channel_baselines",
+        "SELECT channel_id FROM yt_channel_baselines",
+        "SELECT factor FROM metric_baselines",
+        "SELECT factor FROM yt_metric_baselines",
+        "SELECT fraction FROM curve_points",
+        "SELECT fraction FROM yt_curve_points",
+        "SELECT mature_days FROM baseline_runs",
+        "SELECT channels_on_fallback FROM yt_baseline_runs",
+    ],
+)
+def test_the_role_cannot_read_a_baseline(
+    migrated: URL, statement: str
+) -> None:
+    with pytest.raises(DBAPIError, match="permission denied"):
+        asyncio.run(as_role(migrated, statement))
+
+
 @pytest.mark.parametrize(
     "statement",
     [

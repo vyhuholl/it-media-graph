@@ -8,17 +8,19 @@ current label. A relabelled channel's alert follows the label; one whose
 channel turned `other`, or has no label left to route by, is closed as
 excluded rather than sent.
 
-Nothing here raises an alert — the scoring change does — and nothing here
-copies what YouTube said onto one: the evidence is read from where it is
-stored, at the moment of sending.
+Raising is the scoring pass's: a head and its folds written in one
+transaction, each naming the reading its score came from. Nothing here
+copies what YouTube said onto an alert: the evidence is read from where it
+is stored, at the moment of sending.
 """
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 from sqlalchemy import case, func, literal, select, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -30,11 +32,14 @@ from itgraph.db.models import (
     YtAlertRoute,
     YtChannel,
     YtLang,
+    YtMetric,
     YtRawChannel,
     YtRawVideo,
     YtRawVideoStat,
 )
 from itgraph.derive.yt_videos import Counters, facts_of
+from itgraph.scoring.fold import Head, Placed
+from itgraph.scoring.score import Spike
 
 __all__ = [
     "YtEvidence",
@@ -48,7 +53,10 @@ __all__ = [
     "hold",
     "mark_delivered",
     "mark_failed",
+    "open_yt_heads",
     "outstanding",
+    "raise_yt_spikes",
+    "raised_yt_spikes",
     "route_counts",
     "settle_folds",
     "yt_alert_evidence",
@@ -451,3 +459,128 @@ async def yt_alert_evidence(
         counted_at=newest[0] if newest is not None else None,
         scored_comments=scored_comments,
     )
+
+
+def _kind(spike: Spike[str, str]) -> YtAlertKind:
+    return YtMetric(spike.score.metric).alert_kind()
+
+
+async def raised_yt_spikes(
+    session: AsyncSession, video_ids: Iterable[str]
+) -> set[tuple[YtAlertKind, str]]:
+    """Which of these videos already have an alert of a kind, folded or not.
+
+    What a live pass removes from its spikes before folding them: it
+    re-scores every video in its window, and one raised an hour ago would
+    otherwise take part in folding as a new crossing.
+    """
+    ids = list(dict.fromkeys(video_ids))
+    if not ids:
+        return set()
+    rows = await session.execute(
+        select(YtAlert.kind, YtAlert.video_id).where(YtAlert.video_id.in_(ids))
+    )
+    return {(kind, video) for kind, video in rows.tuples()}
+
+
+async def open_yt_heads(
+    session: AsyncSession, *, since: datetime
+) -> dict[str, Head[str, str]]:
+    """Each channel's newest head raised since a moment.
+
+    The channel is the one YouTube attributes the head's video to now, as
+    for a spike being folded: two videos of one channel are one event
+    whichever channel they were published on.
+    """
+    rows = await session.execute(
+        select(
+            YtAlert.id,
+            YtRawVideo.channel_id,
+            YtAlert.video_id,
+            YtAlert.raised_at,
+        )
+        .join(YtRawVideo, YtRawVideo.video_id == YtAlert.video_id)
+        .where(
+            YtAlert.folded_into.is_(None),
+            YtAlert.raised_at >= since,
+            YtRawVideo.channel_id.is_not(None),
+        )
+        .distinct(YtRawVideo.channel_id)
+        .order_by(
+            YtRawVideo.channel_id, YtAlert.raised_at.desc(), YtAlert.id.desc()
+        )
+    )
+    return {
+        channel: Head(
+            alert_id=alert_id, post_key=(channel, video), raised_at=raised_at
+        )
+        for alert_id, channel, video, raised_at in rows.tuples()
+        if channel is not None
+    }
+
+
+async def raise_yt_spikes(
+    session: AsyncSession, placed: Sequence[Placed[str, str]]
+) -> tuple[int, int]:
+    """Record spike alerts, heads and folds. Returns (new, of which folded).
+
+    Telegram's ``raise_spikes`` for videos: heads first, so their ids exist
+    for the folds, in the caller's one transaction, and a second raise of a
+    kind and video absorbed by the constraint. The band is always 1. The
+    reading named is the one the score came from; ``expected`` is kept for
+    a comment spike alone, whose message states it — the count is read back
+    from that reading.
+    """
+    if not placed:
+        return 0, 0
+
+    def row(spike: Spike[str, str]) -> dict[str, object]:
+        if spike.scored_at is None:
+            raise ValueError(
+                f"a spike of {spike.post_key[1]} names no reading to point at"
+            )
+        kind = _kind(spike)
+        return {
+            "kind": kind,
+            "video_id": spike.post_key[1],
+            "scored_at": spike.scored_at,
+            "band": 1,
+            "value": float(spike.score.z),
+            "expected": (
+                float(spike.score.expected)
+                if kind is YtAlertKind.COMMENT_SPIKE
+                else None
+            ),
+        }
+
+    async def write(
+        rows: list[dict[str, object]],
+    ) -> list[tuple[int, YtAlertKind, str]]:
+        if not rows:
+            return []
+        result = await session.execute(
+            insert(YtAlert)
+            .values(rows)
+            .on_conflict_do_nothing(constraint="uq_yt_alerts_video_band")
+            .returning(YtAlert.id, YtAlert.kind, YtAlert.video_id)
+        )
+        return [(alert_id, kind, video) for alert_id, kind, video in result]
+
+    heads = await write(
+        [row(entry.spike) for entry in placed if entry.into is None]
+    )
+    ids = {(kind, video): alert_id for alert_id, kind, video in heads}
+
+    folds: list[dict[str, object]] = []
+    for entry in placed:
+        if entry.into is None:
+            continue
+        if isinstance(entry.into, Head):
+            head_id: int | None = entry.into.alert_id
+        else:
+            head_id = ids.get((_kind(entry.into), entry.into.post_key[1]))
+        if head_id is None:
+            continue
+        folds.append({**row(entry.spike), "folded_into": head_id})
+    folded = await write(folds)
+    return len(heads) + len(folded), len(folded)

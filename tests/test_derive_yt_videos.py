@@ -7,9 +7,17 @@ a counter YouTube left out must read as absent, never as zero.
 
 from datetime import UTC, datetime
 
+import pytest
 from ytfakes import channel_id, video_id, video_resource
 
-from itgraph.derive.yt_videos import Counters, counters_of, facts_of
+from itgraph.db.models import YtVideoFormat
+from itgraph.derive.yt_videos import (
+    Counters,
+    counters_of,
+    duration_of,
+    facts_of,
+    format_of,
+)
 
 PUBLISHED = datetime(2026, 10, 26, 12, 0, tzinfo=UTC)
 
@@ -94,3 +102,67 @@ def test_a_moment_without_a_zone_is_not_trusted() -> None:
     payload["snippet"]["publishedAt"] = "2026-10-26T12:00:00"
 
     assert facts_of(payload).published_at is None
+
+
+# --- format, for scoring ---------------------------------------------
+
+
+def _lasting(duration: str | None) -> dict[str, object]:
+    payload = video_resource(1, published=PUBLISHED)
+    if duration is None:
+        del payload["contentDetails"]
+    else:
+        payload["contentDetails"] = {"duration": duration}
+    return payload
+
+
+@pytest.mark.parametrize(
+    ("duration", "seconds", "expected"),
+    [
+        ("PT40S", 40, YtVideoFormat.SHORT),
+        ("PT2M30S", 150, YtVideoFormat.SHORT),
+        ("PT3M", 180, YtVideoFormat.SHORT),
+        ("PT3M1S", 181, YtVideoFormat.LONG),
+        ("PT1H", 3600, YtVideoFormat.LONG),
+        ("P1DT2H", 93600, YtVideoFormat.LONG),
+    ],
+)
+def test_the_format_is_the_duration_s(
+    duration: str, seconds: int, expected: YtVideoFormat
+) -> None:
+    payload = _lasting(duration)
+
+    assert duration_of(payload) == seconds
+    assert format_of(payload, short_max_seconds=180) == expected
+
+
+@pytest.mark.parametrize("duration", ["P0D", "PT0S", "P", "PT", "12:30", None])
+def test_a_length_that_cannot_be_read_is_no_format(
+    duration: str | None,
+) -> None:
+    payload = _lasting(duration)
+
+    assert duration_of(payload) is None
+    assert format_of(payload, short_max_seconds=180) is None
+
+
+def test_a_premiere_is_not_scored_however_long() -> None:
+    """A premiere is run as a broadcast, and carries its details."""
+    payload = video_resource(1, published=PUBLISHED, live_started=PUBLISHED)
+    payload["contentDetails"] = {"duration": "PT45M"}
+
+    assert "liveStreamingDetails" in payload
+    assert format_of(payload, short_max_seconds=180) is None
+
+
+def test_a_finished_stream_is_not_scored() -> None:
+    payload = video_resource(1, published=PUBLISHED, live_started=PUBLISHED)
+    payload["contentDetails"] = {"duration": "PT40S"}
+
+    assert format_of(payload, short_max_seconds=180) is None
+
+
+def test_the_limit_is_the_caller_s() -> None:
+    payload = _lasting("PT2M")
+
+    assert format_of(payload, short_max_seconds=60) == YtVideoFormat.LONG

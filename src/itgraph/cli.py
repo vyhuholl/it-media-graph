@@ -1878,6 +1878,168 @@ def yt_refresh() -> None:
     _run_yt(run())
 
 
+@yt_app.command("baselines")
+def yt_baselines(now: NowOption = None) -> None:
+    """Recompute what a normal video looks like on every YouTube channel.
+
+    Reads the stored videos and readings, writes one baseline run, and
+    touches nothing else: no request to YouTube, no quota, no API key. Per
+    channel and format, its own newest videos at a day old where it has
+    enough, its settled videos otherwise; per kind and format, the curves
+    and spreads. Seeds labelled `en` or `ru` only. Runs daily on the host.
+    """
+    from itgraph.db.session import Database
+    from itgraph.scoring.yt_refresh import refresh_yt_baselines
+
+    moment = _moment(now)
+
+    async def run() -> None:
+        database = Database()
+        try:
+            summary = await refresh_yt_baselines(database, now=moment)
+        finally:
+            await database.dispose()
+        typer.echo(summary.line())
+
+    _run(run())
+
+
+@yt_app.command("score")
+def yt_score(
+    thresholds: Annotated[
+        list[float] | None,
+        typer.Option(
+            "--threshold",
+            help=(
+                "Alert past this z instead of the configured one. With "
+                "--replay, give it several times to compare them."
+            ),
+        ),
+    ] = None,
+    replay: Annotated[
+        bool,
+        typer.Option(
+            "--replay",
+            help="Report what would have fired. Writes and sends nothing.",
+        ),
+    ] = False,
+    since: Annotated[
+        float | None,
+        typer.Option(
+            "--since",
+            help="Replay this many days back instead of the default.",
+        ),
+    ] = None,
+    comments_min: Annotated[
+        int | None,
+        typer.Option(
+            "--comments-min",
+            min=0,
+            help="With --replay, the fewest comments that may alert.",
+        ),
+    ] = None,
+    listing: Annotated[
+        bool,
+        typer.Option(
+            "--list", help="With --replay, every head and its folds by id."
+        ),
+    ] = False,
+    late_settled: Annotated[
+        bool,
+        typer.Option(
+            "--late-settled",
+            help=(
+                "With --replay, let each day's fit take settled readings "
+                "taken after it, up to the replay's end."
+            ),
+        ),
+    ] = False,
+    now: NowOption = None,
+) -> None:
+    """Find videos doing unusually well for their channel, format and age.
+
+    Reads the stored readings and the newest YouTube baseline run, writes
+    alerts; makes no request to YouTube and needs no API key. A video
+    raises at most one alert per signal, and a channel's spikes within a
+    day are one event, told once.
+
+    `--replay` scores the last days as the passes would have, refitting
+    the baselines as of each day's start, and writes nothing: it is how the
+    threshold and the comment minimum are priced. Each crossing is followed
+    to its newest reading: it held if, three days old or more, the video is
+    still at least twice its channel's norm, and faded if not.
+
+    `--late-settled` scores days before settled readings existed, by letting
+    each day's fit take those read later: settled videos are a month old or
+    more, never the ones scored.
+    """
+    from itgraph.config import settings
+    from itgraph.db.session import Database
+    from itgraph.scoring.yt_run import run_yt_scoring, sweep_yt_scoring
+
+    if (
+        since is not None
+        or listing
+        or comments_min is not None
+        or late_settled
+    ) and not replay:
+        raise typer.BadParameter(
+            "--since, --comments-min, --late-settled and --list need --replay"
+        )
+    if thresholds and len(thresholds) > 1 and not replay:
+        raise typer.BadParameter("several --threshold need --replay")
+    moment = _moment(now) or datetime.now(UTC)
+
+    async def run() -> None:
+        database = Database()
+        try:
+            if not replay:
+                summary = await run_yt_scoring(
+                    database,
+                    now=moment,
+                    threshold=thresholds[0] if thresholds else None,
+                )
+                typer.echo(summary.line())
+                return
+            found = await sweep_yt_scoring(
+                database,
+                days=since
+                if since is not None
+                else settings.youtube_scoring_replay_days,
+                thresholds=thresholds or [settings.youtube_alert_spike_z],
+                now=moment,
+                comments_min=comments_min,
+                late_settled=late_settled,
+            )
+        finally:
+            await database.dispose()
+
+        for replayed in found:
+            lines = (
+                replayed.lines()
+                if len(found) == 1
+                else replayed.summary_lines()
+            )
+            for line in lines:
+                typer.echo(line)
+            if not listing:
+                continue
+            for entry in replayed.placed:
+                spike = entry.spike
+                line = (
+                    f"  z {spike.score.z:5.1f}  {spike.score.metric:<8} "
+                    f"{replayed.formats[spike.post_key[1]]:<5} "
+                    f"{spike.post_key[1]}  {spike.score.observed:.0f} vs "
+                    f"{spike.score.expected:.1f} expected at "
+                    f"{_hours(spike.score.age)}; {replayed.outcome(spike)}"
+                )
+                if entry.into is not None:
+                    line += f"  ↳ folded into {entry.into.post_key[1]}"
+                typer.echo(line)
+
+    _run(run())
+
+
 @yt_app.command("watch")
 def yt_watch() -> None:
     """One pass of the YouTube poll loop: new uploads, then due readings.

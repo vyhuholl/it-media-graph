@@ -77,3 +77,24 @@ async def test_every_pass_ends_normally_on_an_empty_database(
     summary = await run_scoring(database, now=NOW)
 
     assert summary.raised == 0
+
+
+async def test_youtube_s_passes_end_normally_on_a_copy_60_days_old(
+    database: Database,
+) -> None:
+    from ytscoring import a_channel
+
+    from itgraph.scoring.yt_refresh import refresh_yt_baselines
+    from itgraph.scoring.yt_run import run_yt_scoring
+
+    await a_channel(database, 1, now=OLD)
+
+    refreshed = await refresh_yt_baselines(database, now=NOW)
+    scored = await run_yt_scoring(database, now=NOW)
+
+    assert refreshed.run_id
+    assert scored.raised == 0
+    async with database.session() as session:
+        assert (
+            await session.scalar(text("SELECT count(*) FROM yt_alerts")) == 0
+        )
