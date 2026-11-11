@@ -27,7 +27,6 @@ would have been scored against.
 """
 
 import logging
-import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -44,23 +43,17 @@ from itgraph.db.baselines import (
 )
 from itgraph.db.models import BaselineReference, ChannelKind, Metric
 from itgraph.db.session import Database
-from itgraph.scoring.counts import MEAN_FLOOR, fit_dispersion
 from itgraph.scoring.curves import (
-    Curve,
+    TELEGRAM_BANDS,
     Observation,
-    band_of,
-    fit_band_spreads,
     fit_count_curve,
     fit_curve,
-    fit_factor,
-    fit_spread,
-    reference_at,
 )
+from itgraph.scoring.fit import Fit, Floors, RecentRule, fit, rolling
 from itgraph.scoring.score import COUNTED
 
-# What a residual is measured from: the reference one observation's post
-# would have been scored against, or ``None`` where it had none.
-Reference = Callable[[Observation], float | None]
+# What a residual is measured from: Telegram's posts' own reference.
+type Reference = Callable[[Observation[int, int]], float | None]
 
 __all__ = ["BaselineSummary", "refresh_baselines"]
 
@@ -125,94 +118,25 @@ class BaselineSummary:
         return line
 
 
-def _residuals(
-    entries: list[Observation],
-    *,
-    curve: Curve,
-    reference: Reference,
-) -> dict[str, dict[tuple[int, int], list[float]]]:
-    """``log(actual / expected)`` per age band and post, where both exist.
-
-    Computed against the curve just fitted, not against a previous run's:
-    the spread has to describe *this* estimate's error, or a threshold
-    expressed in it would be measuring the difference between two
-    vintages of baseline.
-
-    ``reference`` is the eight-hour value each observation is measured
-    from — the one its post would actually have been scored against,
-    which for a channel on its recent reference is built only from posts
-    settled before this one was published. A reference containing its
-    own posts fits them: measured, the residuals come out 5% narrower,
-    and a narrow ruler is the direction that over-alerts.
-
-    Grouped by band because the dispersion is not constant across a
-    post's life — measured, 1.18 at fifteen minutes against 0.98 at eight
-    hours. The caller both pools these and fits each band separately, so
-    a band too thin to speak for itself still has something to fall back
-    on. Kept per post within the band because how many posts a band saw,
-    not how many readings, is what says whether it can speak for itself.
-    """
-    residuals: dict[str, dict[tuple[int, int], list[float]]] = {}
-    for entry in entries:
-        band = band_of(entry.age)
-        if band is None:
-            continue
-        fraction = curve.fractions.get(band)
-        if fraction is None or fraction <= 0:
-            continue
-        base = reference(entry)
-        if base is None:
-            continue
-        expected = base * fraction
-        if expected <= 0 or entry.value <= 0:
-            continue
-        residuals.setdefault(band, {}).setdefault(entry.post_key, []).append(
-            math.log(entry.value / expected)
-        )
-    return residuals
+def _floors() -> Floors:
+    """The band floors, as configured."""
+    return Floors(
+        band_samples=settings.baseline_min_band_samples,
+        band_spread_posts=settings.baseline_min_band_spread_posts,
+    )
 
 
-@dataclass(frozen=True, slots=True)
-class Fit:
-    """A shape and its two rulers, fitted from one pool of observations."""
-
-    curve: Curve
-    factor: float
-    spread: float
-    band_spreads: dict[str, float]
-    samples: int
-    dispersion: float | None = None
-
-
-def _dispersion(
-    entries: list[Observation], *, curve: Curve, reference: Reference
-) -> float | str:
-    """A counted metric's dispersion for one pool, or why it has none.
-
-    Each reading against the mean its post would have been scored
-    against — the reference built from the posts settled before it, so a
-    post never fits its own ruler. Measured on at least as many distinct
-    posts as a band's own spread needs, for the same reason: fitted on a
-    handful of posts, a dispersion comes out too narrow as often as not,
-    and too narrow is the direction that over-alerts.
-    """
-    pairs: list[tuple[int, float]] = []
-    posts: set[tuple[int, int]] = set()
-    for entry in entries:
-        fraction = curve.at(entry.age)
-        base = reference(entry)
-        if fraction is None or base is None:
-            continue
-        pairs.append((round(entry.value), max(base * fraction, MEAN_FLOOR)))
-        posts.add(entry.post_key)
-    if len(posts) < settings.baseline_min_band_spread_posts:
-        return "too few posts to fit a dispersion"
-    dispersion = fit_dispersion(pairs)
-    return "no dispersion" if dispersion is None else dispersion
+def _rule() -> RecentRule:
+    """How a channel's own reference is taken, as configured."""
+    return RecentRule(
+        newest=settings.baseline_recent_posts,
+        minimum=settings.baseline_recent_min_posts,
+        max_age=timedelta(days=settings.baseline_recent_max_days),
+    )
 
 
 def _fit(
-    entries: list[Observation],
+    entries: list[Observation[int, int]],
     medians: dict[int, tuple[float, int]],
     *,
     recent: Reference | None = None,
@@ -220,78 +144,18 @@ def _fit(
 ) -> Fit | str:
     """Everything one pool of observations supports, or why it does not.
 
-    Returns the reason as a string rather than ``None`` so a caller can
-    say which of the three steps failed. "Not fitted" without a reason is
-    the kind of silence this whole change exists to remove.
-
-    ``recent`` gives an observation's recent reference where its channel
-    had one when the post went out; anything it does not cover is
-    measured from the mature median and the factor fitted here, which is
-    what scoring would have done with it.
-
-    ``counted`` is a counted metric's fit: the curve a ratio of sums, no
-    factor and no mature fallback, and a dispersion beside the spread.
+    ``scoring/fit.py`` under Telegram's bands and settings. A counted
+    metric's curve is a ratio of sums; every other one's a median of each
+    post's fraction.
     """
-    floor = settings.baseline_min_band_samples
-    if counted:
-        curve = fit_count_curve(entries, min_samples=floor)
-    else:
-        curve = fit_curve(entries, min_samples=floor)
-    if not curve.fractions:
-        return "no band met the minimum"
-
-    if counted:
-        factor: float | None = 1.0
-    else:
-        factor = fit_factor(
-            entries,
-            {channel: value for channel, (value, _) in medians.items()},
-            min_samples=floor,
-        )
-    if factor is None:
-        return "too few posts with a mature median"
-
-    def reference(entry: Observation) -> float | None:
-        if recent is not None and (value := recent(entry)) is not None:
-            return value
-        if counted:
-            return None
-        median = medians.get(entry.post_key[0])
-        return None if median is None else median[0] * factor
-
-    by_post = _residuals(entries, curve=curve, reference=reference)
-    residuals = {
-        band: [value for values in posts.values() for value in values]
-        for band, posts in by_post.items()
-    }
-    pooled = fit_spread(
-        [value for values in residuals.values() for value in values],
-        min_samples=floor,
-    )
-    if pooled is None:
-        # Without a spread there is no z, and one borrowed from another
-        # metric would apply that metric's shape to this one.
-        return "no measurable spread"
-
-    dispersion: float | None = None
-    if counted:
-        found = _dispersion(entries, curve=curve, reference=reference)
-        if isinstance(found, str):
-            return found
-        dispersion = found
-
-    return Fit(
-        curve=curve,
-        factor=factor,
-        spread=pooled,
-        band_spreads=fit_band_spreads(
-            residuals,
-            min_samples=floor,
-            posts={band: len(posts) for band, posts in by_post.items()},
-            min_posts=settings.baseline_min_band_spread_posts,
-        ),
-        samples=len(entries),
-        dispersion=dispersion,
+    return fit(
+        entries,
+        medians,
+        shape=fit_count_curve if counted else fit_curve,
+        floors=_floors(),
+        bands=TELEGRAM_BANDS,
+        recent=recent,
+        counted=counted,
     )
 
 
@@ -302,14 +166,7 @@ def _recent_reference(
     counted: bool = False,
 ) -> tuple[float, int] | None:
     """A channel's recent reference at a moment, under the settings."""
-    return reference_at(
-        history,
-        moment,
-        newest=settings.baseline_recent_posts,
-        minimum=settings.baseline_recent_min_posts,
-        max_age=timedelta(days=settings.baseline_recent_max_days),
-        counted=counted,
-    )
+    return _rule().at(history, moment, bands=TELEGRAM_BANDS, counted=counted)
 
 
 def _rolling(
@@ -317,28 +174,10 @@ def _rolling(
     *,
     counted: bool = False,
 ) -> Reference:
-    """Each observation's recent reference as of its own post's publication.
-
-    The stored reference evaluated at a different moment — the same
-    function — so the residuals the spread is fitted on are the ones
-    scoring will meet. Cached per post: a post is read many times, and
-    its reference does not depend on which reading asks.
-    """
-    cache: dict[tuple[int, int], float | None] = {}
-
-    def lookup(entry: Observation) -> float | None:
-        if entry.published is None:
-            return None
-        if entry.post_key not in cache:
-            found = _recent_reference(
-                history.get(entry.post_key[0], ()),
-                entry.published,
-                counted=counted,
-            )
-            cache[entry.post_key] = None if found is None else found[0]
-        return cache[entry.post_key]
-
-    return lookup
+    """Each observation's recent reference as of its own post's publication."""
+    return rolling(
+        history, rule=_rule(), bands=TELEGRAM_BANDS, counted=counted
+    )
 
 
 async def refresh_baselines(

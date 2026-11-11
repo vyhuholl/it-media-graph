@@ -61,7 +61,7 @@ def burst_heads(
 
 
 @dataclass(frozen=True, slots=True)
-class Head:
+class Head[C, P]:
     """A head already in the queue, which later spikes may fold into.
 
     Separate from a ``Spike`` because it is a different fact: this one
@@ -72,24 +72,24 @@ class Head:
     """
 
     alert_id: int
-    post_key: tuple[int, int]
+    post_key: tuple[C, P]
     raised_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
-class Placed:
+class Placed[C, P]:
     """A spike, and the head it folds into — or ``None`` if it is one."""
 
-    spike: Spike
-    into: Spike | Head | None
+    spike: Spike[C, P]
+    into: Spike[C, P] | Head[C, P] | None
 
 
-def fold(
-    spikes: Sequence[Spike],
+def fold[C, P](
+    spikes: Sequence[Spike[C, P]],
     *,
-    heads: Mapping[int, Head],
+    heads: Mapping[C, Head[C, P]],
     window: timedelta,
-) -> list[Placed]:
+) -> list[Placed[C, P]]:
     """Which spikes head an event, and which fold into one.
 
     A spike folds into its channel's head if it crossed less than
@@ -106,10 +106,10 @@ def fold(
     crossed at one reading, highest score first: the head is the earliest
     post to move, and the most remarkable of those that moved together.
     """
-    open_events: dict[int, tuple[datetime, Spike | Head]] = {
+    open_events: dict[C, tuple[datetime, Spike[C, P] | Head[C, P]]] = {
         channel: (head.raised_at, head) for channel, head in heads.items()
     }
-    placed: list[Placed] = []
+    placed: list[Placed[C, P]] = []
     for spike in sorted(
         spikes,
         key=lambda entry: (entry.crossed_at, -entry.score.z, entry.post_key),

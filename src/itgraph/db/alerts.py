@@ -143,7 +143,7 @@ async def raise_cascades(
     return written
 
 
-def _spike_kind(spike: Spike) -> AlertKind:
+def _spike_kind(spike: Spike[int, int]) -> AlertKind:
     return Metric(spike.score.metric).alert_kind()
 
 
@@ -168,7 +168,7 @@ async def raised_spikes(
 
 async def open_heads(
     session: AsyncSession, *, since: datetime
-) -> dict[int, Head]:
+) -> dict[int, Head[int, int]]:
     """Each channel's newest head spike raised since a moment.
 
     A head is a spike that is not itself folded. Only the newest matters:
@@ -195,7 +195,7 @@ async def open_heads(
 
 
 async def raise_spikes(
-    session: AsyncSession, placed: Sequence[Placed]
+    session: AsyncSession, placed: Sequence[Placed[int, int]]
 ) -> tuple[int, int]:
     """Record spike alerts, heads and folds. Returns (new, of which folded).
 
@@ -229,7 +229,7 @@ async def raise_spikes(
     if not placed:
         return 0, 0
 
-    def row(spike: Spike) -> dict[str, object]:
+    def row(spike: Spike[int, int]) -> dict[str, object]:
         kind = _spike_kind(spike)
         # The count and its expectation, kept for a comment spike alone:
         # the z does not give the count back, and the next refresh would

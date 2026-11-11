@@ -28,11 +28,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from itgraph.config import settings
 from itgraph.db.alerts import open_heads, raise_spikes, raised_spikes
-from itgraph.db.baselines import Baselines, load_baselines
+from itgraph.db.baselines import load_baselines
 from itgraph.db.models import Metric
 from itgraph.db.session import Database
 from itgraph.scoring.fold import Head, Placed, burst_heads, fold
-from itgraph.scoring.score import COUNTED, Score, Spike, score_post
+from itgraph.scoring.score import (
+    COUNTED,
+    Baseline,
+    Reading,
+    Spike,
+    best_per_post,
+)
 
 __all__ = ["Reading", "SpikeSummary", "run_scoring"]
 
@@ -71,26 +77,6 @@ READINGS = """
 
 
 @dataclass(frozen=True, slots=True)
-class Reading:
-    """One snapshot of one post, as the scorer wants it.
-
-    ``age`` is ``observed_at`` minus the publication date — computed
-    here, never inferred from which sample in the schedule this was meant
-    to be. Samples are irregular by design, and a pass assuming the
-    schedule was met would mis-age exactly the posts whose sampling was
-    unusual.
-
-    ``observed_at`` travels too, because it is when a spike crossed —
-    which decides the head of a channel's event.
-    """
-
-    post_key: tuple[int, int]
-    age: timedelta
-    values: dict[str, float | None]
-    observed_at: datetime
-
-
-@dataclass(frozen=True, slots=True)
 class SpikeSummary:
     """What a pass found, and what it was able to look at.
 
@@ -109,12 +95,12 @@ class SpikeSummary:
     replay: bool
     now: datetime
     baseline_age: timedelta | None = None
-    spikes: list[Spike] = field(default_factory=list)
+    spikes: list[Spike[int, int]] = field(default_factory=list)
     # Of what was raised — or would have been, in a replay — how many
     # were folded into a head of their channel rather than told alone.
     folded: int = 0
     # Each new spike and the head it folded into, for the replay listing.
-    placed: list[Placed] = field(default_factory=list)
+    placed: list[Placed[int, int]] = field(default_factory=list)
     # Scored, but against what they were when their history was collected
     # rather than what they are: too quiet for a recent reference.
     channels_on_fallback: int = 0
@@ -170,7 +156,7 @@ class SpikeSummary:
 
 async def _load(
     session: AsyncSession, *, since: datetime, now: datetime
-) -> list[Reading]:
+) -> list[Reading[int, int]]:
     """Snapshots of posts published in the window, one per reading.
 
     Bounded by ``now`` on both sides, which is what makes a replay a
@@ -216,7 +202,7 @@ async def _load(
         gap=timedelta(seconds=settings.scoring_burst_seconds),
     )
 
-    readings: list[Reading] = []
+    readings: list[Reading[int, int]] = []
     for row in rows:
         channel_id, msg_id, album, published, observed_at = row[:5]
         if not is_first_part(channel_id, msg_id, album):
@@ -244,75 +230,6 @@ async def _load(
             )
         )
     return readings
-
-
-@dataclass(frozen=True, slots=True)
-class Best:
-    """A post's highest score, and when it first crossed the threshold."""
-
-    score: Score
-    crossed_at: datetime | None
-
-
-def _best_per_post(
-    readings: list[Reading],
-    baselines: Baselines,
-    *,
-    metrics: tuple[Metric, ...],
-    threshold: float,
-) -> dict[tuple[int, int], Best]:
-    """Each post's highest score, across every metric and every reading.
-
-    **One post, one score, and therefore one alert.** Four independent
-    alerts would put four messages about the most interesting post of the
-    day into the chat inside an hour — the same error as one message per
-    reposter, arrived at from the other side.
-
-    Across readings as well as across metrics: a post is remarkable at
-    the age it was most remarkable at, and taking only the newest reading
-    would miss a post that was extraordinary at thirty minutes and merely
-    good by four hours.
-
-    The crossing is the *earliest* reading past the threshold, not the
-    best one: it is when a live pass could first have raised the post,
-    and so what orders a channel's spikes into a head and its folds.
-    """
-    best: dict[tuple[int, int], Score] = {}
-    crossed: dict[tuple[int, int], datetime] = {}
-    for reading in readings:
-        channel_id = reading.post_key[0]
-        # A comment count under the minimum is set aside before anything
-        # is compared: it neither crosses nor becomes the post's best, so
-        # five comments on a channel that never gets any cannot take the
-        # alert a post's views had earned.
-        scores = [
-            score
-            for score in score_post(
-                reading.values,
-                reading.age,
-                {
-                    metric: baselines.for_channel(channel_id, metric)
-                    for metric in metrics
-                },
-                metrics=metrics,
-            )
-            if score.metric != Metric.COMMENTS
-            or score.observed >= settings.alert_spike_comments_min
-        ]
-        if not scores:
-            continue
-        key = reading.post_key
-        current = best.get(key)
-        if current is None or scores[0].z > current.z:
-            best[key] = scores[0]
-        if scores[0].z >= threshold and (
-            key not in crossed or reading.observed_at < crossed[key]
-        ):
-            crossed[key] = reading.observed_at
-    return {
-        key: Best(score=score, crossed_at=crossed.get(key))
-        for key, score in best.items()
-    }
 
 
 async def run_scoring(
@@ -361,8 +278,19 @@ async def run_scoring(
             return summary
         readings = await _load(session, since=window, now=moment)
 
-    best = _best_per_post(
-        readings, baselines, metrics=metrics, threshold=limit
+    def baseline_for(
+        reading: Reading[int, int], metric: str
+    ) -> Baseline | None:
+        return baselines.for_channel(reading.post_key[0], Metric(metric))
+
+    best = best_per_post(
+        readings,
+        baseline_for,
+        metrics=metrics,
+        threshold=limit,
+        # A comment count under the minimum is set aside before anything is
+        # compared, so it cannot take the alert a post's views had earned.
+        minimum={Metric.COMMENTS: settings.alert_spike_comments_min},
     )
     spikes = [
         Spike(
@@ -374,7 +302,7 @@ async def run_scoring(
     spikes.sort(key=lambda spike: spike.score.z, reverse=True)
 
     written = folded = 0
-    placed: list[Placed] = []
+    placed: list[Placed[int, int]] = []
     if dry_run:
         placed = fold(spikes, heads={}, window=fold_window)
         folded = sum(1 for entry in placed if entry.into is not None)
@@ -384,7 +312,7 @@ async def run_scoring(
         # are written.
         async with database.session() as session:
             raised = await raised_spikes(session, since=window)
-            heads: dict[int, Head] = await open_heads(
+            heads: dict[int, Head[int, int]] = await open_heads(
                 session, since=moment - fold_window
             )
             fresh = [

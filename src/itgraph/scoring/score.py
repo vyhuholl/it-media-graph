@@ -39,18 +39,21 @@ distinction worth having.
 """
 
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from itgraph.scoring.counts import MEAN_FLOOR, count_z
-from itgraph.scoring.curves import Curve, band_of
+from itgraph.scoring.curves import Curve
 
 __all__ = [
     "COUNTED",
     "Baseline",
+    "Best",
+    "Reading",
     "Score",
     "Spike",
+    "best_per_post",
     "expected",
     "score_metric",
     "score_post",
@@ -98,7 +101,7 @@ class Baseline:
         same condition that leaves it without an expectation — so a
         caller that has an expectation always has a ruler for it.
         """
-        band = band_of(age)
+        band = self.curve.bands.band_of(age)
         if band is None:
             return None
         return self.band_spreads.get(band, self.spread)
@@ -125,7 +128,7 @@ class Score:
 
 
 @dataclass(frozen=True, slots=True)
-class Spike:
+class Spike[C, P]:
     """One post that scored past the threshold, and on what.
 
     What a raise needs: which post, and the single score it is being
@@ -141,9 +144,13 @@ class Spike:
     has no passes, and must still pick the same head.
     """
 
-    post_key: tuple[int, int]
+    post_key: tuple[C, P]
     score: Score
     crossed_at: datetime
+    # The moment of the reading ``score`` came from, where the queue names
+    # that reading — YouTube's, whose alert points at it. ``None`` where
+    # nothing reads it, which is Telegram.
+    scored_at: datetime | None = None
 
 
 # The metrics scored as counts: comments, by `Metric.COMMENTS`'s value. A
@@ -264,3 +271,90 @@ def score_post(
         is not None
     ]
     return sorted(scores, key=lambda entry: entry.z, reverse=True)
+
+
+@dataclass(frozen=True, slots=True)
+class Reading[C, P]:
+    """One reading of one post, as the scorer wants it.
+
+    ``age`` is ``observed_at`` minus the publication — computed by the
+    caller, never inferred from which sample in the schedule this was meant
+    to be. Samples are irregular by design, and a pass assuming the
+    schedule was met would mis-age exactly the posts whose sampling was
+    unusual.
+
+    ``observed_at`` travels too, because it is when a spike crossed — which
+    decides the head of a channel's event — and which reading a score came
+    from.
+    """
+
+    post_key: tuple[C, P]
+    age: timedelta
+    values: Mapping[str, float | None]
+    observed_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class Best:
+    """A post's highest score, when it first crossed, and its reading."""
+
+    score: Score
+    crossed_at: datetime | None
+    scored_at: datetime
+
+
+def best_per_post[C, P](
+    readings: Iterable[Reading[C, P]],
+    baseline_for: Callable[[Reading[C, P], str], Baseline | None],
+    *,
+    metrics: tuple[str, ...],
+    threshold: float,
+    minimum: Mapping[str, float],
+) -> dict[tuple[C, P], Best]:
+    """Each post's highest score, across every metric and every reading.
+
+    **One post, one score, and therefore one alert.** Separate alerts per
+    metric would put several messages about the most interesting post of
+    the day into the chat inside an hour.
+
+    Across readings as well as across metrics: a post is remarkable at the
+    age it was most remarkable at, and taking only the newest reading would
+    miss a post that was extraordinary early and merely good later.
+
+    The crossing is the *earliest* reading past the threshold, not the best
+    one: it is when a live pass could first have raised the post, and so
+    what orders a channel's spikes into a head and its folds.
+
+    ``minimum`` sets a metric's score aside, before anything is compared,
+    when its count is under the floor: it neither crosses nor becomes the
+    post's best, so five comments on a channel that never gets any cannot
+    take the alert a post's views had earned.
+    """
+    best: dict[tuple[C, P], tuple[Score, datetime]] = {}
+    crossed: dict[tuple[C, P], datetime] = {}
+    for reading in readings:
+        scores = [
+            score
+            for score in score_post(
+                reading.values,
+                reading.age,
+                {metric: baseline_for(reading, metric) for metric in metrics},
+                metrics=metrics,
+            )
+            if score.metric not in minimum
+            or score.observed >= minimum[score.metric]
+        ]
+        if not scores:
+            continue
+        key = reading.post_key
+        current = best.get(key)
+        if current is None or scores[0].z > current[0].z:
+            best[key] = (scores[0], reading.observed_at)
+        if scores[0].z >= threshold and (
+            key not in crossed or reading.observed_at < crossed[key]
+        ):
+            crossed[key] = reading.observed_at
+    return {
+        key: Best(score=score, crossed_at=crossed.get(key), scored_at=moment)
+        for key, (score, moment) in best.items()
+    }

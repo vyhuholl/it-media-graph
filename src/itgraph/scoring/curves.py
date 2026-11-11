@@ -36,7 +36,7 @@ saying so, which is the one thing a comparable score may not do.
 
 from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from itertools import pairwise
 
@@ -45,6 +45,10 @@ __all__ = [
     "BAND_EDGES_MINUTES",
     "REFERENCE_BAND",
     "REFERENCE_SETTLED",
+    "TELEGRAM_BANDS",
+    "YOUTUBE_BANDS",
+    "YOUTUBE_BAND_EDGES_MINUTES",
+    "AgeBands",
     "Curve",
     "Observation",
     "band_of",
@@ -82,45 +86,111 @@ __all__ = [
 # bands would be fitted on nothing early and on noise late.
 BAND_EDGES_MINUTES = (10, 15, 22, 33, 48, 70, 105, 150, 220, 320, 420, 570)
 
-
-def _bands() -> tuple[tuple[timedelta, timedelta, str], ...]:
-    """Contiguous bands from the edges, each named for its lower edge."""
-    return tuple(
-        (
-            timedelta(minutes=low),
-            timedelta(minutes=high),
-            f"{low}m",
-        )
-        for low, high in pairwise(BAND_EDGES_MINUTES)
-    )
-
-
-AGE_BANDS: tuple[tuple[timedelta, timedelta, str], ...] = _bands()
-
-# The band the factor is measured against: a post's value here is what
-# the factor relates to its channel's mature median.
-#
-# Still the band holding the eight-hour mark, so `factor` means what it
-# has always meant and the figures stored by earlier runs stay comparable
-# with the ones stored by later ones. With the window ending at 9.5h this
-# is also the last band, so no fitted fraction exceeds 1 today — that is
-# a consequence of where the window ends, not a rule, and a wider window
-# would simply fit fractions above 1 for the bands past it.
-REFERENCE_BAND = next(
-    name for low, high, name in AGE_BANDS if low <= timedelta(hours=8) < high
-)
-
-# How old a post must be before its reference-band value is final: the
-# band's upper edge. A post younger than this has a largest-reading-so-far
-# in the band, not a largest reading, and a reference built from it would
-# be biased low by exactly the posts still being read.
-REFERENCE_SETTLED = next(
-    high for low, high, name in AGE_BANDS if name == REFERENCE_BAND
+# YouTube's, measured on its own readings (`add-youtube-virality-scoring`).
+# One scheduled reading age inside each — 4, 8, 12, 18, 24 and 36 hours,
+# then 2, 3, 4, 5 and 7 days — with room above it for a pass interval and
+# for a deferred reading. From three hours, not one: the view counter lags
+# in the first hours, zero on a tenth of videos at one hour and staying
+# put between readings on a quarter at two, so what an earlier band would
+# measure is the counter rather than the audience. To eight and a half
+# days, past which nothing raises an alert.
+YOUTUBE_BAND_EDGES_MINUTES = (
+    180,
+    360,
+    600,
+    900,
+    1260,
+    1800,
+    2520,
+    3600,
+    5040,
+    6480,
+    8640,
+    12240,
 )
 
 
 @dataclass(frozen=True, slots=True)
-class Observation:
+class AgeBands:
+    """Contiguous age bands, and the one a reference is read in.
+
+    Each band is named for its lower edge in minutes. The reference band is
+    the one holding ``reference_age``: what a curve's fractions are of,
+    what a channel's own reference is the median of, and what a factor
+    relates to a mature median.
+
+    A platform's bands are a value rather than module constants, so that
+    one module fits Telegram's eight-hour posts and YouTube's week-long
+    videos alike.
+    """
+
+    edges_minutes: tuple[int, ...]
+    reference_age: timedelta
+    bands: tuple[tuple[timedelta, timedelta, str], ...] = field(
+        init=False, repr=False, compare=False
+    )
+    reference: str = field(init=False, compare=False)
+    # How old a post must be before its reference-band value is final: the
+    # band's upper edge. A post younger than this has a largest reading so
+    # far in the band, not a largest reading, and a reference built from it
+    # would be biased low by exactly the posts still being read.
+    settled: timedelta = field(init=False, compare=False)
+
+    def __post_init__(self) -> None:
+        bands = tuple(
+            (timedelta(minutes=low), timedelta(minutes=high), f"{low}m")
+            for low, high in pairwise(self.edges_minutes)
+        )
+        held = [
+            (name, high)
+            for low, high, name in bands
+            if low <= self.reference_age < high
+        ]
+        if not held:
+            raise ValueError(
+                f"no band holds the reference age {self.reference_age}"
+            )
+        object.__setattr__(self, "bands", bands)
+        object.__setattr__(self, "reference", held[0][0])
+        object.__setattr__(self, "settled", held[0][1])
+
+    def band_of(self, age: timedelta) -> str | None:
+        """Which band an age falls in, or ``None`` outside them all."""
+        for low, high, name in self.bands:
+            if low <= age < high:
+                return name
+        return None
+
+    @property
+    def last_edge(self) -> timedelta:
+        """The upper edge of the last band: the oldest age scored."""
+        return self.bands[-1][1]
+
+
+# The band the factor is measured against holds the eight-hour mark, so
+# `factor` means what it has always meant and the figures stored by earlier
+# runs stay comparable with the ones stored by later ones. With the window
+# ending at 9.5h this is also the last band, so no fitted fraction exceeds
+# 1 — a consequence of where the window ends, not a rule.
+TELEGRAM_BANDS = AgeBands(
+    edges_minutes=BAND_EDGES_MINUTES, reference_age=timedelta(hours=8)
+)
+
+# Twenty-four hours: early enough for a channel's own reference to fill in
+# weeks, late enough that the view counter has caught up. Every fraction
+# past it is above 1, since YouTube's views still grow at a week.
+YOUTUBE_BANDS = AgeBands(
+    edges_minutes=YOUTUBE_BAND_EDGES_MINUTES, reference_age=timedelta(hours=24)
+)
+
+# Telegram's, under the names every caller before YouTube used.
+AGE_BANDS: tuple[tuple[timedelta, timedelta, str], ...] = TELEGRAM_BANDS.bands
+REFERENCE_BAND = TELEGRAM_BANDS.reference
+REFERENCE_SETTLED = TELEGRAM_BANDS.settled
+
+
+@dataclass(frozen=True, slots=True)
+class Observation[C, P]:
     """One reading of one post: its age, and what the metric was.
 
     A narrow projection of a snapshot rather than the row itself. What a
@@ -141,7 +211,7 @@ class Observation:
     where nobody asked, which takes the channel's fallback reference.
     """
 
-    post_key: tuple[int, int]
+    post_key: tuple[C, P]
     age: timedelta
     value: float
     published: datetime | None = None
@@ -158,14 +228,17 @@ class Curve:
 
     fractions: dict[str, float]
     samples: dict[str, int]
+    # The bands the fractions are named by. Telegram's unless said: every
+    # curve stored before YouTube was Telegram's.
+    bands: AgeBands = TELEGRAM_BANDS
 
     def at(self, age: timedelta) -> float | None:
         """The fraction for this age, or ``None`` outside every band."""
-        band = band_of(age)
+        band = self.bands.band_of(age)
         return None if band is None else self.fractions.get(band)
 
 
-def band_of(age: timedelta) -> str | None:
+def band_of(age: timedelta, bands: AgeBands = TELEGRAM_BANDS) -> str | None:
     """Which fitted band an age falls in, or ``None`` outside them all.
 
     The bands are contiguous, so ``None`` now means only what it says:
@@ -173,10 +246,7 @@ def band_of(age: timedelta) -> str | None:
     window. It no longer means "this age happens to sit between two
     sample offsets", which is what it used to mean for 84% of readings.
     """
-    for low, high, name in AGE_BANDS:
-        if low <= age < high:
-            return name
-    return None
+    return bands.band_of(age)
 
 
 def median(values: Sequence[float]) -> float:
@@ -196,9 +266,12 @@ def median(values: Sequence[float]) -> float:
     return (ordered[middle - 1] + ordered[middle]) / 2
 
 
-def _reference(
-    observations: Iterable[Observation], *, keep_zeros: bool = False
-) -> dict[tuple[int, int], float]:
+def _reference[C, P](
+    observations: Iterable[Observation[C, P]],
+    *,
+    keep_zeros: bool = False,
+    bands: AgeBands = TELEGRAM_BANDS,
+) -> dict[tuple[C, P], float]:
     """Each post's value in the reference band, where it has one.
 
     A post read twice inside the band contributes its largest reading:
@@ -206,9 +279,9 @@ def _reference(
     a median of two would understate a post the loop happened to sample
     early in the window.
     """
-    reference: dict[tuple[int, int], float] = {}
+    reference: dict[tuple[C, P], float] = {}
     for entry in observations:
-        if band_of(entry.age) != REFERENCE_BAND:
+        if bands.band_of(entry.age) != bands.reference:
             continue
         if entry.value < 0 or (entry.value == 0 and not keep_zeros):
             continue
@@ -218,8 +291,11 @@ def _reference(
     return reference
 
 
-def fit_curve(
-    observations: Sequence[Observation], *, min_samples: int = 20
+def fit_curve[C, P](
+    observations: Sequence[Observation[C, P]],
+    *,
+    min_samples: int = 20,
+    bands: AgeBands = TELEGRAM_BANDS,
 ) -> Curve:
     """The shape, as a fraction of each post's own reference value.
 
@@ -237,14 +313,14 @@ def fit_curve(
     An absent band means nothing is scored at that age, which is a gap;
     a band fitted on four observations is a wrong number, which is worse.
     """
-    reference = _reference(observations)
+    reference = _reference(observations, bands=bands)
 
     gathered: dict[str, list[float]] = {}
     for entry in observations:
         base = reference.get(entry.post_key)
         if base is None or base <= 0 or entry.value <= 0:
             continue
-        band = band_of(entry.age)
+        band = bands.band_of(entry.age)
         if band is None:
             continue
         gathered.setdefault(band, []).append(entry.value / base)
@@ -256,11 +332,15 @@ def fit_curve(
             if len(values) >= min_samples
         },
         samples={band: len(values) for band, values in gathered.items()},
+        bands=bands,
     )
 
 
-def fit_count_curve(
-    observations: Sequence[Observation], *, min_samples: int = 20
+def fit_count_curve[C, P](
+    observations: Sequence[Observation[C, P]],
+    *,
+    min_samples: int = 20,
+    bands: AgeBands = TELEGRAM_BANDS,
 ) -> Curve:
     """A counted metric's shape: per band, a ratio of sums, zeros kept.
 
@@ -271,13 +351,13 @@ def fit_count_curve(
     eight hours counts, and the band's fraction is what its readings sum
     to over what those posts reached at eight hours.
     """
-    reference = _reference(observations, keep_zeros=True)
+    reference = _reference(observations, keep_zeros=True, bands=bands)
     sums: dict[str, tuple[float, float, int]] = {}
     for entry in observations:
         base = reference.get(entry.post_key)
         if base is None or entry.value < 0:
             continue
-        band = band_of(entry.age)
+        band = bands.band_of(entry.age)
         if band is None:
             continue
         reached, possible, count = sums.get(band, (0.0, 0.0, 0))
@@ -289,14 +369,16 @@ def fit_count_curve(
             if count >= min_samples and possible > 0
         },
         samples={band: count for band, (_, _, count) in sums.items()},
+        bands=bands,
     )
 
 
-def fit_factor(
-    observations: Sequence[Observation],
-    mature: Mapping[int, float],
+def fit_factor[C, P](
+    observations: Sequence[Observation[C, P]],
+    mature: Mapping[C, float],
     *,
     min_samples: int = 20,
+    bands: AgeBands = TELEGRAM_BANDS,
 ) -> float | None:
     """Reference value over the channel's mature median, across posts.
 
@@ -310,7 +392,9 @@ def fit_factor(
     """
     ratios = [
         value / mature[channel]
-        for (channel, _), value in _reference(observations).items()
+        for (channel, _), value in _reference(
+            observations, bands=bands
+        ).items()
         if mature.get(channel, 0) > 0
     ]
     if len(ratios) < min_samples:
@@ -421,11 +505,12 @@ def reference_at(
     minimum: int,
     max_age: timedelta,
     counted: bool = False,
+    bands: AgeBands = TELEGRAM_BANDS,
 ) -> tuple[float, int] | None:
     """The reference a channel had at ``moment``.
 
     Built from posts whose reference band had closed by then — published
-    at least ``REFERENCE_SETTLED`` earlier, so each value is final — and
+    at least ``bands.settled`` earlier, so each value is final — and
     no older than ``max_age``. ``history`` is the channel's posts as
     (published, reference-band value), oldest first.
 
@@ -437,7 +522,7 @@ def reference_at(
     the posts it is measured on fits them, and the ruler comes out too
     narrow — measured, by 5%, in the over-alerting direction.
     """
-    upper = bisect_right(history, moment - REFERENCE_SETTLED, key=_published)
+    upper = bisect_right(history, moment - bands.settled, key=_published)
     lower = bisect_left(history, moment - max_age, key=_published)
     window = [value for _, value in history[lower:upper]]
     if counted:

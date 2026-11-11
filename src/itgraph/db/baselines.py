@@ -347,7 +347,7 @@ async def observations(
     *,
     since: datetime,
     burst_gap: timedelta = timedelta(0),
-) -> dict[ChannelKind, list[Observation]]:
+) -> dict[ChannelKind, list[Observation[int, int]]]:
     """Snapshots of posts published since a moment, grouped by channel kind.
 
     The age carried on each observation is ``observed_at`` minus the
@@ -421,7 +421,7 @@ async def observations(
         )
 
     keep_zeros = counted
-    grouped: dict[ChannelKind, list[Observation]] = {}
+    grouped: dict[ChannelKind, list[Observation[int, int]]] = {}
     for kind, channel, msg, age_seconds, value, published in rows:
         if heads is not None and heads[(channel, msg)] != (channel, msg):
             continue
