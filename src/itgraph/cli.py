@@ -721,8 +721,43 @@ def alerts(
     _run(run())
 
 
+# Reasoning from a past moment, for comparing two versions of the scoring on
+# one restored copy. Hidden: it is a tool for that comparison, not an
+# operator's everyday option.
+NowOption = Annotated[
+    str | None,
+    typer.Option(
+        "--now",
+        hidden=True,
+        help="Reason from this moment, ISO 8601 with its offset.",
+    ),
+]
+
+
+def _moment(value: str | None) -> datetime | None:
+    """`--now` as a moment, or ``None`` for the present.
+
+    The offset is required: a naive moment would be read in whatever zone
+    the process runs in, and the two versions being compared need not
+    agree on that.
+    """
+    if value is None:
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        raise typer.BadParameter(
+            f"--now is not an ISO 8601 moment: {value}"
+        ) from None
+    if moment.tzinfo is None:
+        raise typer.BadParameter(
+            "--now needs its offset, e.g. 2026-11-20T04:30:00+03:00"
+        )
+    return moment
+
+
 @app.command()
-def baselines() -> None:
+def baselines(now: NowOption = None) -> None:
     """Recompute what a normal post looks like on every channel.
 
     Reads the raw layer and the snapshots, writes baselines, and touches
@@ -738,10 +773,12 @@ def baselines() -> None:
     from itgraph.db.session import Database
     from itgraph.scoring.refresh import refresh_baselines
 
+    moment = _moment(now)
+
     async def run() -> None:
         database = Database()
         try:
-            summary = await refresh_baselines(database)
+            summary = await refresh_baselines(database, now=moment)
         finally:
             await database.dispose()
         typer.echo(summary.line())
@@ -772,6 +809,7 @@ def score(
             help="Replay from this many days back instead of the default.",
         ),
     ] = None,
+    now: NowOption = None,
 ) -> None:
     """Find posts doing unusually well for their channel and their age.
 
@@ -799,17 +837,17 @@ def score(
         # the last few hours by design, and widening it would raise
         # alerts about posts that settled days ago.
         raise typer.BadParameter("--since is only meaningful with --replay")
+    moment = _moment(now) or datetime.now(UTC)
 
     async def run() -> None:
-        now = datetime.now(UTC)
         span = since if since is not None else settings.scoring_replay_days
         window = timedelta(days=span) if replay else None
         database = Database()
         try:
             summary = await run_scoring(
                 database,
-                now=now,
-                since=now - window if window is not None else None,
+                now=moment,
+                since=moment - window if window is not None else None,
                 threshold=threshold,
                 dry_run=replay,
             )

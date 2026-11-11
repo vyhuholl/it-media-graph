@@ -1,7 +1,8 @@
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from zoneinfo import ZoneInfo
@@ -1656,6 +1657,65 @@ def test_since_is_refused_without_replay(
 
     assert result.exit_code != 0
     assert "--replay" in result.output
+
+
+def test_now_reasons_from_a_past_moment(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    """The hidden option two versions of the scoring are compared under."""
+    use_test_database(monkeypatch, database_url)
+    seen: dict[str, Any] = {}
+
+    async def refresh(database: Any, *, now: Any = None) -> Any:
+        seen["refresh"] = now
+        return SimpleNamespace(line=lambda: "refreshed")
+
+    async def scoring(database: Any, **kwargs: Any) -> Any:
+        seen["score"] = kwargs
+        return SimpleNamespace(line=lambda: "scored", placed=[], spikes=[])
+
+    monkeypatch.setattr("itgraph.scoring.refresh.refresh_baselines", refresh)
+    monkeypatch.setattr("itgraph.scoring.run.run_scoring", scoring)
+    moment = "2026-11-20T04:30:00+03:00"
+
+    assert runner.invoke(app, ["baselines", "--now", moment]).exit_code == 0
+    replayed = runner.invoke(
+        app, ["score", "--replay", "--since", "2", "--now", moment]
+    )
+    assert replayed.exit_code == 0, replayed.output
+
+    expected = datetime.fromisoformat(moment)
+    assert seen["refresh"] == expected
+    assert seen["score"]["now"] == expected
+    assert seen["score"]["since"] == expected - timedelta(days=2)
+
+
+def test_without_now_the_present_is_used(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    seen: dict[str, Any] = {}
+
+    async def refresh(database: Any, *, now: Any = None) -> Any:
+        seen["refresh"] = now
+        return SimpleNamespace(line=lambda: "refreshed")
+
+    monkeypatch.setattr("itgraph.scoring.refresh.refresh_baselines", refresh)
+
+    assert runner.invoke(app, ["baselines"]).exit_code == 0
+    assert seen["refresh"] is None
+
+
+@pytest.mark.parametrize("value", ["2026-11-20T04:30:00", "yesterday"])
+def test_now_needs_a_moment_with_its_offset(value: str) -> None:
+    result = runner.invoke(app, ["baselines", "--now", value])
+
+    assert result.exit_code != 0
+    assert "--now" in result.output
+
+
+def test_now_is_hidden() -> None:
+    assert "--now" not in runner.invoke(app, ["score", "--help"]).output
 
 
 def test_neither_scoring_command_connects_to_telegram(
