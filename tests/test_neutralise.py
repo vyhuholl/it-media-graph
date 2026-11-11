@@ -22,7 +22,6 @@ from people_cases import ALL, CASES, ONE_OF_EACH, Case, newest_rule
 from roleharness import ANSIBLE_DIR
 from sqlalchemy.engine import make_url
 
-from itgraph.db.backup import EXCLUDED_DATA
 from itgraph.db.models import Base
 from itgraph.db.session import Database
 
@@ -37,6 +36,7 @@ CANDIDATE_FROM_SUBSCRIPTIONS = 3
 MANUAL_SEED = 4
 FAKE_USER = 777000111
 FAKE_YT = "UCfake" + "0" * 18
+FAKE_VIDEO = "fakeVid0001"
 
 
 RULE = newest_rule()
@@ -169,6 +169,22 @@ async def seed(connection: Any) -> None:
         """,
         NOW - timedelta(hours=1),
     )
+    await connection.execute(
+        f"INSERT INTO yt_raw_videos (video_id, payload, fetched_at, "
+        f"discovered_at, discovered_via) "
+        f"VALUES ('{FAKE_VIDEO}', '{{}}', $1, $1, 'count')",
+        NOW,
+    )
+    await connection.execute(
+        f"INSERT INTO yt_raw_video_stats (video_id, observed_at, views) "
+        f"VALUES ('{FAKE_VIDEO}', $1, 1)",
+        NOW,
+    )
+    await connection.execute(
+        f"INSERT INTO yt_alerts (kind, video_id, scored_at, band, value) "
+        f"VALUES ('views_spike', '{FAKE_VIDEO}', $1, 1, 4)",
+        NOW,
+    )
 
 
 async def clear_people(connection: Any) -> None:
@@ -209,6 +225,7 @@ async def test_a_seeded_database_fails_the_read_back(
         "notes on affiliation decisions",
         "pending mentions",
         "undelivered alerts",
+        "undelivered YouTube alerts",
         "users in posts: 2",
         "mentions by id in posts: 2",
         "names in posts: 1",
@@ -273,6 +290,19 @@ async def test_neutralising_passes_the_read_back_and_keeps_what_it_should(
                 "SELECT count(*) FROM alerts WHERE delivered_at IS NULL"
             )
             == 0
+        )
+        assert (
+            await connection.fetchval(
+                "SELECT count(*) FROM yt_alerts WHERE delivered_at IS NULL"
+            )
+            == 0
+        )
+        # YouTube data is what the copy is for, as posts are.
+        assert (
+            await connection.fetchval(
+                "SELECT count(*) FROM yt_raw_video_stats"
+            )
+            == 1
         )
     finally:
         await connection.close()
@@ -418,59 +448,22 @@ async def test_a_person_among_a_channels_users_fails_the_read_back(
         await connection.close()
 
 
-@pytest.mark.parametrize(
-    "insert",
-    [
-        (
-            f"INSERT INTO yt_channels (channel_id, status, discovered_via) "
-            f"VALUES ('{FAKE_YT}', 'candidate', 'manual');"
-            f"INSERT INTO yt_raw_channels (channel_id, payload, fetched_at) "
-            f"VALUES ('{FAKE_YT}', '{{}}', now())"
-        ),
-        (
-            "INSERT INTO yt_raw_lookups (kind, value, channel_id, fetched_at) "
-            "VALUES ('handle', 'fakehandle', NULL, now())"
-        ),
-    ],
-)
-async def test_api_data_in_a_copy_fails_the_read_back_naming_the_table(
-    database: Database, database_url: str, insert: str
-) -> None:
-    connection = await connect(database_url)
-    try:
-        await connection.execute(insert)
-        with pytest.raises(asyncpg.RaiseError, match="yt_raw_"):
-            await connection.execute(READBACK)
-    finally:
-        await connection.close()
-
-
-async def test_a_youtube_alert_in_a_copy_fails_the_read_back(
+async def test_youtube_data_in_a_copy_passes_the_read_back(
     database: Database, database_url: str
 ) -> None:
-    """Named among what the read-back found, beside the readings it
-    could not be restored without."""
-    video = "fakeVid0001"
     connection = await connect(database_url)
     try:
         await connection.execute(
-            f"INSERT INTO yt_raw_videos (video_id, payload, fetched_at, "
-            f"discovered_at, discovered_via) "
-            f"VALUES ('{video}', '{{}}', now(), now(), 'count');"
-            f"INSERT INTO yt_raw_video_stats (video_id, observed_at, views) "
-            f"VALUES ('{video}', '2026-11-11 10:00+00', 1);"
-            f"INSERT INTO yt_alerts (kind, video_id, scored_at, band, value) "
-            f"VALUES ('views_spike', '{video}', '2026-11-11 10:00+00', 1, 4)"
+            f"INSERT INTO yt_channels (channel_id, status, discovered_via) "
+            f"VALUES ('{FAKE_YT}', 'candidate', 'manual');"
+            f"INSERT INTO yt_raw_channels (channel_id, payload, fetched_at) "
+            f"VALUES ('{FAKE_YT}', '{{}}', now());"
+            "INSERT INTO yt_raw_lookups (kind, value, channel_id, fetched_at) "
+            "VALUES ('handle', 'fakehandle', NULL, now())"
         )
-        with pytest.raises(asyncpg.RaiseError, match="yt_alerts: 1"):
-            await connection.execute(READBACK)
+        await connection.execute(READBACK)
     finally:
         await connection.close()
-
-
-def test_the_read_back_covers_what_dumps_leave_out() -> None:
-    for pattern in EXCLUDED_DATA:
-        assert pattern.replace("*", "") in READBACK, pattern
 
 
 def test_every_note_a_person_wrote_is_neutralised() -> None:

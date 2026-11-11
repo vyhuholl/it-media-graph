@@ -274,11 +274,10 @@ Every request SHALL name the resource parts and the fields within them that it r
 - **THEN** the request names each item's video id and publication time and the token for the next page
 - **AND** no total count of the playlist's items
 
-#### Scenario: A past upload is asked for without counts before acceptance
+#### Scenario: A past upload is asked for as the poll loop asks
 
-- **GIVEN** no acceptance of the derived-metrics use case recorded
 - **WHEN** the history walk or the refresh asks for past uploads
-- **THEN** the request names the video's fields as the poll loop's does, less the view, like and comment counts
+- **THEN** the request names the video's fields as the poll loop's does, counts included
 
 #### Scenario: A linked video is asked for its channel only
 

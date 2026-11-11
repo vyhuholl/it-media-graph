@@ -6,10 +6,10 @@ editable columns come first and line up before the long title, and every
 mistake in it is found at once, with its line number, before anything is
 written.
 
-The file holds YouTube API data (titles, handles), which may be kept at
-most 30 days. Its header says when it was exported and when it expires,
-and a file past that is refused rather than applied. Deleting it is the
-operator's part; the header says that too.
+The file holds what YouTube says about each channel (titles, handles).
+Its header says when it was exported, which is how a change made since
+is told apart. Deleting it once applied is the operator's part; the
+header says that too.
 """
 
 import re
@@ -26,7 +26,6 @@ from itgraph.db.models import (
     YtLang,
     YtRejectReason,
 )
-from itgraph.yt_policy import RETENTION
 
 __all__ = [
     "COLUMNS",
@@ -85,17 +84,13 @@ class ExportRow:
 
 def render_review(rows: Iterable[ExportRow], *, exported_at: datetime) -> str:
     """The whole file: header, column line, one line per channel."""
-    expires = exported_at + RETENTION
     kinds = " ".join(kind.value for kind in YtChannelKind)
     langs = " ".join(lang.value for lang in YtLang)
     reasons = " ".join(reason.value for reason in YtRejectReason)
     header = [
         "# itgraph yt review-export",
         f"{_EXPORTED}{exported_at.astimezone(UTC):%Y-%m-%dT%H:%M:%SZ}",
-        (
-            f"# expires:  {expires:%Y-%m-%d} — holds YouTube API data: "
-            "delete it once applied, never commit it"
-        ),
+        "# delete it once applied, never commit it",
         "# decision: seed | maybe | reject | (empty: leave undecided)",
         f"# kind:     {kinds}   (seed: required)",
         f"# lang:     {langs}   (seed: required)",
@@ -133,7 +128,7 @@ class RowProblem:
 
 
 class UnreadableReviewFile(ValueError):
-    """The file as a whole cannot be applied: no header, or expired."""
+    """The file as a whole cannot be applied: no header."""
 
 
 class ReviewFileError(ValueError):
@@ -199,17 +194,11 @@ def _exported_at(lines: Sequence[str]) -> datetime:
     )
 
 
-def parse_review(text: str, *, now: datetime) -> ParsedReview:
+def parse_review(text: str) -> ParsedReview:
     """Read a review file. Raises ``UnreadableReviewFile`` for the file as
     a whole; row problems come back in the result."""
     lines = text.splitlines()
     exported_at = _exported_at(lines)
-    if now > exported_at + RETENTION:
-        raise UnreadableReviewFile(
-            f"exported {exported_at:%Y-%m-%d}, more than "
-            f"{RETENTION.days} days ago: it holds YouTube API data that "
-            "may not be kept that long. Delete it and export a new one"
-        )
 
     body = [
         (number, line)
@@ -351,16 +340,15 @@ def export_row(
 ) -> ExportRow:
     """One record as the file shows it: its review, then what YouTube said.
 
-    A channel without stored data — expired, or gone — still gets its row,
+    A channel without stored data — not fetched yet, or gone — still gets
+    its row,
     with the id and the link and nothing YouTube said: the link is how a
     reviewer looks at it anyway.
 
     ``source`` is how the channel was found, and for one found by search
     the query of the earliest run in date that returned it — the
-    operator's words; which run returned which channel is API data, and
-    the file is already under the 30-day rule. No count of seeds,
-    families or results: a number of ours beside YouTube's would owe a
-    disclosure (III.E.4.h), and the queue's order is not the review's.
+    operator's words. No count of seeds, families or results: the
+    queue's order is not the review's.
     """
     rejected = channel.status is ChannelStatus.REJECTED
     review = ExportRow(

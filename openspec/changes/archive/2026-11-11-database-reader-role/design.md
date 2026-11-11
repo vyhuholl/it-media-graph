@@ -139,7 +139,6 @@ So the restore changes nothing, and the end-to-end suite makes this explicit (De
 - [A reader takes an advisory lock the collector or a YouTube job uses] → Execute on those functions belongs to `PUBLIC`, and revoking it is out of scope. It takes a deliberate call with the right key, not an accident, and the runbook says so.
 - [A transaction open for less than 5 minutes, or a long statement, delays a deploy's migration] → Both are bounded: 5 minutes idle, 10 running. A deploy stops writers before migrating, and the operator running it is the same person who would hold the session.
 - [Rotating the reader's password cuts an operator's open session, a query in progress included] → Intended: a rotation is a revocation. The runbook says that a deploy which changes the reader's password ends its sessions.
-- [An agent's transcript keeps API data past 30 days] → The runbook rule: an agent prints only aggregates of `yt_raw_*`, never a title, description, handle or link.
 - [The public repository names the infrastructure repository or its host] → Neither appears in code, docs, artifacts or commits. The infrastructure repository is called just that.
 
 ## Migration Plan

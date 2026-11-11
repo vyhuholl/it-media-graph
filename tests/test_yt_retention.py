@@ -1,5 +1,5 @@
-"""What YouTube said is kept 30 days at most; what the operator decided,
-for good."""
+"""What YouTube said lives in one place and is replaced by every refresh;
+what the operator decided is kept for good."""
 
 from datetime import UTC, datetime, timedelta
 
@@ -18,7 +18,6 @@ from itgraph.db.yt_channels import (
     create_channels,
     due_for_refresh,
     mark_gone,
-    purge_expired,
     store_payloads,
 )
 
@@ -66,11 +65,10 @@ async def _anywhere(database: Database, needle: str) -> list[str]:
     return holding
 
 
-async def test_an_expired_payload_is_removed_and_the_record_kept(
+async def test_an_old_payload_is_kept_with_its_record(
     database: Database,
 ) -> None:
-    await _channel(database, 1, fetched_at=NOW - timedelta(days=31))
-    await _channel(database, 2, fetched_at=NOW - timedelta(days=29))
+    await _channel(database, 1, fetched_at=NOW - timedelta(days=90))
     async with database.session() as session:
         record = await session.get(YtChannel, channel_id(1))
         assert record is not None
@@ -78,28 +76,18 @@ async def test_an_expired_payload_is_removed_and_the_record_kept(
         record.reject_reason = YtRejectReason.CONSUMER_TECH
         record.reviewed_at = NOW
 
-    async with database.session() as session:
-        assert await purge_expired(session, now=NOW) == 1
-
-    assert await _payload(database, 1) is None
-    assert await _payload(database, 2) is not None
+    assert await _payload(database, 1) is not None
     record = await _record(database, 1)
     assert record is not None
     assert record.reject_reason is YtRejectReason.CONSUMER_TECH
 
 
-async def test_removing_the_payload_removes_the_data(
+async def test_the_title_lives_in_the_payload_alone(
     database: Database,
 ) -> None:
-    """The title is nowhere else to forget: not in the record, not in the
-    journal, not in any table."""
-    await _channel(database, 1, fetched_at=NOW - timedelta(days=31))
+    """Not in the record, not in the journal, not in any other table."""
+    await _channel(database, 1, fetched_at=NOW - timedelta(days=90))
     assert await _anywhere(database, TITLE) == ["yt_raw_channels"]
-
-    async with database.session() as session:
-        await purge_expired(session, now=NOW)
-
-    assert await _anywhere(database, TITLE) == []
 
 
 async def test_a_new_payload_replaces_the_old(database: Database) -> None:

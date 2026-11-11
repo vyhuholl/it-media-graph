@@ -4,10 +4,9 @@ The sources are seeds' videos — title and description — and seeds'
 featured lists in date, each read as a reference of the seed itself.
 
 Reads, and writes nothing: no edge, no pending target, no count is
-stored anywhere, because a handle read out of a description is API data
-and lives only in its payload. Whatever expiry, a refresh or a removal
-did to the payloads, the next reading already reflects — which is the
-whole of how the graph keeps the 30-day rule.
+stored anywhere; a handle read out of a description lives only in its
+payload. Whatever a refresh or a removal did to the payloads, the next
+reading already reflects.
 
 One transaction at ``REPEATABLE READ``: the known handles, the inventory,
 the stored videos and the sources are read as of one moment, so a

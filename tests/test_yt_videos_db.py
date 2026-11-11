@@ -1,18 +1,14 @@
 """The poll loop's videos and readings in the database.
 
 What a reading is (counters at a moment, appended), what it is not (a
-copy of the title), how a video is forgotten (all of it, at once), and
-how long each piece lives — 30 days, or longer for readings only once
-an acceptance date is recorded.
+copy of the title), and how a video is forgotten (all of it, at once).
 """
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
-import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import select, text
 from ytfakes import channel_id, video_id, video_resource
 
-from itgraph import yt_policy
 from itgraph.db.models import (
     Base,
     ChannelStatus,
@@ -31,7 +27,6 @@ from itgraph.db.yt_videos import (
     discoveries_since,
     due_videos,
     known_video_ids,
-    purge_expired_videos,
     remove_videos,
     store_found_videos,
     store_videos,
@@ -314,86 +309,3 @@ async def test_a_walk_s_reading_goes_in_with_its_video(
     assert [(r.video_id, r.observed_at, r.views) for r in readings] == [
         (video_id(1), NOW, 7)
     ]
-
-
-async def test_expired_videos_and_readings_are_removed(
-    database: Database,
-) -> None:
-    await _seed(database, 1)
-    await _store(database, _write(1), at=NOW - timedelta(days=31))
-    await _store(database, _write(2), at=NOW - timedelta(days=31))
-    await _store(database, _write(2), at=NOW - timedelta(days=1))
-    await _store(database, _write(3), at=NOW - timedelta(days=29))
-
-    async with database.session() as session:
-        videos, readings = await purge_expired_videos(session, now=NOW)
-
-    # Video 1 expired whole. Video 2 lost its old reading and kept the
-    # rest; video 3 is untouched.
-    assert (videos, readings) == (1, 2)
-    async with database.session() as session:
-        assert await known_video_ids(
-            session, [video_id(1), video_id(2), video_id(3)]
-        ) == {video_id(2), video_id(3)}
-        left = await session.scalar(
-            select(func.count()).select_from(YtRawVideoStat)
-        )
-    assert left == 2
-
-
-async def test_after_acceptance_readings_from_that_date_are_kept(
-    database: Database, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    accepted = (NOW - timedelta(days=31)).date()
-    monkeypatch.setattr(yt_policy, "DERIVED_METRICS_ACCEPTED_ON", accepted)
-    await _seed(database, 1)
-    await _store(database, _write(1), at=NOW - timedelta(days=32))
-    await _store(database, _write(1), at=NOW - timedelta(days=31))
-    # Kept fetched, as `yt refresh` keeps it after acceptance.
-    await _store(database, _write(1, reading=False), at=NOW)
-
-    async with database.session() as session:
-        await purge_expired_videos(session, now=NOW)
-
-    readings = await _readings(database)
-    assert [reading.observed_at for reading in readings] == [
-        NOW - timedelta(days=31)
-    ]
-
-
-async def test_thirty_six_months_is_the_limit(
-    database: Database, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        yt_policy, "DERIVED_METRICS_ACCEPTED_ON", date(2023, 1, 1)
-    )
-    await _seed(database, 1)
-    await _store(database, _write(1), at=datetime(2023, 10, 25, tzinfo=UTC))
-    await _store(database, _write(1), at=datetime(2023, 10, 27, tzinfo=UTC))
-    await _store(database, _write(1, reading=False), at=NOW)
-
-    async with database.session() as session:
-        await purge_expired_videos(session, now=NOW)
-
-    readings = await _readings(database)
-    assert [reading.observed_at for reading in readings] == [
-        datetime(2023, 10, 27, tzinfo=UTC)
-    ]
-
-
-async def test_titles_do_not_follow_the_readings(
-    database: Database, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """After acceptance a payload still goes at 30 days — and its readings
-    with it, which is why refresh keeps such videos fetched."""
-    monkeypatch.setattr(
-        yt_policy, "DERIVED_METRICS_ACCEPTED_ON", date(2026, 9, 1)
-    )
-    await _seed(database, 1)
-    await _store(database, _write(1), at=NOW - timedelta(days=31))
-
-    async with database.session() as session:
-        videos, _ = await purge_expired_videos(session, now=NOW)
-
-    assert videos == 1
-    assert await _anywhere(database, TITLE) == []

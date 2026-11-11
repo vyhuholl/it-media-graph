@@ -2,8 +2,7 @@
 
 The floor, the request limit, an exhausted day and a walk already
 running are expected states, and end with status 0 and a sentence; a
-failed request is a failure. In every case expiry ran first and what
-was done is kept.
+failed request is a failure. In every case what was done is kept.
 """
 
 import asyncio
@@ -130,7 +129,7 @@ async def _scalar(url: str, statement: Any) -> Any:
         await database.dispose()
 
 
-def _stranger_expired(url: str) -> bool:
+def _stranger_kept(url: str) -> bool:
     return (
         asyncio.run(
             _scalar(
@@ -140,7 +139,7 @@ def _stranger_expired(url: str) -> bool:
                 .where(YtRawChannel.channel_id == channel_id(9)),
             )
         )
-        == 0
+        == 1
     )
 
 
@@ -161,7 +160,7 @@ def test_a_walk_reports_what_it_did(
     assert result.exit_code == 0, result.output
     assert "complete: 1 of 1 channels walked" in result.output
     assert "112 videos" in result.output
-    assert _stranger_expired(database_url)
+    assert _stranger_kept(database_url)
 
 
 def test_the_floor_ends_a_walk_quietly(
@@ -183,7 +182,7 @@ def test_the_floor_ends_a_walk_quietly(
     assert "next quota day begins" in result.output
     assert len(fake.requests) == 2
     assert _videos(database_url) == 50
-    assert _stranger_expired(database_url)
+    assert _stranger_kept(database_url)
 
 
 def test_the_limit_ends_a_walk_quietly(
@@ -220,7 +219,7 @@ def test_a_walk_after_exhaustion_makes_no_request(
     assert result.exit_code == 0, result.output
     assert "quotaExceeded" in result.output
     assert fake.requests == []
-    assert _stranger_expired(database_url)
+    assert _stranger_kept(database_url)
 
 
 @pytest.fixture
@@ -266,7 +265,7 @@ def test_a_second_walk_beside_a_running_one(
     assert result.exit_code == 0, result.output
     assert "another `yt backfill` walk is running" in result.output
     assert fake.requests == []
-    assert _stranger_expired(database_url)
+    assert _stranger_kept(database_url)
 
 
 class _RefusingTokens(FakeYouTube):

@@ -97,9 +97,9 @@ The system SHALL start tracking a listed video when no video with its id is trac
 - **THEN** the video is not asked about and not tracked
 - **AND** nothing about it is stored
 
-#### Scenario: A video whose data expired is not taken for new
+#### Scenario: A video no longer stored is not taken for new
 
-- **GIVEN** a video tracked earlier, past the horizon, whose stored data has since expired
+- **GIVEN** a video tracked earlier, past the horizon, whose stored data has since been removed
 - **WHEN** a listing contains it again
 - **THEN** it is not tracked again
 
@@ -272,7 +272,7 @@ The system SHALL compare the poll loop's spending in the current quota day with 
 
 ### Requirement: A Spent Pool Ends A Pass Quietly
 
-When the poll loop's pool is spent, or YouTube has declared the quota day over, a pass SHALL make no further request, keep what it completed, and exit successfully, saying when spending can resume. Expiry SHALL still run.
+When the poll loop's pool is spent, or YouTube has declared the quota day over, a pass SHALL make no further request, keep what it completed, and exit successfully, saying when spending can resume.
 
 #### Scenario: The pool runs out part way
 
@@ -285,7 +285,7 @@ When the poll loop's pool is spent, or YouTube has declared the quota day over, 
 
 - **GIVEN** a quota day YouTube declared over
 - **WHEN** a pass starts
-- **THEN** expired data is removed, no request is made, and the pass exits with a zero status
+- **THEN** no request is made, and the pass exits with a zero status
 
 ### Requirement: One Pass At A Time
 

@@ -1,9 +1,8 @@
 """Reading the Telegram seeds' YouTube links, as of now.
 
 Reads, and writes nothing: which families link which YouTube channel is
-joined from Telegram's posts and the API's answers, and the API's half
-lives only in ``yt_raw_*`` for 30 days — so the join is made each time it
-is asked for and never stored.
+joined from Telegram's posts and the API's answers each time it is asked
+for, and never stored.
 
 One transaction at ``REPEATABLE READ``: the inventory, the stored
 payloads, the lookups, the families and the posts are read as of one

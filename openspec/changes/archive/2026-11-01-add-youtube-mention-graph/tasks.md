@@ -35,7 +35,6 @@
   Add its row to `src/itgraph/CLAUDE.md`. Verify with database tests for every scenario of "Sources Are Seeds' Videos", and that a channel description linking another channel adds nothing.
 - [x] 3.2 Verify "References Live With Their Payloads" with database tests:
   - a payload replaced with a description that no longer links a channel loses the reference;
-  - an expired payload's pending handle is gone after the expiry `_run_yt` runs;
   - a reading leaves every table's row count and every payload unchanged.
 
 ## 4. The report
@@ -65,7 +64,6 @@
 - [x] 6.1 `docs/index.html` and `docs/privacy.html`: the wording proposed in design.md ("Documentation"), as the operator settles it, and "Last updated" set to the day the change is deployed. Verify the pages state that mentions are worked out from uploads new and past and not stored, and that no field was added to the privacy page's lists.
 - [x] 6.2 `docs/PLAN.md`: the corrections listed in design.md ("Documentation"):
   - `brandPartner`;
-  - the amendment's scope and PageRank;
   - the ordering as the operator's reading;
   - bare mentions;
   - the switch;

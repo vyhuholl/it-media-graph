@@ -2,7 +2,7 @@
 
 A spent pool, an exhausted day and a pass already running are expected
 states, and end with status 0 and a sentence; a failed request is a
-failure. In every case expiry ran first and what was done is kept.
+failure. In every case what was done is kept.
 """
 
 import asyncio
@@ -78,7 +78,8 @@ def _use(monkeypatch: pytest.MonkeyPatch, url: str, fake: FakeYouTube) -> None:
 
 
 async def _arrange(url: str, *, published: datetime | None = None) -> None:
-    """One seed listed just now, plus a stranger's payload 31 days old."""
+    """One seed listed just now, plus a stranger's payload 31 days old,
+    which nothing removes."""
     now = datetime.now(UTC)
     database = Database(url)
     try:
@@ -103,11 +104,11 @@ async def _arrange(url: str, *, published: datetime | None = None) -> None:
         await database.dispose()
 
 
-async def _stranger_expired(url: str) -> bool:
+async def _stranger_kept(url: str) -> bool:
     database = Database(url)
     try:
         async with database.session() as session:
-            return await session.get(YtRawChannel, channel_id(9)) is None
+            return await session.get(YtRawChannel, channel_id(9)) is not None
     finally:
         await database.dispose()
 
@@ -132,7 +133,7 @@ def test_a_pass_reports_what_it_did(
 
     assert result.exit_code == 0, result.output
     assert "complete: 1 channels" in result.output
-    assert asyncio.run(_stranger_expired(database_url))
+    assert asyncio.run(_stranger_kept(database_url))
     assert asyncio.run(_last_outcome(database_url)) is YtPassOutcome.COMPLETE
 
 
@@ -153,7 +154,7 @@ def test_a_pool_spent_part_way_ends_quietly(
     assert "pool_spent" in result.output
     assert "next quota day begins" in result.output
     assert fake.calls("playlistItems") == []
-    assert asyncio.run(_stranger_expired(database_url))
+    assert asyncio.run(_stranger_kept(database_url))
     assert asyncio.run(_last_outcome(database_url)) is YtPassOutcome.POOL_SPENT
 
 
@@ -177,7 +178,7 @@ def test_a_pass_after_exhaustion_makes_no_request(
     assert result.exit_code == 0, result.output
     assert "quotaExceeded" in result.output
     assert fake.requests == []
-    assert asyncio.run(_stranger_expired(database_url))
+    assert asyncio.run(_stranger_kept(database_url))
     assert asyncio.run(_last_outcome(database_url)) is YtPassOutcome.EXHAUSTED
 
 
@@ -224,8 +225,8 @@ def test_a_second_pass_beside_a_running_one(
     assert result.exit_code == 0, result.output
     assert "another `yt watch` pass is running" in result.output
     assert fake.requests == []
-    # Expiry is not the pass's, and still ran.
-    assert asyncio.run(_stranger_expired(database_url))
+    # Nothing is removed for its age.
+    assert asyncio.run(_stranger_kept(database_url))
     assert asyncio.run(_last_outcome(database_url)) is None
 
 

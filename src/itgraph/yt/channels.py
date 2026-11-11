@@ -33,8 +33,8 @@ METHOD = "channels.list"
 # What review shows, what the poll loop needs — the video count that
 # triggers a listing, the uploads playlist it lists — and nothing else.
 # The price is per call, not per part, so "greedy when collecting" would
-# take everything; the policies allow "limited amounts" (III.E.4.d), and
-# the privacy policy lists what is read. `fields` holds the request to
+# take everything; the privacy policy lists what is read. `fields` holds
+# the request to
 # that list inside the parts: a part alone would also bring thumbnails
 # and localizations, and the branding, status and topic parts this used
 # to ask for brought keywords, banners and flags nothing read and the

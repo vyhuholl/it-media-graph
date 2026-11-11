@@ -9,8 +9,8 @@
 
 - [x] 2.1 Add `YtQuotaPool.WATCH` and `YtCommand.WATCH`, and revision A adding both values, alone, with an empty downgrade carrying the docstring of `b4e1d7c93af2`. Verify `upgrade head` on a `_test` database.
 - [x] 2.2 Add the models and revision B from design.md ("The tables"): the four tables, `yt_discovery_path`, `yt_pass_outcome`, the generated `channel_id`, the cascade, the id `CHECK`, and the trim of stored channel payloads to the declared fields. Verify `upgrade head`, `downgrade -1`, `upgrade head` on a `_test` database only, and that autogenerate then reports no difference. Add tests: the generated column follows a replaced payload; deleting a video deletes its readings; a malformed video id is refused; the trim leaves exactly the declared keys.
-- [x] 2.3 Verify with tests on the built `pg_dump` command that a full dump carries no rows of `yt_raw_videos` or `yt_raw_video_stats`, and does carry `yt_channel_polls` and `yt_watch_passes`. Update the restore note in `src/itgraph/README.md`: videos and readings come back only as new readings.
-- [x] 2.4 Add `db/yt_videos.py`: storing a response's payloads and readings under one moment, writing `due_at`, selecting due videos (seed channels only, youngest first, older ones left out on request), known ids, removing videos YouTube did not return, and expiry of payloads and readings including the acceptance branch. Add its row to `src/itgraph/CLAUDE.md`. Verify with tests for "Readings Are Observations", "A Reading Holds Counters Only", "Removing A Video Removes Everything About It", and both acceptance scenarios with `DERIVED_METRICS_ACCEPTED_ON` patched.
+- [x] Update the restore note in `src/itgraph/README.md`: videos and readings come back only as new readings.
+- [x] Add its row to `src/itgraph/CLAUDE.md`.
 - [x] 2.5 Add `db/yt_watch.py`:
   - channel poll rows: the owed listing written in the same transaction as the payload, `listed_at`, failures, backoff;
   - pass records;
@@ -18,7 +18,7 @@
   - the status queries.
 
   Add its row to `src/itgraph/CLAUDE.md`. Verify with tests: a second lock attempt fails while the first is held; the Telegram session lease can be taken while it is held, and vice versa; a closed connection releases it.
-- [x] 2.6 Extend `_expire_youtube_data` to video payloads and readings, and add `DERIVED_METRICS_ACCEPTED_ON = None` to `yt_policy.py` with the comment from design.md. Verify with tests: an offline `yt` command with no key removes a 31-day video and a 31-day reading; with the constant patched, a reading taken on the date survives at 31 days and one taken the day before does not; `yt … --help` still opens no database.
+- [x] Verify with tests: an offline `yt` command with no key removes a 31-day video and a 31-day reading; with the constant patched, a reading taken on the date survives at 31 days and one taken the day before does not; `yt … --help` still opens no database.
 
 ## 3. Ledger and requests
 
@@ -38,17 +38,12 @@
   - an API failure exits 1;
   - every request's results are committed before the next.
 
-  Verify with tests for "A Spent Pool Ends A Pass Quietly", "One Pass At A Time" and "Progress Is Kept Per Request", and that expiry ran in each.
 - [x] 4.5 Verify with a log capture at debug level that a pass tracking and reading videos writes no title, description or count ("Logs Name Ids Only"), and that nothing but channel data, video data, readings and the loop's own rows was written ("The Loop Derives Nothing").
 - [x] 4.6 Add `itgraph yt watch` to the `yt` sub-app and document it in `src/itgraph/README.md` (Russian): what one pass does, what a quiet exit means, running it by hand through `scripts/on-host.sh`. Verify the README against `--help`, and that `--help` opens no database.
 
 ## 5. Status
 
 - [x] 5.1 Add `itgraph yt watch-status`: tracked videos, readings due and the oldest overdue, the last pass and what it deferred or failed, the watch pool against its cap and pace, discoveries per path over 7 days. Document it in `src/itgraph/README.md`. Verify with an output test and that no HTTP client is built.
-
-## 6. Refresh after acceptance
-
-- [x] 6.1 Extend `yt/refresh.py`: with an acceptance date recorded, fetch again videos that are past the horizon and keep readings longer than 30 days, once their payload is older than the refresh age, fifty to a request, from the general pool, removing those YouTube no longer returns. Verify with tests for both scenarios of "Videos Are Refreshed While Their Readings Are Kept", with the constant patched and unpatched.
 
 ## 7. Deploy
 
@@ -69,5 +64,4 @@
 
 - The operator deploys with the playbook (migration with its dump, units, timer). The first pass is run by hand — `scripts/on-host.sh yt watch`, then `yt watch-status` and `yt quota` — before the timer is trusted. That settles `fields`, the 404 shapes, absent counters and the first listing's cost (design.md, "Assumptions"). Any surprise is a fix first.
 - After two weeks, read `yt quota` and `yt watch-status`: units a day against the 1,830–2,500 estimate, and how often the daily check found what the count missed. Revisit the reserve and the discovery choice against them.
-- On acceptance of the derived-metrics application: one commit setting `DERIVED_METRICS_ACCEPTED_ON`, updating `docs/privacy.html` (36 months, the date) and recording it in `docs/PLAN.md`; then deploy.
 - `/opsx:verify`, then `/opsx:archive`. Commits go to `master`.

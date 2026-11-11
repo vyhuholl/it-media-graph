@@ -2,11 +2,11 @@
 
 ## Why
 
-`docs/PLAN.md` orders YouTube's alerts into "a Telegram chat separate from the Telegram one", and the bot today knows one chat. Change 7 will score YouTube once the derived-metrics use case is accepted; the queue, the routing, the wording and the bot's grants it delivers through have to exist, and to have been tried in a test environment, before then — the order Telegram followed when delivery shipped ahead of its scoring. The explore of 2026-11-11 also found two defects in the delivery loop that YouTube's round-the-clock polling would turn from latent into regular, and buttons nobody presses.
+`docs/PLAN.md` orders YouTube's alerts into "a Telegram chat separate from the Telegram one", and the bot today knows one chat. The explore of 2026-11-11 also found two defects in the delivery loop that YouTube's round-the-clock polling would turn from latent into regular, and buttons nobody presses.
 
 ## What Changes
 
-- **A queue for YouTube alerts**, `yt_alerts`, apart from Telegram's `alerts`, which references `raw_messages`. An alert names a tracked video and the reading it was scored on, and is deleted with that reading and that video; it copies no title or count, and no dump holds it.
+- **A queue for YouTube alerts**, `yt_alerts`, apart from Telegram's `alerts`, which references `raw_messages`.
 - **Destinations.** The bot sends to a destination — a chat, and a topic or none. Telegram's alerts keep their chat. YouTube's go to one forum chat with a topic for English and one for Russian, chosen by the channel's language at the moment of sending; channels labelled `other` get no alerts, and an alert whose channel became `other` while it waited is closed as excluded, counted, never sent. A channel no longer in scope still has its alert delivered.
 - **Each destination keeps its own account:** its daily cap, quiet window and digest. A burst on one platform no longer spends another's cap.
 - **A YouTube alert's wording:** YouTube named as the source on every alert and every digest entry, the video's title and channel, a link to it on YouTube, the counts YouTube reports with the time they were read, how old the video is, and itgraph's score, labelled as calculated by itgraph and not a YouTube metric, with the moment it was calculated. Russian, as Telegram's.
@@ -20,7 +20,6 @@
 
 **Out of scope:**
 
-- Scoring YouTube and raising real YouTube alerts: change 7, after acceptance.
 - A signal of YouTube videos linked by Telegram families: a change of its own, after its rate is measured.
 - Deleting or editing sent messages.
 - Why direct delivery took over an hour on five days of the last 28 (37 alerts): observed, not investigated.
@@ -34,7 +33,6 @@
 ### Modified Capabilities
 
 - `alert-delivery`: destinations instead of one recipient; the cap, quiet hours and digest kept per destination; held alerts marked, and no longer blocking direct ones; the digest sent in parts; feedback removed; the bot's commands answered in its chats, its writes confined to the delivery columns of both queues.
-- `youtube-data-retention`: alerts are among what dumps leave out and what a restored copy reads back as empty.
 - `collection-monitoring`: the alert series carry the platform; the exporter cannot read which video an alert is about.
 - `collection-deploy`: the bot's pod holds the chat and topic ids of its destinations.
 - `database-backups`: the restore's trial delivers an alert to every destination of the environment.
@@ -66,11 +64,7 @@ Confirmed as of 2026-11-11:
 4. Topics are made by the operator and named to the role; the bot is no administrator; a topic it cannot reach fails the send, with no fallback.
 5. `/status` answers about the platform of its chat.
 6. The cap, quiet window and digest are kept per destination, by default Telegram's, the YouTube topics' cap 10 a day.
-7. The queue is deleted with the video's data and is in no dump; no title or count is copied onto an alert; the counts shown are the latest stored, dated, and the score dated by its own moment.
 8. A message in the chat is display: nothing is deleted or edited later.
-9. YouTube is named on every alert and every digest entry as text with a link to the video, the link preview kept; itgraph's score carries the disclosure of III.E.4.h.
-10. Released to production before acceptance; the test environment delivers synthetic YouTube alerts.
-11. No notice under III.D.3: no allocated quota is used, alerts were in the stated use case.
 12. Both delivery defects fixed here.
 13. The feedback buttons, the table and its type removed; a press on an old button is answered and its keyboard taken off.
 

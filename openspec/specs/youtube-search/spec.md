@@ -1,7 +1,7 @@
 # youtube-search Specification
 
 ## Purpose
-Searching YouTube with the operator's queries to find English-language IT channels to review: the request and the one field it reads, the search quota bucket, not asking the same query twice inside 30 days, the results kept for at most 30 days, and the review queue built from them in YouTube's own order.
+Searching YouTube with the operator's queries to find English-language IT channels to review: the request and the one field it reads, the search quota bucket, not asking the same query twice inside its window, the results kept, and the review queue built from them in YouTube's own order.
 
 ## Requirements
 
@@ -44,12 +44,12 @@ A search SHALL ask for 50 results a page, in English by relevance, of the type t
 
 ### Requirement: The Publication Window
 
-A video search SHALL ask for videos published in the last 30 days. A query searched again with `--force` while an earlier run of it is in date SHALL ask only for videos published since that run.
+A video search SHALL ask for videos published in the last `youtube_answers_fresh_days` (30 by default). A query searched again with `--force` while an earlier run of it is in date SHALL ask only for videos published since that run.
 
 #### Scenario: A first video search
 
 - **WHEN** a query is first searched for videos
-- **THEN** the request is bounded to videos published in the last 30 days
+- **THEN** the request is bounded to videos published in the last 30 days, by default
 
 #### Scenario: A forced repeat
 
@@ -57,11 +57,11 @@ A video search SHALL ask for videos published in the last 30 days. A query searc
 - **WHEN** it is searched again with `--force`
 - **THEN** the request is bounded to videos published since that run
 
-### Requirement: A Query Is Not Asked Twice In 30 Days
+### Requirement: A Query Is Not Asked Twice In Its Window
 
-The system SHALL NOT search a query of one type again while a run of it is in date, unless `--force` is given. A skipped query SHALL be reported as skipped and cost nothing.
+The system SHALL NOT search a query of one type again while a run of it is in date — younger than `youtube_answers_fresh_days` — unless `--force` is given. A skipped query SHALL be reported as skipped and cost nothing.
 
-#### Scenario: A repeat within the month
+#### Scenario: A repeat within the window
 
 - **GIVEN** a query searched for channels 5 days ago
 - **WHEN** the command runs with it again
@@ -73,9 +73,9 @@ The system SHALL NOT search a query of one type again while a run of it is in da
 - **WHEN** it is searched for channels
 - **THEN** it is asked
 
-#### Scenario: After the month
+#### Scenario: After the window
 
-- **GIVEN** a query whose last run expired
+- **GIVEN** a query whose last run is older than `youtube_answers_fresh_days`
 - **WHEN** the command runs with it
 - **THEN** it is asked
 
@@ -95,9 +95,9 @@ A search SHALL book every request against the search pool alone, make no more re
 - **WHEN** a run stops at its limit after two pages
 - **THEN** both pages' results are stored
 
-### Requirement: Search Results Are Kept 30 Days
+### Requirement: Search Results Are Kept
 
-The system SHALL store each run — the query, its type, the moment and the publication bound — and each result's channel id with its position in the run, and SHALL remove both 30 days after the run. A run holds no data read from the API.
+The system SHALL store each run — the query, its type, the moment and the publication bound — and each result's channel id with its position in the run. Only runs younger than `youtube_answers_fresh_days` feed the review queue; older ones are kept. A run holds no data read from the API.
 
 #### Scenario: A run's results
 
@@ -106,11 +106,11 @@ The system SHALL store each run — the query, its type, the moment and the publ
 - **THEN** 50 results are stored, each with its position and its channel id
 - **AND** no title, description or video id
 
-#### Scenario: A run past 30 days
+#### Scenario: A run past its window
 
 - **GIVEN** a run made 31 days ago
-- **WHEN** any YouTube command reaches the database
-- **THEN** the run and its results are removed before anything else
+- **WHEN** the review queue is built
+- **THEN** the run is not read, and it and its results are still stored
 
 ### Requirement: The Operator's Queries Are Kept
 

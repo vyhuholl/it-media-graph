@@ -1,10 +1,10 @@
-"""The search pass: the operator's queries, each asked at most once a month.
+"""The search pass: the operator's queries, each asked at most once a window.
 
 For each query, in the order given:
 
-- a run of it, of the same type, in date — made in the last 30 days —
-  means no request, unless ``force``;
-- a video search asks for uploads of the last 30 days, or, forced over a
+- a run of it, of the same type, in date — made within
+  ``youtube_answers_fresh_days`` — means no request, unless ``force``;
+- a video search asks for uploads of that same window, or, forced over a
   run in date, only for those since that run;
 - up to ``pages`` pages, following the next-page token, each page's
   results committed before the next request. The run itself is written
@@ -21,8 +21,9 @@ request is kept out for the run.
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
+from itgraph.config import settings
 from itgraph.db.models import YtSearchType
 from itgraph.db.session import Database
 from itgraph.db.yt_quota import QuotaError
@@ -30,7 +31,6 @@ from itgraph.db.yt_search import add_page, latest_run_in_date, start_run
 from itgraph.yt import search
 from itgraph.yt.client import YouTube, request_urls_unlogged
 from itgraph.yt.errors import RequestLimitReached, YtError
-from itgraph.yt_policy import RETENTION
 
 __all__ = ["SearchSummary", "run_searches"]
 
@@ -50,8 +50,8 @@ class SearchSummary:
 
     def line(self) -> str:
         return (
-            f"queries asked {self.asked}, skipped {self.skipped} (asked in "
-            f"the last 30 days; --force asks again); results {self.results}; "
+            f"queries asked {self.asked}, skipped {self.skipped} (a run "
+            f"still in date; --force asks again); results {self.results}; "
             f"requests {self.requests}"
         )
 
@@ -106,8 +106,9 @@ async def _search_one(
     asked_at = datetime.now(UTC)
     published_after = None
     if kind is YtSearchType.VIDEO:
+        window = timedelta(days=settings.youtube_answers_fresh_days)
         published_after = (
-            previous if previous is not None else asked_at - RETENTION
+            previous if previous is not None else asked_at - window
         )
 
     run_id: int | None = None

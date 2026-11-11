@@ -15,7 +15,6 @@ from itgraph.db.session import Database
 from itgraph.db.yt_search import (
     add_page,
     latest_run_in_date,
-    purge_expired_searches,
     runs_in_date,
     start_run,
 )
@@ -125,22 +124,6 @@ async def test_runs_in_date_come_oldest_first_with_their_channels(
         ("fake first", (channel_id(1), channel_id(3))),
         ("fake second", (channel_id(2),)),
     ]
-
-
-async def test_a_run_past_30_days_goes_with_its_results(
-    database: Database,
-) -> None:
-    await _start(database, at=NOW - timedelta(days=31))
-    await _start(database, "fake kept", at=NOW - timedelta(days=29))
-
-    async with database.session() as session:
-        removed = await purge_expired_searches(session)
-
-    assert removed == 1
-    assert await _count(database, YtSearchRun) == 1
-    assert await _count(database, YtRawSearchResult) == 1
-    # The operator's queries stay, both of them.
-    assert await _count(database, YtSearchQuery) == 2
 
 
 async def test_removing_a_run_removes_its_results(database: Database) -> None:

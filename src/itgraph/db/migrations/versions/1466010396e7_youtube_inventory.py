@@ -17,8 +17,7 @@ created explicitly rather than by `create_table`, because two of them
 implicit `CREATE TYPE` fails.
 
 API data — titles, handles, statistics — has one table, `yt_raw_channels`,
-because it may be kept at most 30 days (YouTube API Services Developer
-Policies III.E.4) and one table is one place to expire it from.
+and every refresh replaces its row.
 
 """
 

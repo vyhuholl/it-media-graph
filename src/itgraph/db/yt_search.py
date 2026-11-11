@@ -1,46 +1,52 @@
 """Searches: the operator's queries, each run of one, and what it returned.
 
-Three tables, three footings:
+Three tables:
 
 - ``yt_search_queries`` — the words the operator typed, with its type
-  and when it was first and last asked. The operator's own: kept, and
-  in the daily inventory dump.
+  and when it was first and last asked. The operator's own, and in the
+  daily inventory dump.
 - ``yt_search_runs`` — one search of one query: when, bounded how, how
-  many pages. No API data, but left out of every dump, and removed at
-  30 days, with the results it describes.
+  many pages.
 - ``yt_raw_search_results`` — each result's channel id and position.
-  API data: 30 days, and out of every dump by the prefix.
 
-Whether a query may be asked again is read from the runs in date, never
-from ``last_asked_at``: a restore keeps the query and drops the runs,
-and a query whose answer is gone must be askable.
+A run is "in date" while it is younger than
+``youtube_answers_fresh_days``: a query is not asked again while a run
+of it is in date, and only runs in date feed the search queue. Whether
+a query may be asked again is read from the runs, never from
+``last_asked_at``.
 """
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from itgraph.config import settings
 from itgraph.db.models import (
     YtRawSearchResult,
     YtSearchQuery,
     YtSearchRun,
     YtSearchType,
 )
-from itgraph.yt_policy import RETENTION
 
 __all__ = [
     "RunInDate",
     "add_page",
     "first_queries",
     "latest_run_in_date",
-    "purge_expired_searches",
     "runs_in_date",
     "start_run",
 ]
+
+
+def _cutoff(now: datetime | None) -> datetime:
+    """The oldest run still in date."""
+    return (now or datetime.now(UTC)) - timedelta(
+        days=settings.youtube_answers_fresh_days
+    )
 
 
 async def latest_run_in_date(
@@ -51,7 +57,7 @@ async def latest_run_in_date(
     now: datetime | None = None,
 ) -> datetime | None:
     """When the query was last searched for this type, if that is in date."""
-    cutoff = (now or datetime.now(UTC)) - RETENTION
+    cutoff = _cutoff(now)
     latest: datetime | None = await session.scalar(
         select(func.max(YtSearchRun.asked_at))
         .join(YtSearchQuery, YtSearchQuery.id == YtSearchRun.query_id)
@@ -148,7 +154,7 @@ async def runs_in_date(
     session: AsyncSession, *, now: datetime | None = None
 ) -> list[RunInDate]:
     """Every run in date, oldest first, each with its channels in order."""
-    cutoff = (now or datetime.now(UTC)) - RETENTION
+    cutoff = _cutoff(now)
     runs = await session.execute(
         select(
             YtSearchRun.id,
@@ -194,19 +200,3 @@ async def first_queries(
         for channel in run.channels:
             found.setdefault(channel, run.query)
     return found
-
-
-async def purge_expired_searches(
-    session: AsyncSession, *, now: datetime | None = None
-) -> int:
-    """Delete every run made more than 30 days ago, with its results.
-
-    The query stays: it is the operator's. Returns how many runs went.
-    """
-    cutoff = (now or datetime.now(UTC)) - RETENTION
-    result = await session.execute(
-        delete(YtSearchRun)
-        .where(YtSearchRun.asked_at < cutoff)
-        .returning(YtSearchRun.id)
-    )
-    return len(result.all())

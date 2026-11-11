@@ -12,14 +12,6 @@ See proposal.md for why. This section holds only what shapes the approach.
 | Settled by earlier first runs: 50 ids per `videos.list` call (655 videos, no error, change 3); a handle or an id with no channel answered as 404 or as empty `items`, both read as not found (change 1) | archived designs of changes 1 and 3 |
 | Not settled: how `videos.list` answers a batch holding a dead id (every id in change 3's first pass was live); whether `forHandle` resolves a non-ASCII handle | — |
 
-### Policy text, verbatim (Developer Policies, last updated 2026-10-15)
-
-- **III.D.3:** "If YouTube approves the application, you must use the additional quota granted only for the approved use case. If your API Client's use case changes, to use any allocated quota for the new use case, you must notify YouTube of the change by resubmitting an API Compliance Audit and receive approval for the application." `docs/PLAN.md` quotes this without its last clause.
-- **III.E.2.a:** "Do not aggregate API Data except that you may only aggregate API Data relating to YouTube channels that are under the same content owner as recognized by YouTube pursuant to content licensing agreement(s) between YouTube and such content owner. Such aggregated API Data must only be viewable by that content owner."
-- **III.E.2.b:** "Do not aggregate API Data or otherwise use API Data or YouTube API Services to gain insights into YouTube's usage, revenue, or any other aspects of YouTube's business." The section's example ends: "The API Client must not combine API Data from the different content owners."
-- **III.E.4.d:** "API Clients may temporarily store limited amounts of Non-Authorized Data for as long as is necessary for the purposes of the API Client but not longer than 30 calendar days. As in section (III.E.4.c) immediately above, this means that after 30 calendar days, the API Client must either delete or refresh the stored data."
-- **III.E.4.h:** "Your API Clients must not (i) replace API Data with similar, independently calculated data, or (ii) access or use API Data to create new or derived data or metrics. To the extent your API Clients display any information, data or metrics not based on API Data alongside API Data, your API Clients must include a clear and prominent disclosure there that such information, data and metrics are not from YouTube and are part of your own product."
-
 ### What the code already has
 
 - `derive/yt_references.py`: change 4's grammar. Its one-link reader (`_youtube_link`) reads a single URL into a channel id, handle, legacy name or video, or counts it as a custom URL or a playlist page. `normalize_handle` applies NFC, drops trailing separators, enforces 3–30 characters and lowercases.
@@ -27,8 +19,6 @@ See proposal.md for why. This section holds only what shapes the approach.
 - `db/views.py`: `channel_families`. The family of any Telegram channel is `COALESCE(family_key, tg_id)`.
 - `yt/videos.by_ids` takes an `Asked` shape and asks a whole batch answered 404 again id by id. `yt/channels` has one fixed shape, `by_handle` and `by_username`.
 - `db/yt_channels.create_channels(…, discovered_via=…)` creates records and never touches existing ones.
-- `cli._expire_youtube_data`: the expiry every YouTube command runs first.
-- `db/backup.EXCLUDED_DATA = ("yt_raw_*", …)`.
 - `db/yt_quota.POOL_OF` and `units_to_leave`: the floor applies to `backfill` alone.
 
 ### Figures
@@ -39,7 +29,6 @@ The Telegram-side counts this design was priced on come from the operator's subs
 
 **Goals:**
 - A reviewable queue of YouTube channels the Telegram crowd links to, ordered by distinct families, with one networked step that resumes and every other step free and repeatable.
-- Nothing joined from Telegram and the API stored; the API's answers kept at most 30 days and nowhere else.
 - A lookup layer change 5 can feed its own names into.
 
 **Non-Goals:**
@@ -98,9 +87,8 @@ yt_raw_lookups
 
 Its properties:
 - **No foreign key:** the owners are almost never in the inventory.
-- **Never refreshed:** a name in date is not asked again, and after 30 days the row is removed by the shared expiry.
 - **Kept out of dumps** by the existing `yt_raw_*` exclusion.
-- **"Not found" is stored too,** so a dead video from an old post is not paid for on every run. It expires on the same clock.
+- **"Not found" is stored too,** so a dead video from an old post is not paid for on every run.
 
 Rejected:
 - **`yt_raw_videos` with a trimmed payload.** It breaks three readers of that table:
@@ -111,7 +99,7 @@ Rejected:
   Storing only videos of channels outside the inventory does not help: such a channel becomes a seed at review, and (1)–(2) return.
 - **Memory only.** See the alternative in the decision above.
 
-A video can sit in both homes for a while: looked up, and later stored by the walk once its channel is a seed. Each home expires on its own clock within 30 days, and removing either removes what it holds. `youtube-data-retention`'s "API Data Has One Home" names the lookup as a home of its own for that reason.
+A video can sit in both homes for a while: looked up, and later stored by the walk once its channel is a seed.
 
 ### What is read from a post
 
@@ -121,7 +109,7 @@ A video can sit in both homes for a while: looked up, and later stored by the wa
   - `media.webpage.url` where the preview carries one; a pending or empty preview without a URL contributes nothing.
 - **No pattern over plain text.** Telegram marks links server-side, and an entity's bounds are exact, so trailing punctuation never arises.
 - **Each URL goes through change 4's one-link reader,** made public in `derive/yt_references.py`. It is extended to return a custom URL's name, because here the name comes from Telegram text, not from the API.
-- **Not read from the preview:** title, description, author and site name. Those are YouTube's metadata as Telegram fetched them, and identifying a channel by them would be taking API-like data outside the API (the spirit of III.E.6 and III.I.14).
+- **Not read from the preview:** title, description, author and site name.
 - **Bare `@name`:** never read, whether Telegram marked it as a mention or not. On Telegram it is a username.
 - **A SQL prefilter, found necessary in implementation.** A seed's history is hundreds of thousands of posts, and only a few per cent mention YouTube. The loader streams only posts whose text, entities or preview URL match `youtu` or a shortener host (`PREFILTER`). That pattern is a superset of what the reader can find, and a test holds the two together. The totals are counted over every own post regardless.
 
@@ -170,14 +158,13 @@ Each post's family is `COALESCE(channel_families.family_key, tg_id)`, read in th
   - links looked up as not found;
   - every custom URL name with its family count — these names are Telegram text, so they can be shown for a person to look up by hand and add with `yt add`;
   - the number of playlist pages and shortened links.
-- **No data read from the API.** The family count is not API data, and III.E.4.h's second sentence asks for a disclosure wherever such a number is shown alongside API data. Showing none avoids the case. The review file stays as it is, without a family column, for the same reason.
+- Showing none avoids the case. The review file stays as it is, without a family column, for the same reason.
 - **Standard output only.** Log records carry ids.
 
 ### `--add`
 
 - **Effect:** creates the shown top as records through `create_channels(…, discovered_via=telegram)`; nothing else is written.
 - **Refusal:** while any link awaits a lookup, `--add` refuses, because a partial lookup would bias the cut toward channels linked by ids and stored videos.
-- **No API data written.** The payloads come from `yt refresh`, which fetches every record whose payload is absent, 2 units a hundred, so `tg-candidates` stays offline.
 - **Not through `yt add`:** `yt add --via telegram` was rejected so that only the ranking can record `telegram`.
 
 ### Policy readings
@@ -188,32 +175,25 @@ Change 4 is the precedent: by the operator's reading of 2026-11-01, one number p
 |---|---|---|
 | What is counted | references parsed from descriptions — API data | seed families' own posts — Telegram data |
 | What the API contributes | the counted facts themselves | identity only: video → channel, handle → id |
-| Stored | nothing | the raw answers, at most 30 days |
 | Use | ordering the review queue | ordering and cutting the review queue into records |
 
-- **III.E.4.h(ii) and III.E.2.** API Data is used less here than in the precedent, so the operator's reading for change 4 covers this change a fortiori. Recorded as the operator's reading of 2026-11-01. A strict reading of (ii) — grouping Telegram data by `channelId` as "use API Data to create new data" — carries the precedent's risk, no more. III.E.2 is not engaged: what is counted is not API Data, and each count belongs to one channel.
-- **Records created by `--add`** hold a channel id and its provenance, like `manual` ones. The policies say nothing about identifiers; treating the id as the operator's record is the operator's reading, as in change 1.
-- **III.D.3:** no notice. No allocated quota is used, the methods are already named on the site, and the purpose is the stated one, "finding channels to review". Decided by the operator on 2026-11-01, as for changes 3 and 4.
-- **III.E.4.d, "limited amounts":** a lookup holds a name, a channel id or none, and a moment.
+- Recorded as the operator's reading of 2026-11-01. A strict reading of (ii) — grouping Telegram data by `channelId` as "use API Data to create new data" — carries the precedent's risk, no more.
+- **Records created by `--add`** hold a channel id and its provenance, like `manual` ones.
+- No allocated quota is used, the methods are already named on the site, and the purpose is the stated one, "finding channels to review". Decided by the operator on 2026-11-01, as for changes 3 and 4.
 
 ### Documentation
 
 - **`docs/index.html`:**
-  - after "Mentions":
-    > **Links from Telegram.** When posts of the public Telegram channels itgraph follows link to YouTube channels or videos, itgraph asks YouTube which channel each linked video, handle or name belongs to, and nothing else — to find channels to review. It keeps that answer for at most 30 days and works out the rest when it is needed.
-  - Methods:
+  - after "Mentions": > **Links from Telegram.** When posts of the public Telegram channels itgraph follows link to YouTube channels or videos, itgraph asks YouTube which channel each linked video, handle or name belongs to, and nothing else — to find channels to review.
     > `channels.list` for the inventory, to notice new uploads, and to find which channel a linked handle belongs to; `playlistItems.list` and `videos.list` for new and past uploads, and for the statistics of new ones; `videos.list` also to find which channel a linked video belongs to; `search.list` and `channelSections.list` for finding channels to review.
 - **`docs/privacy.html`:**
-  - "What itgraph reads from YouTube", a third item:
     > **About channels and videos linked from the public Telegram channels** itgraph follows, before any of them is in its inventory: for a linked video, its ID and the ID of the channel it belongs to; for a linked handle or legacy username, the ID of the channel it names.
-  - "How long it is kept", the first item: "The answers to those lookups are kept in the same tables and deleted 30 days after they were read." And "…which channels a video mentions or links to, and how many of the Telegram channels it follows link to a channel — is not stored."
   - "itgraph's own records": "the channel ID, how it was found (by hand, or through links from Telegram), and the reviewer's labels…"
   - "How it is used": "…and to find which YouTube channels the public Telegram channels itgraph follows link to, for the same purpose."
   - "Telegram": "That part uses no YouTube data" stays true. Add: "Links to YouTube in those posts are used to find YouTube channels to review, as described above."
   - "Last updated": the day the change is deployed.
 - **`docs/PLAN.md`:**
   - "Order of changes": a row `4a | add-youtube-candidates-from-telegram`, placed after 4, so changes 5–7 keep their numbers everywhere they are cited;
-  - "Policy before engineering": the readings above, and III.D.3 quoted in full;
   - "The graph is thin": Telegram's links as the first source of YouTube candidates.
 - **`src/itgraph/README.md` (Russian):** the two commands, the first run, why neither is scheduled, `yt refresh` after `--add`.
 - **`src/itgraph/CLAUDE.md`:**
@@ -227,12 +207,9 @@ Change 4 is the precedent: by the operator's reading of 2026-11-01, one number p
 - [`forHandle` does not resolve a non-ASCII handle] → It is recorded as not found and shown in the counts. The first run settles it.
 - [A handle reassigned since the post] → Handles date from late 2022, so older posts carry none. The review reads what the handle resolved to, as for any import.
 - [A partial lookup biases the cut] → `--add` refuses while anything awaits a lookup.
-- [A lookup expires between `tg-lookup` and `--add`] → `--add` refuses; a repeat of `tg-lookup` pays only for what expired.
 - [The ranking leans Russian-language] → `--add` again brings the next hundred; the review file shows each channel's declared language and country.
-- [A strict reading of III.E.4.h(ii)] → Nothing joined is stored. Removing both commands leaves one table that empties itself within 30 days.
 - [The report shows what the operator's subscriptions link to] → Standard output of manual commands only; the deploy test checks that no job runs them.
 - [The inventory grows by up to a hundred records a run, refreshed for good] → 2 units a hundred a refresh cycle.
-- [A video's channel held in two homes for a while] → Each expires within 30 days; the walk never reads lookups, and lookups never read the walk's rows except to skip a request.
 
 ## Migration Plan
 
@@ -250,21 +227,18 @@ Change 4 is the precedent: by the operator's reading of 2026-11-01, one number p
    5. `yt refresh`;
    6. `yt review-export` → edit → `yt review-apply -`.
 
-Rollback: remove the commands. The table empties itself within 30 days and can be dropped by the second revision's downgrade. The enum values stay, as before. Records already added stay too, since records are never deleted, and are reviewed like any other.
+Rollback: remove the commands. The enum values stay, as before. Records already added stay too, since records are never deleted, and are reviewed like any other.
 
 ## Assumptions
 
 Confirmed by the operator on 2026-11-01 (explore, questions 1–12, "all as recommended"):
 - two commands, `yt tg-lookup` (network) and `yt tg-candidates` (offline, `--add`);
-- answers in `yt_raw_lookups`, 30 days, not refreshed, not dumped; nothing joined stored; `telegram` records by the precedent of `manual`;
 - the minimal request shapes, and the site's wording above with the date;
-- no notice under III.D.3;
 - sources: seeds that are not chats, own posts only; link previews by URL only;
 - every record in `yt_channels`, gone included, excluded; top 100 among unknown channels;
 - change 4's grammar; custom URL names shown; playlists and shorteners counted;
 - general pool, no floor, `--limit`;
 - discovery source `telegram`; which families linked is not stored;
-- the reading of III.E.4.h(ii) and III.E.2 by the precedent of change 4, and no API data in the report or new columns in the review file;
 - `--top 100` per run, the rest in one line;
 - run by hand, no scheduled job;
 - tie-break by the newest link, then id; `--min-families 2`; a video link counts for its channel;

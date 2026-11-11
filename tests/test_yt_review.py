@@ -1,6 +1,6 @@
 """The review file: rendered for a text editor, read back strictly."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pytest
 from ytfakes import channel_id
@@ -20,7 +20,6 @@ from itgraph.yt_review import (
 )
 
 EXPORTED = datetime(2026, 10, 26, 9, 12, tzinfo=UTC)
-LATER = EXPORTED + timedelta(hours=2)
 
 
 def _file(*rows: ExportRow) -> str:
@@ -39,11 +38,10 @@ def _edit(text: str, number: int, **values: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def test_the_header_says_what_may_be_written_and_when_it_expires() -> None:
+def test_the_header_says_what_may_be_written() -> None:
     text = _file()
 
     assert "# exported: 2026-10-26T09:12:00Z" in text
-    assert "# expires:  2026-11-25" in text
     assert "never commit it" in text
     assert "personal company media event education" in text
     assert "en ru other" in text
@@ -63,7 +61,7 @@ def test_a_round_trip() -> None:
         text, 2, decision="reject", reason="consumer_tech", note="gadgets"
     )
 
-    parsed = parse_review(text, now=LATER)
+    parsed = parse_review(text)
 
     assert parsed.problems == []
     assert parsed.exported_at == EXPORTED
@@ -88,7 +86,7 @@ def test_a_round_trip() -> None:
 
 
 def test_a_blank_row_is_skipped() -> None:
-    parsed = parse_review(_file(ExportRow(channel_id(1))), now=LATER)
+    parsed = parse_review(_file(ExportRow(channel_id(1))))
 
     assert parsed.decisions == []
     assert parsed.skipped == 1
@@ -107,7 +105,7 @@ def test_every_mistake_is_reported() -> None:
     )
     text += f"{channel_id(0)}\tmaybe\n"  # listed twice
 
-    problems = parse_review(text, now=LATER).problems
+    problems = parse_review(text).problems
 
     said = [str(problem) for problem in problems]
     assert any("line 10" in line and "needs a kind" in line for line in said)
@@ -130,7 +128,7 @@ def test_values_match_whatever_their_case() -> None:
         lang="Other",
     )
 
-    [decision] = parse_review(text, now=LATER).decisions
+    [decision] = parse_review(text).decisions
 
     assert (decision.kind, decision.lang) == (
         YtChannelKind.EDUCATION,
@@ -142,13 +140,13 @@ def test_a_tab_in_a_title_cannot_break_the_row() -> None:
     text = _file(ExportRow(channel_id(1), title="Fake\tTitle\nOn Two Lines"))
 
     assert "Fake Title On Two Lines" in text
-    assert parse_review(text, now=LATER).problems == []
+    assert parse_review(text).problems == []
 
 
 def test_a_row_with_too_many_fields_is_a_problem() -> None:
     text = _file(ExportRow(channel_id(1))).rstrip("\n") + "\textra\n"
 
-    [problem] = parse_review(text, now=LATER).problems
+    [problem] = parse_review(text).problems
 
     assert "a tab inside a value?" in str(problem)
 
@@ -161,15 +159,7 @@ def test_a_file_without_its_header_is_refused() -> None:
     )
 
     with pytest.raises(UnreadableReviewFile, match="export moment"):
-        parse_review(text, now=LATER)
-
-
-def test_an_expired_file_is_refused() -> None:
-    text = _file(ExportRow(channel_id(1)))
-
-    parse_review(text, now=EXPORTED + timedelta(days=30))  # the last day
-    with pytest.raises(UnreadableReviewFile, match="Delete it"):
-        parse_review(text, now=EXPORTED + timedelta(days=30, minutes=1))
+        parse_review(text)
 
 
 def test_rearranged_columns_are_refused() -> None:
@@ -178,7 +168,7 @@ def test_rearranged_columns_are_refused() -> None:
     )
 
     with pytest.raises(UnreadableReviewFile, match="column line"):
-        parse_review(text, now=LATER)
+        parse_review(text)
 
 
 def test_tabs_turned_into_spaces_are_named_as_such() -> None:
@@ -187,4 +177,4 @@ def test_tabs_turned_into_spaces_are_named_as_such() -> None:
     text = _file(ExportRow(channel_id(1))).replace("\t", "    ")
 
     with pytest.raises(UnreadableReviewFile, match="spaces, not tabs"):
-        parse_review(text, now=LATER)
+        parse_review(text)

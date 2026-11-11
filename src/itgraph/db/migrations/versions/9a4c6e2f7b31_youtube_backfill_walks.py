@@ -5,9 +5,7 @@ Revises: 5d2b8e17c4a9
 Create Date: 2026-11-01 14:05:00.000000
 
 Where the history walk stands with each channel: when it was walked, how
-far, and what the API did — counts only, no API data. Its rows are left
-out of every dump by name in `db/backup.py`, because a record restored
-without the videos it describes would claim a walk that is not there.
+far, and what the API did — counts only, no API data.
 
 """
 

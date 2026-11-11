@@ -404,7 +404,7 @@ async def test_a_first_listing_brings_the_recent_videos_only(
 async def test_a_video_older_than_the_horizon_is_not_taken_for_new(
     database: Database,
 ) -> None:
-    """Its data expired; a listing shows it again; it stays forgotten."""
+    """Not stored; a listing shows it again; it stays forgotten."""
     await seeds(database, 1, listed_at=NOW - timedelta(days=2))
     old = NOW - timedelta(days=60)
     fake = api(
@@ -978,7 +978,7 @@ async def test_a_stream_scheduled_far_ahead_keeps_its_data_current(
     database: Database,
 ) -> None:
     """Due again at the refresh age, not at a start 40 days away — or its
-    data would expire before the stream began."""
+    data would be stale long before the stream began."""
     await seeds(database, 1)
     fake = api(
         1,

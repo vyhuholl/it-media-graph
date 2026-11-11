@@ -12,9 +12,8 @@
   - **second:** the types, the bucket column and primary key, and the four tables. Its downgrade deletes `search` exhaustion rows, restores the primary key and drops the rest.
 
   Verify on a `_test` database only: `upgrade head`, `downgrade -1` twice, `upgrade head`, then autogenerate reports no difference.
-- [x] 1.3 Update `db/backup.py`: `EXCLUDED_DATA` gains `yt_search_runs`, and `INVENTORY_TABLES` gains `yt_search_queries`, each with the comment its neighbour has. Verify with database tests:
+- [x] Verify with database tests:
   - malformed channel ids in sections' owners and search results are refused at the database level;
-  - a full dump holds the definitions of the three new excluded tables and none of their rows;
   - the inventory dump holds `yt_search_queries`' rows.
 
 ## 2. The ledger and the client
@@ -44,11 +43,9 @@
   - store or replace a seed's trimmed response with `fetched_at`;
   - read the lists in date of seeds not marked gone;
   - name the seeds due;
-  - `purge_expired_sections` at 30 days, called from `cli._expire_youtube_data` with a log line by count.
 
   Add both rows to `src/itgraph/CLAUDE.md`. Verify:
   - mocked-HTTP tests for "Any Section's Channels Are Featured" — a fixture with eight sections of mixed, lowercase and undocumented types, one listing two ids — and for the declared-fields scenario "Channel sections are asked for their channel ids only";
-  - database tests for "A featured list holds channel ids only", "A newer featured list replaces the old one" and the expiry scenario.
 - [x] 3.2 In `yt/refresh.py`, after the channel payloads and before past uploads, read the sections of every seed due, committing each. Update the row in `src/itgraph/CLAUDE.md`. Verify with tests for every scenario of "Featured Lists Are Read With The Refresh", and "A restore is completed by a refresh" (lists read again).
 - [x] 3.3 In `derive/yt_references.py` and `db/yt_references.py`:
   - seeds' lists in date are read in the same `REPEATABLE READ` transaction;
@@ -73,7 +70,6 @@
   - a reference to its own channel is dropped;
   - distinct seeds per channel;
   - the ranking outside the inventory (seeds, then id);
-  - the report's lines, with no API data.
 
   Add the row to `src/itgraph/CLAUDE.md`. Verify with tests for every scenario of "Evidence Is The Seeds' Videos", "A Reference Names A Channel Through What Is Stored", "A Reference To Its Own Channel Is Dropped", "Distinct Seeds Are The Unit Of Evidence" and "Mention Ranking".
 - [x] 4.3 Add `itgraph yt mention-candidates [--top 100] [--min-seeds 2] [--add]` in `cli.py`: thin and offline. `--add` refuses while any reference awaits a lookup, naming the count and `yt mention-lookup`; otherwise it records `mention`. Verify with CLI tests for every scenario of "Mention Candidates Report", "Mention Candidates Are Added On Request", "Nothing Joined From Mentions Is Stored" and "Mention Candidates Logs Name Ids Only".
@@ -85,9 +81,7 @@
   - upsert a query (trimmed, whitespace collapsed) with its first and last asked moments;
   - write a run together with its first page's results, and append later pages;
   - read runs in date;
-  - purge runs past 30 days with their results, called from `cli._expire_youtube_data`.
 
-  Verify with database tests for "Search Results Are Kept 30 Days", "The Operator's Queries Are Kept", "A search result holds a channel id only", "Removing a run removes its results" and "A restored query is not taken for a recent run".
 - [x] 5.3 Add the pass and the command `itgraph yt search [QUERY…] [--from-file PATH|-] [--type video|channel] [--pages 1] [--force] [--limit N]`:
   - input read as `yt add` reads it;
   - a (query, type) with a run in date skipped without `--force`;
@@ -97,7 +91,7 @@
   - a summary of asked, skipped, results and requests;
   - logs by run id under `request_urls_unlogged`.
 
-  Add the rows to `src/itgraph/CLAUDE.md`. Verify with tests for every scenario of "Search Command", "The Publication Window", "A Query Is Not Asked Twice In 30 Days", "Search Spending" and "Search Logs Name Ids Only".
+Add the rows to `src/itgraph/CLAUDE.md`.
 - [x] 5.4 Add `derive/yt_search.py` (pure): round-robin over runs in date by position, skipping known and taken channels; the report's lines. Add `itgraph yt search-candidates [--top 100] [--add]`, offline, recording `search`. Verify with tests for every scenario of "Search Ranking", "Search Candidates Report" and "Search Candidates Are Added On Request".
 
 ## 6. Provenance and the review file

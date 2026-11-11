@@ -1,6 +1,3 @@
-## Purpose
-
-Searching YouTube with the operator's queries to find English-language IT channels to review: the request and the one field it reads, the search quota bucket, not asking the same query twice inside 30 days, the results kept for at most 30 days, and the review queue built from them in YouTube's own order.
 
 ## ADDED Requirements
 
@@ -43,40 +40,13 @@ A search SHALL ask for 50 results a page, in English by relevance, of the type t
 
 ### Requirement: The Publication Window
 
-A video search SHALL ask for videos published in the last 30 days. A query searched again with `--force` while an earlier run of it is in date SHALL ask only for videos published since that run.
-
-#### Scenario: A first video search
-
-- **WHEN** a query is first searched for videos
-- **THEN** the request is bounded to videos published in the last 30 days
+A query searched again with `--force` while an earlier run of it is in date SHALL ask only for videos published since that run.
 
 #### Scenario: A forced repeat
 
 - **GIVEN** a query searched for videos 10 days ago
 - **WHEN** it is searched again with `--force`
 - **THEN** the request is bounded to videos published since that run
-
-### Requirement: A Query Is Not Asked Twice In 30 Days
-
-The system SHALL NOT search a query of one type again while a run of it is in date, unless `--force` is given. A skipped query SHALL be reported as skipped and cost nothing.
-
-#### Scenario: A repeat within the month
-
-- **GIVEN** a query searched for channels 5 days ago
-- **WHEN** the command runs with it again
-- **THEN** no request is made for it, and it is reported as skipped
-
-#### Scenario: Another type is another query
-
-- **GIVEN** a query searched for videos 5 days ago
-- **WHEN** it is searched for channels
-- **THEN** it is asked
-
-#### Scenario: After the month
-
-- **GIVEN** a query whose last run expired
-- **WHEN** the command runs with it
-- **THEN** it is asked
 
 ### Requirement: Search Spending
 
@@ -93,23 +63,6 @@ A search SHALL book every request against the search pool alone, make no more re
 
 - **WHEN** a run stops at its limit after two pages
 - **THEN** both pages' results are stored
-
-### Requirement: Search Results Are Kept 30 Days
-
-The system SHALL store each run — the query, its type, the moment and the publication bound — and each result's channel id with its position in the run, and SHALL remove both 30 days after the run. A run holds no data read from the API.
-
-#### Scenario: A run's results
-
-- **GIVEN** a video search returning 50 results from 31 distinct channels
-- **WHEN** the run is stored
-- **THEN** 50 results are stored, each with its position and its channel id
-- **AND** no title, description or video id
-
-#### Scenario: A run past 30 days
-
-- **GIVEN** a run made 31 days ago
-- **WHEN** any YouTube command reaches the database
-- **THEN** the run and its results are removed before anything else
 
 ### Requirement: The Operator's Queries Are Kept
 

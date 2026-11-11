@@ -9,9 +9,8 @@ channel turned `other`, or has no label left to route by, is closed as
 excluded rather than sent.
 
 Nothing here raises an alert — the scoring change does — and nothing here
-copies what YouTube said onto one: the evidence is read from its one home,
-at the moment of sending, and refused once it is older than the 30 days it
-may be kept.
+copies what YouTube said onto one: the evidence is read from where it is
+stored, at the moment of sending.
 """
 
 from collections.abc import Sequence
@@ -36,7 +35,6 @@ from itgraph.db.models import (
     YtRawVideoStat,
 )
 from itgraph.derive.yt_videos import Counters, facts_of
-from itgraph.yt_policy import RETENTION
 
 __all__ = [
     "YtEvidence",
@@ -375,8 +373,8 @@ async def route_counts(
 class YtEvidence:
     """What a message about a YouTube alert needs, read when it is sent.
 
-    Never stored: each field comes from its one home, and goes when that
-    home does. ``started_at`` is the broadcast's actual start where there
+    Never stored: each field is read from where it is kept, and goes when
+    that does. ``started_at`` is the broadcast's actual start where there
     is one, else publication, as the schedule counts age.
     """
 
@@ -396,22 +394,18 @@ def _title(payload: dict[str, Any] | None) -> str | None:
 
 
 async def yt_alert_evidence(
-    session: AsyncSession, alert: YtPendingAlert, *, now: datetime
+    session: AsyncSession, alert: YtPendingAlert
 ) -> YtEvidence | None:
     """The video an alert is about, its channel and its newest counts.
 
-    ``None`` when the video's stored data is gone or older than the 30
-    days it may be kept — expiry runs with the YouTube commands, and the
-    bot, which cannot delete, must not show what expiry has not yet
-    reached. A channel payload past the same age is left out the same way,
-    and the message goes without the channel's name.
+    ``None`` when the video is no longer stored — YouTube stopped
+    returning it. A channel without a stored payload is left out, and the
+    message goes without the channel's name.
     """
-    oldest = now - RETENTION
     video = (
         await session.execute(
             select(YtRawVideo.payload, YtRawVideo.channel_id).where(
-                YtRawVideo.video_id == alert.video_id,
-                YtRawVideo.fetched_at >= oldest,
+                YtRawVideo.video_id == alert.video_id
             )
         )
     ).first()
@@ -421,8 +415,7 @@ async def yt_alert_evidence(
 
     channel_payload = await session.scalar(
         select(YtRawChannel.payload).where(
-            YtRawChannel.channel_id == channel_id,
-            YtRawChannel.fetched_at >= oldest,
+            YtRawChannel.channel_id == channel_id
         )
     )
     newest = (

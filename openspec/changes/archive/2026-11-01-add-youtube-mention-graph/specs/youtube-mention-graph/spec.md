@@ -288,24 +288,13 @@ When two channels in the inventory carry the same handle in their stored data, t
 
 ### Requirement: References Live With Their Payloads
 
-The system SHALL work references out of the payloads stored at the moment they are asked for, and MUST NOT store a reference, an edge, a pending target or anything else read out of a title or description. A payload refreshed, expired or removed SHALL change what is referenced from the next reading on.
+The system SHALL work references out of the payloads stored at the moment they are asked for, and MUST NOT store a reference, an edge, a pending target or anything else read out of a title or description.
 
 #### Scenario: A description edited upstream
 
 - **GIVEN** a seed's video whose description linked a channel
 - **WHEN** its payload is refreshed with a description that no longer links it, and references are read
 - **THEN** that reference is not recorded
-
-#### Scenario: An expired video
-
-- **GIVEN** a seed's video linking an unknown handle, whose payload then expires
-- **WHEN** references are read
-- **THEN** that handle is not pending, unless another stored video names it
-
-#### Scenario: Reading writes nothing
-
-- **WHEN** references are read, or the report runs
-- **THEN** no row in the database is inserted, updated or deleted, apart from what expiry removes before any command
 
 ### Requirement: No Network
 

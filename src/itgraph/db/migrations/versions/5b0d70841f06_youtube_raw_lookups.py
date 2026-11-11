@@ -5,9 +5,7 @@ Revises: b7f8952801f5
 Create Date: 2026-11-01 12:45:52.565825
 
 Which channel YouTube said a linked video, handle or legacy name belongs
-to. API data, so it takes the `yt_raw_` prefix, and with it the dump
-exclusion in `db/backup.py` and the 30-day expiry every YouTube command
-runs first.
+to. API data, so it takes the `yt_raw_` prefix.
 
 """
 

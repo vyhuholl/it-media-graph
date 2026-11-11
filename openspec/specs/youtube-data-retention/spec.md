@@ -1,19 +1,19 @@
 # youtube-data-retention Specification
 
 ## Purpose
-What is read from the YouTube Data API with an API key may be kept at most 30 days (YouTube API Services Developer Policies III.E.4.b, III.E.4.d). This capability owns where that data may live, how it is kept current, and how it is removed — including from places a copy could otherwise outlive the rule, such as backups and review files.
+This capability owns where data read from the YouTube Data API lives, how it is kept current, what happens to what YouTube stops returning, and what dumps and restores carry of it.
 
 ## Requirements
 
-### Requirement: API Data Has One Home
+### Requirement: Data From YouTube Has One Place
 
-The system SHALL store data read from the API in one home only: a channel's as its latest payload, a video's as its latest payload, a reading's counters as that reading, which channel a linked video, handle or legacy name belongs to as that name's lookup, which channels a seed features as that seed's featured list, and which channels a search returned as that search's results. A title, handle, description or statistic MUST NOT be copied into any other table, column, log record or backup, so that removing the home removes the data. What the system works out from a video's data SHALL be stored with that video's payload and removed with it.
+The system SHALL store data read from the API in one place only: a channel's as its latest payload, a video's as its latest payload, a reading's counters as that reading, which channel a linked video, handle or legacy name belongs to as that name's lookup, which channels a seed features as that seed's featured list, and which channels a search returned as that search's results. A title, handle, description or statistic MUST NOT be copied into any other table, column or log record. What the system works out from a video's data SHALL be stored with that video's payload and removed with it.
 
-#### Scenario: Removing the payload removes the data
+#### Scenario: The title lives in the payload alone
 
-- **GIVEN** a channel whose payload is removed
-- **WHEN** the database is searched for that channel's title or handle
-- **THEN** neither is found
+- **GIVEN** a channel with a stored payload
+- **WHEN** the database is searched for that channel's title
+- **THEN** it is found in the channel payloads' table and nowhere else
 
 #### Scenario: A newer payload replaces the old one
 
@@ -38,12 +38,6 @@ The system SHALL store data read from the API in one home only: a channel's as i
 - **WHEN** a lookup is stored
 - **THEN** it holds the name looked up, the channel id YouTube named or that it named none, and the moment
 - **AND** no title, handle read from the API, description or statistic
-
-#### Scenario: Removing a lookup removes the answer
-
-- **GIVEN** a video whose channel is known only from its lookup
-- **WHEN** the lookup is removed
-- **THEN** nothing in the database says which channel the video belongs to
 
 #### Scenario: A featured list holds channel ids only
 
@@ -70,7 +64,7 @@ The system SHALL store data read from the API in one home only: a channel's as i
 
 ### Requirement: Refresh
 
-The system SHALL provide `itgraph yt refresh`, fetching anew the payload of every channel whose payload is older than the refresh age or absent, whatever the channel's status. The refresh age SHALL be configurable, default to 25 days, and MUST be under 30 days.
+The system SHALL provide `itgraph yt refresh`, fetching anew the payload of every channel whose payload is older than the refresh age or absent, whatever the channel's status. The refresh age SHALL be configurable and default to 25 days.
 
 #### Scenario: A stale payload is refreshed
 
@@ -96,12 +90,6 @@ The system SHALL provide `itgraph yt refresh`, fetching anew the payload of ever
 - **WHEN** the command runs
 - **THEN** two requests are made
 
-#### Scenario: A refresh age of thirty days or more is refused
-
-- **GIVEN** a configured refresh age of 30 days or more
-- **WHEN** settings are loaded
-- **THEN** loading fails with an error naming the setting and the policy limit
-
 #### Scenario: Exhaustion stops a refresh part way
 
 - **WHEN** the quota is exhausted during a refresh
@@ -123,49 +111,41 @@ The system SHALL run the refresh daily on the collection host without an operato
 - **GIVEN** a collection host deployed without an API key
 - **THEN** no refresh is scheduled there
 
-### Requirement: Expiry
+### Requirement: Nothing Is Removed By Age
 
-The system SHALL remove every channel payload and video payload fetched, every lookup and featured list fetched, every search run made with its results, and every reading taken, more than 30 days ago, except readings the derived-metrics decision keeps longer. The removal SHALL happen in every YouTube command that reaches the database, whether or not it makes requests, before the command reads or writes anything else there. The channel record SHALL remain.
+The system SHALL NOT remove YouTube data because of its age: channel and video payloads, readings, lookups, featured lists, search runs and results, and the history walk's records stay until YouTube stops returning the object or the operator removes them. An answer that decides what to ask YouTube next — a lookup, a featured list, a search run with its results — SHALL be read only while it is younger than `youtube_answers_fresh_days` (30 by default); an older one is kept, not read, and replaced when the question is asked again.
 
-#### Scenario: An expired payload is removed before any work
+#### Scenario: An old payload is kept
 
-- **GIVEN** a channel whose payload was fetched 31 days ago
-- **WHEN** any YouTube command reaches the database
-- **THEN** the payload is removed before the command reads or writes anything else there
-- **AND** the channel record, with its review, remains
+- **GIVEN** a channel whose payload was fetched 90 days ago
+- **WHEN** any YouTube command runs
+- **THEN** the payload is still there, with the channel record and its review
 
-#### Scenario: Expired videos and readings are removed before any work
+#### Scenario: Old videos and readings are kept
 
-- **GIVEN** a video whose payload was fetched 31 days ago, and a reading of another video taken 31 days ago
-- **AND** no derived-metrics decision recorded
-- **WHEN** any YouTube command reaches the database
-- **THEN** both are removed before the command reads or writes anything else there
+- **GIVEN** a video whose payload was fetched 31 days ago, with readings taken 32 and 31 days ago
+- **WHEN** any YouTube command runs
+- **THEN** the video and both readings are still there
 
-#### Scenario: An expired lookup is removed before any work
+#### Scenario: An old lookup is kept and not read
 
-- **GIVEN** a lookup fetched 31 days ago, found or not found
-- **WHEN** any YouTube command reaches the database, the offline ranking of Telegram links included
-- **THEN** the lookup is removed before the command reads or writes anything else there
+- **GIVEN** a lookup fetched 31 days ago
+- **WHEN** what is answered is read
+- **THEN** that lookup is not among the answers
+- **AND** it is still stored, until the name is looked up again and the answer replaced
 
-#### Scenario: An expired featured list and search run are removed before any work
+#### Scenario: An old featured list and search run are kept and not read
 
 - **GIVEN** a featured list fetched 31 days ago and a search run made 31 days ago
-- **WHEN** any YouTube command reaches the database, an offline candidates report included
-- **THEN** the list, the run and its results are removed before the command reads or writes anything else there
-- **AND** the operator's record of the query remains
+- **WHEN** a candidates report is made
+- **THEN** neither is read as evidence
+- **AND** both are still stored, with the run's results
 
-#### Scenario: A command that refuses its input touches nothing
+#### Scenario: Walk records are kept
 
-- **GIVEN** a command whose arguments or input are refused before it reaches the database, or one asked only for its help
-- **WHEN** it exits
-- **THEN** it has neither read nor written the database, expired payloads included
-- **AND** the next command that reaches the database removes them
-
-#### Scenario: Expiry needs no network
-
-- **GIVEN** no API key configured and no network
-- **WHEN** a YouTube command that makes no request starts
-- **THEN** expired payloads are still removed
+- **GIVEN** a walk that ended 90 days ago
+- **WHEN** any YouTube command runs, whether or not the walk is enabled
+- **THEN** its record remains
 
 ### Requirement: Channels That Disappear
 
@@ -198,39 +178,14 @@ The system SHALL treat a channel YouTube no longer returns when asked for by id,
 - **WHEN** a later refresh finds YouTube returning it again
 - **THEN** its payload is stored and the gone mark is cleared
 
-### Requirement: Backups Carry No API Data
+### Requirement: Backups Carry YouTube Data
 
-Database dumps SHALL NOT contain YouTube API data, nor the history walk's records, the search runs or the YouTube alerts, which describe API data the dumps leave out. The daily inventory dump SHALL contain the YouTube channel records and the operator's search queries; restoring any dump SHALL leave payloads, readings, lookups, featured lists, search runs and results, walk records and YouTube alerts empty until YouTube is asked again.
+Full dumps SHALL contain every YouTube table with its rows, like every other table: the readings are a time series nothing can fetch again. The daily inventory dump SHALL contain the YouTube channel records and the operator's search queries.
 
-#### Scenario: A full dump leaves the payloads out
+#### Scenario: A full dump leaves nothing out
 
 - **WHEN** a full dump is taken, including the one taken before a migration
-- **THEN** it holds the definition of the payload table and none of its rows
-
-#### Scenario: A full dump leaves videos and readings out
-
-- **WHEN** a full dump is taken
-- **THEN** it holds the definitions of the video and reading tables and none of their rows
-
-#### Scenario: A full dump leaves the lookups out
-
-- **WHEN** a full dump is taken
-- **THEN** it holds the definition of the lookup table and none of its rows
-
-#### Scenario: A full dump leaves the walk records out
-
-- **WHEN** a full dump is taken
-- **THEN** it holds the definition of the walk records' table and none of its rows
-
-#### Scenario: A full dump leaves featured lists and searches out
-
-- **WHEN** a full dump is taken
-- **THEN** it holds the definitions of the featured lists', search runs' and search results' tables and none of their rows
-
-#### Scenario: A full dump leaves the YouTube alerts out
-
-- **WHEN** a full dump is taken
-- **THEN** it holds the definition of the YouTube alerts' table and none of its rows
+- **THEN** no table's rows are left out of it
 
 #### Scenario: The inventory dump keeps the review
 
@@ -242,47 +197,34 @@ Database dumps SHALL NOT contain YouTube API data, nor the history walk's record
 - **WHEN** the daily inventory dump is taken
 - **THEN** it holds every search query the operator has asked, with its type and dates
 
-#### Scenario: A restore is completed by a refresh
+#### Scenario: A restore from the inventory dump is completed by a refresh
 
-- **GIVEN** a database restored from a dump
+- **GIVEN** a database restored from an inventory dump
 - **WHEN** a refresh runs
 - **THEN** every channel's payload is fetched again
 - **AND** every seed's featured list is read again
 
-#### Scenario: A restore is completed by a walk
+#### Scenario: A restore without walk records is completed by a walk
 
-- **GIVEN** a database restored from a dump
+- **GIVEN** a database with neither videos nor walk records
 - **AND** the walk enabled
 - **WHEN** the next walk runs
 - **THEN** every seed is walked anew
 
-#### Scenario: A restore is completed by a lookup run
+### Requirement: Review Files
 
-- **GIVEN** a database restored from a dump
-- **WHEN** `itgraph yt tg-lookup` runs
-- **THEN** every name linked from the seeds that no stored payload answers is looked up anew
+A review file holds collected channel data. Its header SHALL say to delete it once applied and never to commit it. A file's age SHALL NOT stop it being applied.
 
-#### Scenario: A restored query is not taken for a recent run
-
-- **GIVEN** a database restored from a dump, holding a query searched 5 days before the dump
-- **WHEN** the query is searched again
-- **THEN** it is asked, since no run of it is in date
-
-### Requirement: Review Files Expire
-
-A review file holds API data and SHALL state its own expiry: 30 days after its export moment. The system SHALL refuse to apply a review file after that moment.
-
-#### Scenario: The file says when it must be gone
+#### Scenario: The file says what to do with it
 
 - **WHEN** a review file is exported
-- **THEN** its header states the date after which it may not be kept or applied
+- **THEN** its header states its export moment, and that it is to be deleted once applied and never committed
 
-#### Scenario: An expired file is refused
+#### Scenario: An old file is applied
 
 - **GIVEN** a review file exported more than 30 days ago
 - **WHEN** it is applied
-- **THEN** the command fails without writing
-- **AND** says to export a new file and delete the old one
+- **THEN** its decisions are written like a new file's
 
 ### Requirement: Videos That Disappear
 
@@ -308,65 +250,9 @@ The system SHALL remove at once a tracked video YouTube no longer returns when a
 - **THEN** each video in it is asked for alone
 - **AND** only those YouTube does not return are removed
 
-### Requirement: Statistics Retention Follows The Recorded Decision
-
-Until the date YouTube accepted the derived-metrics use case is recorded in the code, readings SHALL be kept at most 30 days. Once it is recorded, readings taken on or after it SHALL be kept up to 36 calendar months and earlier ones still 30 days. Titles, handles and descriptions SHALL stay at 30 days in any case. The date MUST NOT be a setting.
-
-#### Scenario: Before acceptance
-
-- **GIVEN** no acceptance date recorded
-- **WHEN** a reading is 31 days old
-- **THEN** it is removed
-
-#### Scenario: After acceptance
-
-- **GIVEN** an acceptance date recorded
-- **AND** a reading taken on that date, 31 days ago
-- **AND** a reading taken the day before it, 32 days ago
-- **WHEN** expiry runs
-- **THEN** the first is kept and the second is removed
-
-#### Scenario: Thirty-six months is the limit
-
-- **GIVEN** an acceptance date recorded
-- **WHEN** a reading taken after it is more than 36 calendar months old
-- **THEN** it is removed
-
-#### Scenario: Titles do not follow the readings
-
-- **GIVEN** an acceptance date recorded
-- **WHEN** a video's payload was fetched 31 days ago
-- **THEN** the payload is removed
-
-### Requirement: Videos Are Refreshed While Their Readings Are Kept
-
-Once an acceptance date is recorded, `itgraph yt refresh` SHALL fetch again, before the refresh age, the payload of every video past the tracking horizon that has a reading kept beyond 30 days, fifty videos to a request, whether or not the walk keeps it. Before then it SHALL refresh no video but the past uploads the walk keeps fresh.
-
-#### Scenario: A mature video stays attached to its readings
-
-- **GIVEN** an acceptance date recorded
-- **AND** a video past the horizon, with readings taken after that date, whose payload is older than the refresh age
-- **WHEN** a refresh runs
-- **THEN** its payload is fetched again
-- **AND** its readings remain
-
-#### Scenario: Readings outlive the depth
-
-- **GIVEN** an acceptance date recorded and a depth of 365 days
-- **AND** a video published 400 days ago, with readings taken after that date, whose payload is older than the refresh age
-- **WHEN** a refresh runs
-- **THEN** its payload is fetched again
-
-#### Scenario: Nothing to refresh before acceptance
-
-- **GIVEN** no acceptance date recorded
-- **AND** the walk disabled
-- **WHEN** a refresh runs
-- **THEN** no video is asked for
-
 ### Requirement: Past Uploads Are Kept Fresh While The Walk Is Enabled
 
-While the history walk is enabled, `itgraph yt refresh` SHALL fetch again, before the refresh age and fifty to a request, every video of a seed channel that is past the tracking horizon, was published inside the walk's depth, and is not a broadcast yet to start. Until acceptance is recorded it SHALL ask for no counts. Once it is, each such fetch SHALL also take a reading.
+While the history walk is enabled, `itgraph yt refresh` SHALL fetch again, before the refresh age and fifty to a request, every video of a seed channel that is past the tracking horizon, was published inside the walk's depth, and is not a broadcast yet to start. Each such fetch SHALL also take a reading.
 
 #### Scenario: A past upload is refreshed
 
@@ -382,12 +268,12 @@ While the history walk is enabled, `itgraph yt refresh` SHALL fetch again, befor
 - **WHEN** a refresh runs
 - **THEN** its payload is fetched again
 
-#### Scenario: A video past the depth is left to expire
+#### Scenario: A video past the depth is not read again
 
 - **GIVEN** the walk enabled and a depth of 365 days
-- **AND** a seed's video published 370 days ago, with no reading kept beyond 30 days
+- **AND** a seed's video published 370 days ago
 - **WHEN** a refresh runs
-- **THEN** it is not asked for, and it expires 30 days after its last fetch
+- **THEN** it is not asked for, and stays as it was last read
 
 #### Scenario: A channel out of scope is not kept
 
@@ -396,22 +282,16 @@ While the history walk is enabled, `itgraph yt refresh` SHALL fetch again, befor
 - **WHEN** a refresh runs
 - **THEN** it is not asked for
 
-#### Scenario: Nothing is kept while the walk is disabled
+#### Scenario: Nothing is read again while the walk is disabled
 
 - **GIVEN** the walk disabled
 - **AND** a past upload stored by a walk run by hand
 - **WHEN** a refresh runs
-- **THEN** it is not asked for, and it expires 30 days after its fetch
+- **THEN** it is not asked for
 
-#### Scenario: Before acceptance no counts are read
+#### Scenario: Every refresh of a past upload is a reading
 
-- **GIVEN** the walk enabled and no acceptance date recorded
-- **WHEN** a refresh fetches a past upload
-- **THEN** the request asks for no counts, the stored data holds none, and no reading is stored
-
-#### Scenario: After acceptance every refresh is a reading
-
-- **GIVEN** the walk enabled and an acceptance date recorded
+- **GIVEN** the walk enabled
 - **WHEN** a refresh fetches a past upload
 - **THEN** a reading is stored from the same answer
 
@@ -421,33 +301,22 @@ While the history walk is enabled, `itgraph yt refresh` SHALL fetch again, befor
 - **WHEN** a refresh asks for a past upload and the answer does not hold it
 - **THEN** the video is removed
 
-### Requirement: A Restored Copy Holds No API Data
+### Requirement: A Restored Copy Sends No YouTube Alert
 
-After a restore into a test environment, every table whose rows dumps leave out SHALL be read back as empty, and the restore SHALL fail otherwise. A test environment SHALL hold no YouTube API key, and so fetches nothing that would need refreshing or expiring.
+After a restore into a test environment, every YouTube alert that was not delivered in production SHALL be closed as delivered before anything can send it, and the restore's read-back SHALL fail if one remains. A test environment SHALL hold no YouTube API key.
 
 #### Scenario: Restoring a real dump
 
-- **GIVEN** a full dump of a database with payloads, readings, lookups, featured lists, search runs, walk records and YouTube alerts
+- **GIVEN** a full dump of a database with YouTube data and undelivered YouTube alerts
 - **WHEN** it is restored
-- **THEN** each of those tables holds no row
-- **AND** the YouTube channel records and their review are there
+- **THEN** the YouTube data is there
+- **AND** no YouTube alert is left undelivered
 
-#### Scenario: A dump that carries API data by mistake
+#### Scenario: An undelivered YouTube alert fails the read-back
 
-- **GIVEN** a dump holding a row in a `yt_raw_*` table
-- **WHEN** it is restored
-- **THEN** the restore fails naming the table, and the database is left empty
-
-#### Scenario: A dump that carries a YouTube alert by mistake
-
-- **GIVEN** a dump holding a YouTube alert
-- **WHEN** it is restored
-- **THEN** the restore fails, naming the alerts' table among what it found, and the database is left empty
-
-#### Scenario: The list of tables cannot drift
-
-- **WHEN** a table is added to what dumps leave out
-- **THEN** the test suite fails until the restore's read-back covers it
+- **GIVEN** a restored copy still holding an undelivered YouTube alert
+- **WHEN** the read-back runs
+- **THEN** it fails, naming undelivered YouTube alerts
 
 #### Scenario: No key in a test environment
 

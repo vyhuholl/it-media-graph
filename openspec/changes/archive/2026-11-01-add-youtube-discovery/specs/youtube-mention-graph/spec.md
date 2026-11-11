@@ -135,27 +135,10 @@ The system SHALL hold a reference whose target is not known without the network 
 
 ### Requirement: References Live With Their Payloads
 
-The system SHALL work references out of the payloads and featured lists stored at the moment they are asked for, and MUST NOT store a reference, an edge, a pending target or anything else read out of a title, a description or a featured list. A payload or list refreshed, expired or removed SHALL change what is referenced from the next reading on.
+The system SHALL work references out of the payloads and featured lists stored at the moment they are asked for, and MUST NOT store a reference, an edge, a pending target or anything else read out of a title, a description or a featured list.
 
 #### Scenario: A description edited upstream
 
 - **GIVEN** a seed's video whose description linked a channel
 - **WHEN** its payload is refreshed with a description that no longer links it, and references are read
 - **THEN** that reference is not recorded
-
-#### Scenario: An expired video
-
-- **GIVEN** a seed's video linking an unknown handle, whose payload then expires
-- **WHEN** references are read
-- **THEN** that handle is not pending, unless another stored video names it
-
-#### Scenario: An expired featured list
-
-- **GIVEN** a seed whose featured list named an unknown channel id, and whose list then expires
-- **WHEN** references are read
-- **THEN** that id is not pending, unless another stored source names it
-
-#### Scenario: Reading writes nothing
-
-- **WHEN** references are read, or the report runs
-- **THEN** no row in the database is inserted, updated or deleted, apart from what expiry removes before any command

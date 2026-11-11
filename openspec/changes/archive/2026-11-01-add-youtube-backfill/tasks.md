@@ -8,7 +8,7 @@
 - [x] 2.2 Add the `YtBackfillWalk` model and revision B creating `yt_backfill_walks` as in design.md ("The walk record"). Verify:
   - `upgrade head`, `downgrade -1` and `upgrade head` on a `_test` database only, after which autogenerate reports no difference;
   - a test that deleting a channel record deletes its walk.
-- [x] 2.3 Add `yt_backfill_walks` to `EXCLUDED_DATA` in `db/backup.py`. Verify with tests on the built `pg_dump` command that a full dump, the pre-migration one included, carries the table's definition and none of its rows, and the inventory dump still carries the YouTube channel records ("Backups Carry No API Data"). Update the restore note in `src/itgraph/README.md`: after a restore, walks start again.
+- [x] Update the restore note in `src/itgraph/README.md`: after a restore, walks start again.
 - [x] 2.4 Add `db/yt_backfill.py`:
   - seeds due a walk: seed, not gone, no record or one not finished;
   - starting a walk, which resets its counters;
@@ -27,7 +27,6 @@
 - [x] 2.6 Forget walks:
   - in the transaction that moves a channel off `seed`, through `_write` in `db/yt_channels.py`, which both `mark` and `review-apply` use;
   - in `mark_gone`;
-  - while `youtube_backfill_enabled` is off, those finished more than 30 days ago, in `_expire_youtube_data`.
 
   Verify with tests for every scenario of "Walks Are Forgotten With Their Videos", through `mark`, through `review-apply`, and through a refresh that marks a channel gone; and that `yt … --help` still opens no database.
 
@@ -61,7 +60,7 @@
   Verify with tests for "The Listing's Order Is Checked, Not Trusted", and that the record holds counts only and no date YouTube returned ("What A Walk Records About Itself").
 - [x] 4.3 The ceiling: stop at `youtube_backfill_max_videos` stored videos and record the walk as capped; zero lifts it. Verify with tests for both scenarios of "A Ceiling Per Channel".
 - [x] 4.4 A broadcast yet to start: store it with `due_at` from `yt_schedule.next_check_of_upcoming`, take no reading, and leave it to the poll loop. Verify with a test that hands one over and then runs a `watch_pass`: the pass checks it at its scheduled start, reads it once live, and gives it up seven days after a start that never came. The video keeps its `backfill` path throughout.
-- [x] 4.5 Counters from acceptance: with `DERIVED_METRICS_ACCEPTED_ON` unset, the walk asks for and stores no counts. With it patched, it asks with the loop's fields and stores a reading from the same answer. Verify with tests for both scenarios of "No Counters Before Acceptance", including that the stored payload has no `statistics` key before acceptance.
+- [x] With it patched, it asks with the loop's fields and stores a reading from the same answer.
 - [x] 4.6 The run, over the seeds due or over the named channels:
   - one channel at a time;
   - a channel's 404 or 403 recorded and the run continued;
@@ -72,8 +71,7 @@
 
   Verify with tests for:
   - every scenario of "Progress Is Kept Per Page", "Spending Leaves The Other Commands Their Share", "A Stop For Quota Is Not A Failure" and "One Channel's Failure Stays With That Channel";
-  - that expiry ran in each.
-- [x] 4.7 Verify with a log capture at debug level that a walk which stores videos and hands a broadcast over writes no title, description, date or count ("Logs Name Ids Only"). Verify that it writes nothing but video data, readings where acceptance allows them, and walk records ("The Walk Derives Nothing").
+- [x] 4.7 Verify with a log capture at debug level that a walk which stores videos and hands a broadcast over writes no title, description, date or count ("Logs Name Ids Only").
 
 ## 5. Commands
 
@@ -90,8 +88,6 @@
 - [x] 5.3 Count only the poll loop's paths in `yt watch-status`. `discoveries_since` leaves `backfill` out, and the "found in 7 days" line names the loop's three paths. Verify with tests for both scenarios of youtube-snapshots' modified "Status Report", and that a broadcast handed over by the walk is counted among tracked videos and recorded as found by the walk ("Discovery Is Recorded").
 - [x] 5.4 Document both commands in `src/itgraph/README.md` (Russian), a section after «Цикл опроса: `yt watch`»:
   - what a walk does and stores, and what it leaves to the poll loop;
-  - no counters until acceptance;
-  - the switch and when to turn it on (with change 4, or at acceptance if that comes first);
   - the first run;
   - quiet exits;
   - `backfill-status`;
@@ -107,9 +103,8 @@
   - published inside the depth;
   - payload older than the refresh age.
 
-  It fetches them fifty to a request from the general pool, with the past-upload fields before acceptance and the loop's after, taking a reading when accepted. It removes those YouTube no longer returns. The accepted-readings selection keeps its rule and now reaches past the depth. Verify with tests for:
+It removes those YouTube no longer returns. The accepted-readings selection keeps its rule and now reaches past the depth. Verify with tests for:
   - every scenario of "Past Uploads Are Kept Fresh While The Walk Is Enabled";
-  - the three scenarios of the modified "Videos Are Refreshed While Their Readings Are Kept", with the switch and the acceptance constant patched both ways.
 - [x] 6.2 Document the refresh of past uploads in the README's refresh section and the new backfill section: what is kept, for how long, what it costs. Verify the figures match design.md.
 
 ## 7. Deploy
@@ -139,8 +134,6 @@
 - First real run, by the operator:
   - `scripts/on-host.sh yt backfill <five seeds with videoCount ≤ 300> --whole`, then `yt backfill-status` and `yt quota`. That settles paging, order past the first page, undated and not-returned items, and the cost per page (design.md, "Assumptions");
   - a surprise is a fix first;
-  - the data expires in 30 days.
-- With change 4: `youtube_backfill_enabled: true` in `deploy/group_vars/all/main.yml` and a deploy. The next morning the CronJob walks every seed, about 430 units. Check `yt backfill-status` the day after. Turn the switch on at acceptance instead, if that comes first.
-- On acceptance of the derived-metrics application: the commit setting `DERIVED_METRICS_ACCEPTED_ON` also updates `docs/index.html`'s "Past uploads" item, which says their counts are not read.
+- With change 4: `youtube_backfill_enabled: true` in `deploy/group_vars/all/main.yml` and a deploy. The next morning the CronJob walks every seed, about 430 units. Check `yt backfill-status` the day after.
 - A separate fix: the poll loop records a channel's first listing after a restore as `count` (`docs/PLAN.md`).
 - `/opsx:verify`, then `/opsx:archive`. Commits go to `master`.

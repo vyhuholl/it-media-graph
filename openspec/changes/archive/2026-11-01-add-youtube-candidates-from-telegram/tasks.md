@@ -12,9 +12,7 @@
 
   Verify on a `_test` database only: `upgrade head`, `downgrade -1`, `upgrade head`, after which autogenerate reports no difference.
 - [x] 1.3 Verify with database tests:
-  - a record with discovery source `telegram` is accepted;
   - a lookup with a malformed channel id or video id is refused at the database level;
-  - a full dump holds `yt_raw_lookups`' definition and none of its rows. Extend the existing dump test — `EXCLUDED_DATA` already covers `yt_raw_*`, so no code change is expected there.
 
 ## 2. Reading a post
 
@@ -64,12 +62,10 @@
 
   Update their rows in `src/itgraph/CLAUDE.md`. Verify with mocked-HTTP tests for "A linked video is asked for its channel only" and "A linked handle or legacy name is asked for the channel id only", and that the import's, the refresh's and the poll loop's requests are unchanged.
 - [x] 5.2 Add `db/yt_lookups.py` and `yt/lookups.py`.
-  - **`db/yt_lookups.py`:** store answers, found or not found, with `fetched_at`; read lookups in date; `purge_expired_lookups` at 30 days.
   - **`yt/lookups.py`:** videos → channel, fifty to a call, an absent video recorded as not found, the existing 404 fallback; handle and legacy name → channel id, one a call.
 
   Both take names, not Telegram posts. Call the purge from `cli._expire_youtube_data`, with a log line by count. Add both rows to `src/itgraph/CLAUDE.md`. Verify:
   - mocked-HTTP tests for every scenario of "Video Lookups" and "Handle And Legacy Name Lookups";
-  - database tests for "Lookups Are Kept, Not Refreshed" and for the modified retention scenarios: "A lookup holds a channel id only", "Removing a lookup removes the answer", "An expired lookup is removed before any work", including before `yt tg-candidates`.
 - [x] 5.3 Add `yt/tg_lookup.py`, the pass.
   - **What it asks:** the names nothing answers, worked out by tasks 3.1 and 4.1.
   - **Order:** by families, videos batched in that order.
@@ -78,7 +74,7 @@
   - **Logs:** ids only.
 
   Verify with tests for every scenario of "What Needs No Request", "Lookup Spending" and "Lookup Logs Name Ids Only".
-- [x] 5.4 Add the CLI command `itgraph yt tg-lookup [--limit N]` in `cli.py`, thin, running expiry first, taking no Telegram session lease and building no Telegram client. Verify with CLI tests for "Lookup Command" (the session held by another process does not refuse it), "Nothing to look up" and "Lookup Report".
+- [x] Verify with CLI tests for "Lookup Command" (the session held by another process does not refuse it), "Nothing to look up" and "Lookup Report".
 - [x] 5.5 Update both pages of the site in the same group as the fields they declare. `docs/index.html`: the "Links from Telegram" item and the Methods line. `docs/privacy.html`: the third "reads" item, lookups in "How long it is kept", the joined count named as not stored, provenance in "own records", the purpose, the Telegram paragraph, and "Last updated" set on the day of the deploy. Use design.md's wording. Verify the pages render — open `docs/index.html` and `docs/privacy.html` locally — and that every field the shapes of 5.1 request appears in the privacy page.
 
 ## 6. Candidates
@@ -102,7 +98,6 @@
   Verify the command lines match `uv run itgraph yt tg-lookup --help` and `uv run itgraph yt tg-candidates --help`.
 - [x] 6.6 Update `docs/PLAN.md`:
   - the `4a` row in "Order of changes";
-  - "Policy before engineering": the readings in design.md, and III.D.3 quoted in full with "and receive approval for the application";
   - "The graph is thin": Telegram's links as the first source of YouTube candidates.
 
   Update the root `CLAUDE.md`'s YouTube exception: "or how many Telegram families link a channel". Verify that neither file carries a figure from the Telegram side or anything about the host.

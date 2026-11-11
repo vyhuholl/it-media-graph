@@ -14,7 +14,6 @@ import yaml
 from roleharness import ANSIBLE_DIR, INPUTS, REPO_ROOT, render_set
 
 from itgraph import config as config_module
-from itgraph.db.backup import EXCLUDED_DATA
 from itgraph.metrics.serve import METRICS_PORT
 
 ROLE = ANSIBLE_DIR / "itgraph"
@@ -920,13 +919,6 @@ def test_defaults_are_held_to_the_code() -> None:
     for name, (schedule, _, _) in SCHEDULES.items():
         key = "itgraph_" + name.removeprefix("itgraph-").replace("-", "_")
         assert defaults[key + "_schedule"] == schedule, key
-
-
-def test_the_restore_reads_back_what_dumps_leave_out() -> None:
-    """A table added to what dumps leave out must reach the read-back."""
-    readback = (ROLE / "files" / "readback.sql").read_text()
-    for pattern in EXCLUDED_DATA:
-        assert pattern.replace("*", "") in readback, pattern
 
 
 def test_no_public_artifact_names_anything_real(tmp_path: Path) -> None:

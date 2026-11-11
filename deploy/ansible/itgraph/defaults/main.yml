@@ -39,8 +39,8 @@ itgraph_quiet_to_hour: 7
 # be moved after `itgraph score --replay --threshold N` says what that would cost.
 itgraph_alert_spike_z: 3.7
 
-# The history walk, on since the mention graph, its first reader. Turned off, a
-# walk run by hand still works, and what it stores expires in 30 days.
+# The history walk, on since the mention graph, its first reader. Turned off,
+# nothing walks unattended and the refresh keeps no past upload current.
 itgraph_youtube_backfill_enabled: true
 
 # The schedules, in itgraph_timezone. A test holds them to the table in the

@@ -2,7 +2,7 @@
 
 Against the test database, because what is tested is which rows are
 read — seeds' videos, by whichever command stored them — and that what
-a refresh, an expiry or a removal did to the payloads shows at once,
+a refresh or a removal did to the payloads shows at once,
 with nothing written anywhere.
 """
 
@@ -33,7 +33,7 @@ from itgraph.db.yt_sections import store_sections
 from itgraph.db.yt_videos import (
     FoundVideo,
     VideoWrite,
-    purge_expired_videos,
+    remove_videos,
     replace_payloads,
     store_found_videos,
     store_videos,
@@ -269,7 +269,7 @@ async def test_a_description_edited_upstream(database: Database) -> None:
     assert (await _read(database)).edges == []
 
 
-async def test_an_expired_video_takes_its_pending_handle(
+async def test_a_removed_video_takes_its_pending_handle(
     database: Database,
 ) -> None:
     await _channels(database, {1: SEED})
@@ -284,7 +284,7 @@ async def test_an_expired_video_takes_its_pending_handle(
     assert handle in (await _read(database)).pending
 
     async with database.session() as session:
-        await purge_expired_videos(session)
+        await remove_videos(session, [video_id(1)])
 
     assert handle not in (await _read(database)).pending
 
@@ -370,7 +370,7 @@ async def test_a_former_seeds_featured_list_is_not_read(
     assert references.featured_lists == 0
 
 
-async def test_an_expired_featured_list_names_nothing(
+async def test_a_featured_list_no_longer_current_names_nothing(
     database: Database,
 ) -> None:
     await _channels(database, {1: SEED})

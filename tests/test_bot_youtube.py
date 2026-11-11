@@ -29,7 +29,7 @@ from itgraph.db.models import (
     YtLang,
 )
 from itgraph.db.session import Database
-from itgraph.db.yt_videos import purge_expired_videos, remove_videos
+from itgraph.db.yt_videos import remove_videos
 from itgraph.derive.yt_videos import Counters
 
 NOW = datetime(2026, 11, 11, 12, 0, tzinfo=UTC)
@@ -327,7 +327,7 @@ async def test_a_refused_topic_fails_and_goes_nowhere_else(
     assert waiting[YtAlertRoute.RU].failing == 0
 
 
-async def test_a_stale_channel_payload_leaves_the_channel_unnamed(
+async def test_an_old_channel_payload_still_names_the_channel(
     database: Database,
 ) -> None:
     async with database.session() as session:
@@ -344,11 +344,11 @@ async def test_a_stale_channel_payload_leaves_the_channel_unnamed(
     await deliver(database, sender)
 
     ((message, _),) = sender.messages
-    assert "A stale fake channel" not in message
-    assert "<b>A fake video's title</b> ·" in message
+    assert "A stale fake channel" in message
+    assert "<b>A fake video's title</b>" in message
 
 
-async def test_a_stale_video_payload_is_not_shown(database: Database) -> None:
+async def test_an_old_video_payload_is_shown(database: Database) -> None:
     async with database.session() as session:
         channel = await seed_channel(
             session, 1, lang=YtLang.EN, fetched_at=NOW
@@ -364,7 +364,8 @@ async def test_a_stale_video_payload_is_not_shown(database: Database) -> None:
 
     await deliver(database, sender)
 
-    assert sender.messages == []
+    ((message, _),) = sender.messages
+    assert "<b>A fake video's title</b>" in message
 
 
 # --- the queue's life -----------------------------------------------
@@ -379,27 +380,6 @@ async def test_an_alert_goes_when_youtube_stops_returning_its_video(
         )
         await seed_alert(session, channel_id=channel, video=1, now=NOW)
         await remove_videos(session, [fake_video(1)])
-        assert await delivery_of(session) == {}
-
-
-async def test_an_alert_goes_when_its_reading_expires(
-    database: Database,
-) -> None:
-    async with database.session() as session:
-        channel = await seed_channel(
-            session, 1, lang=YtLang.EN, fetched_at=NOW
-        )
-        await seed_alert(
-            session,
-            channel_id=channel,
-            video=1,
-            now=NOW,
-            readings=(
-                (timedelta(days=31), 100, 1, 1),
-                (timedelta(hours=1), 900, 9, 9),
-            ),
-        )
-        await purge_expired_videos(session, now=NOW)
         assert await delivery_of(session) == {}
 
 
@@ -577,7 +557,7 @@ async def test_the_evidence_takes_a_broadcasts_start(
         (pending,) = await yt_alerts.claim(
             session, YtAlertRoute.EN, held=False, limit=None
         )
-        evidence = await yt_alerts.yt_alert_evidence(session, pending, now=NOW)
+        evidence = await yt_alerts.yt_alert_evidence(session, pending)
 
     assert pending.id == alert
     assert evidence is not None
@@ -602,7 +582,7 @@ def test_the_queues_know_their_platforms() -> None:
 async def test_a_youtube_digest_names_youtube_on_every_entry(
     database: Database, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """III.F.2.a: no one attribution for a whole list of results."""
+    """No one attribution for a whole list of results."""
     monkeypatch.setattr(settings, "youtube_alert_digest_hour", 9)
     async with database.session() as session:
         channel = await seed_channel(

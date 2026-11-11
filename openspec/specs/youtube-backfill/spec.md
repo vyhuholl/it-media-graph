@@ -33,9 +33,9 @@ The system SHALL walk the uploads of every YouTube channel with status `seed` th
 - **WHEN** the operator runs a walk naming it
 - **THEN** it is walked from its newest uploads
 
-### Requirement: Walks Are Forgotten With Their Videos
+### Requirement: Walks Are Forgotten With Their Channels
 
-The system SHALL forget a channel's walk when the channel stops being a seed, when it is marked gone, and — while the walk is disabled, so that nothing keeps its videos fresh — once 30 days have passed since the walk ended. A channel whose walk is forgotten SHALL be walked anew when it is next due.
+The system SHALL forget a channel's walk when the channel stops being a seed and when it is marked gone, and at no other time. A channel whose walk is forgotten SHALL be walked anew when it is next due.
 
 #### Scenario: A channel taken out of scope
 
@@ -49,18 +49,10 @@ The system SHALL forget a channel's walk when the channel stops being a seed, wh
 - **WHEN** it is made a seed again and a walk runs
 - **THEN** it is walked
 
-#### Scenario: A walk nothing kept fresh
+#### Scenario: An old walk is kept
 
-- **GIVEN** the walk disabled
-- **AND** a channel whose walk ended 31 days ago
-- **WHEN** any YouTube command reaches the database
-- **THEN** that walk is forgotten
-
-#### Scenario: A walk kept fresh is kept
-
-- **GIVEN** the walk enabled
-- **AND** a channel whose walk ended 90 days ago
-- **WHEN** any YouTube command reaches the database
+- **GIVEN** a channel whose walk ended 90 days ago, the walk enabled or not
+- **WHEN** any YouTube command runs
 - **THEN** that walk remains
 
 ### Requirement: Depth
@@ -164,20 +156,12 @@ A broadcast yet to start that a walk asks about SHALL be stored and handed to th
 - **THEN** it is stored, due to be checked at its scheduled start
 - **AND** no reading of it is stored
 
-### Requirement: No Counters Before Acceptance
+### Requirement: Every Stored Video Is A Reading
 
-Until the date YouTube accepted the derived-metrics use case is recorded, a walk SHALL neither ask for nor store a video's view, like or comment counts. Once the date is recorded, every past upload a walk stores SHALL also be read in the same request, the reading kept as the poll loop's are.
+Every past upload a walk stores SHALL also be read in the same request, the reading kept as the poll loop's are.
 
-#### Scenario: Before acceptance
+#### Scenario: A stored video is read
 
-- **GIVEN** no acceptance date recorded
-- **WHEN** a walk stores a video
-- **THEN** its stored data holds no view, like or comment count
-- **AND** no reading of it is stored
-
-#### Scenario: After acceptance
-
-- **GIVEN** an acceptance date recorded
 - **WHEN** a walk stores a video
 - **THEN** a reading of it is stored, taken from the same answer
 
@@ -232,7 +216,7 @@ A walk SHALL spend from the general pool, and SHALL make no request that would l
 
 ### Requirement: A Stop For Quota Is Not A Failure
 
-When the floor is reached, the general pool is spent, or YouTube has declared the quota day over, a walk SHALL keep what it completed, make no further request, and exit successfully, saying when spending can resume. Expiry SHALL still run.
+When the floor is reached, the general pool is spent, or YouTube has declared the quota day over, a walk SHALL keep what it completed, make no further request, and exit successfully, saying when spending can resume.
 
 #### Scenario: The floor is reached part way
 
@@ -245,7 +229,7 @@ When the floor is reached, the general pool is spent, or YouTube has declared th
 
 - **GIVEN** a quota day YouTube declared over
 - **WHEN** a walk starts
-- **THEN** expired data is removed, no request is made, and the walk exits with a zero status
+- **THEN** no request is made, and the walk exits with a zero status
 
 ### Requirement: One Walk At A Time
 
@@ -296,7 +280,7 @@ The walk SHALL only fetch and store. It MUST NOT compute or store an edge, a men
 #### Scenario: Only data and the walk's records are written
 
 - **WHEN** a walk completes
-- **THEN** it has written video data, readings where acceptance allows them, and its own records, and nothing else
+- **THEN** it has written video data, their readings and its own records, and nothing else
 
 ### Requirement: Unattended Walk
 
@@ -317,7 +301,7 @@ The system SHALL run a walk of the due seeds once a day on the collection host, 
 
 - **GIVEN** the walk disabled
 - **WHEN** the operator walks named channels
-- **THEN** they are walked, and what is stored expires as any data nobody refreshes
+- **THEN** they are walked, and what is stored stays as it was read
 
 ### Requirement: Status Report
 

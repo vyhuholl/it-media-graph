@@ -320,26 +320,9 @@ def test_youtube_key_is_not_printed(env: pytest.MonkeyPatch) -> None:
     assert settings.youtube_api_key.get_secret_value() == YOUTUBE_KEY
 
 
-def test_a_refresh_age_at_the_policy_limit_is_refused(
-    env: pytest.MonkeyPatch,
-) -> None:
-    """Thirty days is when the payload is deleted, refreshed or not."""
-    env.setenv("YOUTUBE_API_KEY", YOUTUBE_KEY)
-    env.setenv("YOUTUBE_REFRESH_AFTER_DAYS", "30")
-
-    with pytest.raises(
-        ValidationError, match="youtube_refresh_after_days"
-    ) as caught:
-        build()
-
-    assert YOUTUBE_KEY not in str(caught.value)
-
-
-def test_a_refresh_age_under_the_limit_is_accepted(
-    env: pytest.MonkeyPatch,
-) -> None:
-    env.setenv("YOUTUBE_REFRESH_AFTER_DAYS", "29")
-    assert build().youtube_refresh_after_days == 29
+def test_any_refresh_age_is_accepted(env: pytest.MonkeyPatch) -> None:
+    env.setenv("YOUTUBE_REFRESH_AFTER_DAYS", "60")
+    assert build().youtube_refresh_after_days == 60
 
 
 def test_caps_leaving_the_general_pool_nothing_are_refused(

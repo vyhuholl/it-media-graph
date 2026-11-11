@@ -91,8 +91,8 @@ async def check_chats(bot: Bot, destinations: Sequence[Destination]) -> None:
     """Ask Telegram about every configured chat before delivering anything.
 
     A chat the bot is not in, or a chat named with topics that is not a
-    forum, would otherwise surface at the first alert — for YouTube, after
-    an acceptance that may be months away. Refused by the setting's name,
+    forum, would otherwise surface at the first alert, which may be days
+    away. Refused by the setting's name,
     which is what an operator changes. Whether a topic exists the Bot API
     cannot say without sending to it.
     """

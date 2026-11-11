@@ -94,8 +94,8 @@ def next_check_of_upcoming(
     scheduled start is counted from when it began to be tracked.
 
     Never later than the refresh age after the last fetch: a stream
-    scheduled forty days ahead would otherwise sit on data older than
-    the policy allows, and expire before it started.
+    scheduled forty days ahead would otherwise sit on stale data until it
+    started.
     """
     anchor = scheduled_start if scheduled_start is not None else tracked_since
     give_up = timedelta(days=settings.youtube_watch_upcoming_give_up_days)

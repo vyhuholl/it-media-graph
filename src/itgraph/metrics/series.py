@@ -8,10 +8,9 @@ absence, and the table it stopped writing to can.
 
 Nothing here reads `raw_messages` or `message_metrics`, which would cost a
 scan per scrape; the poll queue says the same thing cheaply. And nothing
-here reads API data: of the YouTube tables it asks only when each row was
-fetched, and the database role it connects as can ask nothing else. Label
-values are this module's own constants and the enums', never a table's
-data, so no channel, video or person can reach the store.
+here reads what YouTube said about a channel or a video. Label values are
+this module's own constants and the enums', never a table's data, so no
+channel, video or person can reach the store.
 """
 
 from collections.abc import Mapping, Sequence
@@ -20,9 +19,7 @@ from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import InstrumentedAttribute
 
-from itgraph import yt_policy
 from itgraph.config import settings
 from itgraph.db import yt_alerts
 from itgraph.db.alerts import failing_alerts, outstanding_alerts
@@ -36,11 +33,6 @@ from itgraph.db.models import (
     YtQuotaExhausted,
     YtQuotaPool,
     YtRawChannel,
-    YtRawChannelSections,
-    YtRawLookup,
-    YtRawVideo,
-    YtRawVideoStat,
-    YtSearchRun,
     YtWatchPass,
 )
 from itgraph.db.poll import queue_lag
@@ -116,17 +108,6 @@ async def _telegram(session: AsyncSession, now: datetime) -> list[Family]:
     ]
 
 
-# Each kind of stored API data and the column saying when it was fetched:
-# what the database role can read of those tables, and all it can.
-_FETCHED: Mapping[str, InstrumentedAttribute[datetime]] = {
-    "channel": YtRawChannel.fetched_at,
-    "video": YtRawVideo.fetched_at,
-    "lookup": YtRawLookup.fetched_at,
-    "featured": YtRawChannelSections.fetched_at,
-    "search": YtSearchRun.asked_at,
-}
-
-
 async def _youtube(session: AsyncSession, now: datetime) -> list[Family]:
     day = quota_day(now)
     spent = {
@@ -147,18 +128,17 @@ async def _youtube(session: AsyncSession, now: datetime) -> list[Family]:
             YtWatchPass.outcome == YtPassOutcome.COMPLETE
         )
     )
-
-    # Readings keep 30 days only until acceptance is recorded; from then
-    # 36 months is lawful, and their age says nothing a person should act on.
-    fetched = dict(_FETCHED)
-    if yt_policy.DERIVED_METRICS_ACCEPTED_ON is None:
-        fetched["reading"] = YtRawVideoStat.observed_at
-
+    # The refresh reads every channel again before the refresh age, so the
+    # oldest channel payload's age is how far behind it is. Only channels:
+    # an old video, lookup or search run is old by design.
+    oldest_channel = await session.scalar(
+        select(func.min(YtRawChannel.fetched_at))
+    )
     ages: list[tuple[Labels, float]] = []
-    for kind, column in fetched.items():
-        oldest = await session.scalar(select(func.min(column)))
-        if oldest is not None:
-            ages.append(({"kind": kind}, (now - oldest).total_seconds()))
+    if oldest_channel is not None:
+        ages.append(
+            ({"kind": "channel"}, (now - oldest_channel).total_seconds())
+        )
 
     return [
         Family(
@@ -192,7 +172,7 @@ async def _youtube(session: AsyncSession, now: datetime) -> list[Family]:
         ),
         Family(
             "itgraph_youtube_oldest_payload_age_seconds",
-            "How long ago the oldest stored API data of each kind was read.",
+            "How long ago the oldest stored channel payload was read.",
             ages,
         ),
     ]

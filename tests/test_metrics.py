@@ -11,7 +11,6 @@ import pytest
 from sqlalchemy import event, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from itgraph import yt_policy
 from itgraph.db.models import (
     Alert,
     AlertKind,
@@ -237,18 +236,6 @@ async def test_every_series_is_declared_on_an_empty_database(
     )
 
 
-async def test_no_age_series_without_api_data(database: Database) -> None:
-    """A restored copy holds none, and an absent age must not read as 0."""
-    read = await families(database)
-
-    ages = next(
-        family
-        for family in read
-        if family.name == "itgraph_youtube_oldest_payload_age_seconds"
-    )
-    assert list(ages.samples) == []
-
-
 async def test_a_collector_that_stopped_is_measured(
     database: Database,
 ) -> None:
@@ -307,26 +294,20 @@ async def test_only_a_complete_pass_counts(database: Database) -> None:
     )
 
 
-async def test_ages_by_kind(
-    database: Database, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_the_oldest_channel_payload_s_age(database: Database) -> None:
+    """Channels only: an old video, lookup or search run is old by design."""
+    name = "itgraph_youtube_oldest_payload_age_seconds"
+    assert value(await families(database), name, kind="channel") is None
+
     async with database.session() as session:
         await seed_youtube(session)
 
-    name = "itgraph_youtube_oldest_payload_age_seconds"
     read = await families(database)
     assert (
         value(read, name, kind="channel") == timedelta(days=4).total_seconds()
     )
-    assert value(read, name, kind="video") == timedelta(days=9).total_seconds()
-    assert (
-        value(read, name, kind="reading") == timedelta(days=2).total_seconds()
-    )
-    assert value(read, name, kind="lookup") is None
-
-    # Once acceptance is recorded a reading may lawfully be years old.
-    monkeypatch.setattr(yt_policy, "DERIVED_METRICS_ACCEPTED_ON", NOW.date())
-    assert value(await families(database), name, kind="reading") is None
+    assert value(read, name, kind="video") is None
+    assert value(read, name, kind="reading") is None
 
 
 async def test_alerts(database: Database) -> None:

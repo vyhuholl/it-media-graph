@@ -183,7 +183,7 @@ def test_reporting_writes_nothing(database_url: str) -> None:
     assert records(database_url) == before
 
 
-def test_an_expired_list_is_removed_before_the_report(
+def test_a_list_no_longer_current_is_kept_and_not_read(
     database_url: str,
 ) -> None:
     arrange(
@@ -207,7 +207,7 @@ def test_an_expired_list_is_removed_before_the_report(
             )
 
     arrange(database_url, count)
-    assert left == [0]
+    assert left == [1]
 
 
 def test_logs_name_ids_only(

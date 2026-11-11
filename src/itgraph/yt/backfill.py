@@ -4,8 +4,8 @@ What the poll loop sees is a channel's last 29 days. The mention graph
 and discovery read who a channel mentions and links to, and a year holds
 about twelve times that. So each seed's uploads playlist is walked back
 to a depth once, and from then on the year rolls forward without
-walking again: the poll loop feeds it at the front, the refresh keeps
-it, and it expires at the back.
+walking again: the poll loop feeds it at the front, and the refresh
+keeps it current.
 
 Five rules shape it.
 
@@ -29,10 +29,9 @@ not asked about again, and nothing stored is ever overwritten. A
 broadcast yet to start, which the loop never sees when its listing date
 is old, is stored due at its scheduled start and becomes the loop's.
 
-**No counters before acceptance.** Until the derived-metrics use case
-is accepted nothing may score a past upload, so the walk asks for the
-payload without its counts. From the recorded date on, each stored
-video is also a reading, from the same answer.
+**Every stored video is also a reading.** The walk asks for the poll
+loop's shape, counters included, and keeps the counts as a reading of
+the video at the age it was found — the mature level scoring needs.
 
 **Progress per page; no token kept.** Each page and the videos it led
 to are committed together, with the walk record's counts. A walk that
@@ -48,7 +47,6 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from itgraph import yt_policy
 from itgraph.config import settings
 from itgraph.db.models import YtCommand
 from itgraph.db.session import Database
@@ -194,7 +192,6 @@ def _found(
     at: datetime,
 ) -> tuple[list[FoundVideo], int]:
     """What of the answer is stored, and how many asked-for ids were missing."""
-    accepted = yt_policy.DERIVED_METRICS_ACCEPTED_ON is not None
     found: list[FoundVideo] = []
     missing = 0
     for video_id in ask:
@@ -227,7 +224,7 @@ def _found(
                     video_id=video_id,
                     payload=resource,
                     due_at=None,
-                    reading=counters_of(resource) if accepted else None,
+                    reading=counters_of(resource),
                 )
             )
     return found, missing
@@ -290,13 +287,7 @@ async def _walk_channel(
         ask = [
             video_id for video_id in sorted_page.ask if video_id not in known
         ]
-        answered = (
-            await yt_videos.by_ids(
-                youtube, ask, asked=yt_videos.for_past_uploads()
-            )
-            if ask
-            else {}
-        )
+        answered = await yt_videos.by_ids(youtube, ask) if ask else {}
         at = clock()
         found, missing = _found(answered, ask, bounds, at)
         capped = False

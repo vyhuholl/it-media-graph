@@ -1713,71 +1713,9 @@ yt_app = typer.Typer(
 app.add_typer(yt_app, name="yt")
 
 
-async def _expire_youtube_data() -> None:
-    """Delete every piece of YouTube data past its time.
-
-    Channel and video payloads at 30 days, lookups, featured lists and
-    search runs with their results at 30 days, readings at 30 days — or
-    longer, from the acceptance
-    date, once one is recorded. Needs no key and no network: data past
-    its time is a violation whether or not anything was going to read
-    it.
-
-    And, while the history walk is disabled, every walk that ended more
-    than 30 days ago: nothing kept its videos, so they have expired, and
-    the record would otherwise keep the channel from being walked again.
-    """
-    from itgraph.config import settings
-    from itgraph.db.session import Database
-    from itgraph.db.yt_backfill import forget_unkept_walks
-    from itgraph.db.yt_channels import purge_expired
-    from itgraph.db.yt_lookups import purge_expired_lookups
-    from itgraph.db.yt_search import purge_expired_searches
-    from itgraph.db.yt_sections import purge_expired_sections
-    from itgraph.db.yt_videos import purge_expired_videos
-
-    database = Database()
-    walks = 0
-    try:
-        async with database.session() as session:
-            channels = await purge_expired(session)
-            videos, readings = await purge_expired_videos(session)
-            lookups = await purge_expired_lookups(session)
-            sections = await purge_expired_sections(session)
-            searches = await purge_expired_searches(session)
-            if not settings.youtube_backfill_enabled:
-                walks = await forget_unkept_walks(
-                    session, now=datetime.now(UTC)
-                )
-    finally:
-        await database.dispose()
-    log = logging.getLogger(__name__)
-    if walks:
-        log.info("forgot %d history walks nothing kept fresh", walks)
-    if channels:
-        log.info("removed %d YouTube channel payloads past 30 days", channels)
-    if lookups:
-        log.info("removed %d YouTube lookups past 30 days", lookups)
-    if sections:
-        log.info("removed %d featured lists past 30 days", sections)
-    if searches:
-        log.info("removed %d search runs past 30 days, with results", searches)
-    if videos or readings:
-        log.info(
-            "removed %d YouTube videos and %d readings past their time",
-            videos,
-            readings,
-        )
-
-
 def _run_yt(body: Coroutine[Any, Any, None]) -> None:
-    """``_run`` for the YouTube commands: expiry first, then the command,
-    and its expected failures as sentences on stderr and exit 1.
-
-    Expiry lives here, not in each command, so a command added later
-    cannot forget it — and not in the sub-app's callback, which click
-    runs before a subcommand's ``--help`` is handled: there it made help
-    need a database and a `.env`.
+    """``_run`` for the YouTube commands: the command, and its expected
+    failures as sentences on stderr and exit 1.
 
     A spent quota is an ordinary thing to discover, and so is a channel
     nobody has added yet; neither deserves a traceback.
@@ -1787,12 +1725,8 @@ def _run_yt(body: Coroutine[Any, Any, None]) -> None:
     from itgraph.yt.errors import YtError
     from itgraph.yt_review import ReviewFileError, UnreadableReviewFile
 
-    async def expired_first() -> None:
-        await _expire_youtube_data()
-        await body
-
     try:
-        asyncio.run(expired_first())
+        asyncio.run(body)
     except (
         QuotaError,
         YtError,
@@ -1870,15 +1804,14 @@ def yt_quota() -> None:
 
 @yt_app.command("refresh")
 def yt_refresh() -> None:
-    """Fetch again the channel data that is about to expire.
+    """Fetch again the channel data that has grown stale.
 
-    What YouTube says about a channel may be kept 30 days. Anything older
-    than the refresh age (25 days by default) is asked for again, fifty
-    channels a unit, whatever the channel's status. A channel YouTube no
-    longer returns loses its data and is marked gone; its record and
-    review stay. Once the derived-metrics use case is accepted, finished
-    videos whose readings outlive 30 days are fetched again too. Runs
-    daily from a timer on the host.
+    Anything older than the refresh age (25 days by default) is asked for
+    again, fifty channels a unit, whatever the channel's status. A channel
+    YouTube no longer returns loses its data and is marked gone; its
+    record and review stay. Then the seeds' featured lists and, while the
+    history walk is enabled, the year of past uploads, each read again
+    with its counts. Runs daily from a timer on the host.
     """
     from itgraph.db.models import YtCommand
     from itgraph.db.session import Database
@@ -2044,9 +1977,9 @@ def yt_backfill(
 ) -> None:
     """Walk seeds' uploads back to the depth, a year by default.
 
-    Stores payloads in `yt_raw_videos`, without counters until the
-    derived-metrics use case is accepted; leaves the poll loop's horizon
-    to it and hands it broadcasts yet to start. Spends the general pool
+    Stores payloads in `yt_raw_videos`, each with its counts as a
+    reading; leaves the poll loop's horizon to it and hands it broadcasts
+    yet to start. Spends the general pool
     and leaves it `youtube_backfill_general_floor` units for the others.
 
     Reaching the floor, the limit or a day YouTube declared over, or
@@ -2143,8 +2076,8 @@ def yt_backfill_status() -> None:
             )
         else:
             typer.echo(
-                "walk disabled: nothing walks unattended, and what a walk by "
-                "hand stores expires in 30 days"
+                "walk disabled: nothing walks unattended, and the refresh "
+                "keeps no past upload current"
             )
         typer.echo(
             f"{summary.seeds} seed(s): {summary.walked} walked, "
@@ -2275,10 +2208,10 @@ def yt_mention_lookup(
 
     Reads the mention graph out of the stored payloads and looks up every
     referenced handle, legacy name and video that no stored payload and
-    no lookup in date answers: the channel id alone, fifty videos to a
+    no current lookup answers: the channel id alone, fifty videos to a
     unit, a handle or a name a unit each, the names most seeds reference
-    first. A channel id needs no lookup. Each answer is kept 30 days, in
-    the same place as Telegram's, and committed as it arrives, so
+    first. A channel id needs no lookup. Each answer is stored in the
+    same place as Telegram's, and committed as it arrives, so
     `--limit` (which counts requests) or a spent pool only pauses it; run
     it again to go on.
 
@@ -2611,7 +2544,7 @@ def yt_search(
         bool,
         typer.Option(
             "--force",
-            help="Ask a query again though it was asked in the last 30 days.",
+            help="Ask a query again though a run of it is still in date.",
         ),
     ] = False,
     limit: Annotated[
@@ -2623,12 +2556,13 @@ def yt_search(
 
     One query a line in a file or on stdin, or as arguments; blank lines
     and lines beginning with `#` are skipped. A video search asks for
-    uploads of the last 30 days, so every channel it finds publishes now;
-    `--type channel` asks for channels whose own data matches. English
-    relevance, 50 results a page, one page unless `--pages`. Only each
-    result's channel id is read, and kept 30 days.
+    uploads of the last `youtube_answers_fresh_days` (30 by default), so
+    every channel it finds publishes now; `--type channel` asks for
+    channels whose own data matches. English relevance, 50 results a
+    page, one page unless `--pages`. Only each result's channel id is
+    read.
 
-    A query asked in the last 30 days, for the same type, is skipped and
+    A query asked within that window, for the same type, is skipped and
     costs nothing; `--force` asks it again, for videos since that run.
     Spends the search pool alone — 90 calls a day, outside the daily
     units — and `--limit` counts requests. Prints counts; then `itgraph yt
@@ -2695,8 +2629,8 @@ def yt_search_candidates(
 ) -> None:
     """Channels your searches found, in YouTube's order, query by query.
 
-    Worked out from the search results in date — the last 30 days — and
-    nothing worked out is stored: each run's channels without a record,
+    Worked out from the search results in date — the last
+    `youtube_answers_fresh_days` — and nothing worked out is stored: each run's channels without a record,
     in any status, taken in turn — every run's first result, then every
     run's second — so no query crowds out the others. No count orders
     them. Shows channel ids and your queries, no other data read from
@@ -2898,9 +2832,8 @@ def yt_review_export(
 
     Tab-separated, for a text editor: decision, kind, lang, reason and
     note to fill in, then the handle, title, subscribers and a link to
-    look at. Makes no request. The file holds YouTube API data, so it
-    expires 30 days after export and is refused after that; delete it
-    once applied, and never commit it.
+    look at. Makes no request. Delete the file once applied, and never
+    commit it.
 
     From the operator's machine:
     `scripts/on-host.sh yt review-export > ~/itgraph-review/batch.review.tsv`
@@ -2973,7 +2906,7 @@ def yt_review_apply(
     text = _read_input(source)
 
     async def run() -> None:
-        parsed = parse_review(text, now=datetime.now(UTC))
+        parsed = parse_review(text)
         database = Database()
         try:
             async with database.session() as session:
@@ -3079,7 +3012,7 @@ def _yt_row(channel: YtChannel, payload: Mapping[str, Any] | None) -> str:
     else:
         # Said, not left blank: an empty title reads as a channel without
         # one, and these have one YouTube may no longer be asked about.
-        handle = "(gone)" if channel.gone_at is not None else "(expired)"
+        handle = "(gone)" if channel.gone_at is not None else "(not fetched)"
         title = "-"
     kind = channel.kind.value if channel.kind else "-"
     lang = channel.lang.value if channel.lang else "-"
@@ -3099,7 +3032,7 @@ def yt_channels(
     """List the YouTube inventory, or summarise review progress.
 
     Without a filter, the counts come first: per status, seeds per
-    language, and how many channels have current data, expired data, or
+    language, and how many channels have data, have none fetched yet, or
     are no longer returned by YouTube. Makes no request.
     """
     from itgraph.db.session import Database
@@ -3119,8 +3052,8 @@ def yt_channels(
                     )
                     typer.echo(f"{'seeds':<10} {seeds}")
                     typer.echo(
-                        f"{'data':<10} current {summary.current}, expired "
-                        f"{summary.expired}, gone {summary.gone}"
+                        f"{'data':<10} current {summary.current}, not "
+                        f"fetched {summary.unfetched}, gone {summary.gone}"
                     )
                     typer.echo("")
                 for item in await list_channels(session, status=status):

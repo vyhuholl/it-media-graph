@@ -7,12 +7,10 @@ Create Date: 2026-11-01 16:23:55.808352
 What YouTube's own sources of candidates keep:
 
 - `yt_raw_channel_sections`: the channel ids each seed lists in its
-  channel sections. API data — the `yt_raw_` prefix brings the dump
-  exclusion and the 30-day expiry.
+  channel sections.
 - `yt_search_queries`: the operator's queries and when they were asked.
   The operator's own, kept and dumped.
-- `yt_search_runs`: one search of one query. No API data, but left out
-  of dumps with the results it describes (`db/backup.py`).
+- `yt_search_runs`: one search of one query.
 - `yt_raw_search_results`: each result's channel id and position. API
   data.
 

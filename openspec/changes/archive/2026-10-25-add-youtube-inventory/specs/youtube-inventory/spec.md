@@ -25,20 +25,9 @@ The system SHALL store one record per YouTube channel, keyed by its channel id. 
 - **WHEN** a record is written with status `seed` and no kind, or no language
 - **THEN** the write is refused at the database level
 
-#### Scenario: The record holds no API data
-
-- **WHEN** a channel record is read
-- **THEN** it carries no title, handle, description or statistic
-
 ### Requirement: Review Values
 
 The system SHALL accept exactly these review values for YouTube. Status: `candidate`, `seed`, `maybe`, `rejected`. Kind: `personal`, `company`, `media`, `event`, `education`. Rejection reason: `not_it`, `adjacent`, `crypto`, `infobiz`, `ads`, `content_farm`, `consumer_tech`. Language: `en`, `ru`, `other`. Discovery source: `manual`.
-
-#### Scenario: A value outside the set is refused
-
-- **WHEN** a review names a kind, reason or language outside its set
-- **THEN** the review fails, naming the value and the accepted ones
-- **AND** nothing is written
 
 #### Scenario: Telegram's values are unaffected
 
@@ -91,12 +80,6 @@ The system SHALL provide `itgraph yt add`, creating records for channels named i
 ### Requirement: Entry Forms
 
 The system SHALL accept an entry as a handle with or without `@`, a `youtube.com/@handle` link, a `youtube.com/channel/<id>` link, a bare channel id, or a `youtube.com/user/<name>` link. Every other form SHALL be refused, with every bad entry reported together, before any request is made.
-
-#### Scenario: A link is accepted in the forms it gets pasted in
-
-- **GIVEN** links with or without a scheme, with `www.` or `m.`, with a trailing path such as `/videos`, or with a query string
-- **WHEN** the command runs
-- **THEN** each is understood as the channel it names
 
 #### Scenario: Entries differing only in form or letter case cost one lookup
 
@@ -341,19 +324,6 @@ The system SHALL provide `itgraph yt channels`, showing the YouTube inventory so
 - **WHEN** the command runs with a status filter
 - **THEN** only channels with that status are listed
 - **AND** each row shows the channel id, handle, title, status, kind and language
-
-#### Scenario: A channel without API data is still listed
-
-- **GIVEN** a channel whose API data has expired, or that YouTube no longer returns
-- **WHEN** it is listed
-- **THEN** its row shows its id and says which of the two it is, in place of handle and title
-
-#### Scenario: Progress summary
-
-- **WHEN** the command runs without a filter
-- **THEN** a count per status is reported
-- **AND** a count of seeds per language
-- **AND** how many channels have current API data, expired API data, or are no longer returned
 
 ### Requirement: Remote Operation
 

@@ -162,7 +162,7 @@ async def test_a_channel_search_has_no_window(database: Database) -> None:
     assert "publishedAfter" not in fake.calls("search")[0]
 
 
-# --- not asked twice in 30 days --------------------------------------------
+# --- not asked twice while a run is in date ------------------------------
 
 
 async def test_a_repeat_within_the_month_costs_nothing(

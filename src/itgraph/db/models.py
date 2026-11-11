@@ -442,10 +442,8 @@ class YtDiscoverySource(enum.StrEnum):
 class YtLang(enum.StrEnum):
     """The language a channel speaks, as its reviewer judged it.
 
-    Set by hand. Detecting it from titles would be "new or derived data"
-    under the base Developer Policies (III.E.4.h), and it routes alerts,
-    where a wrong guess is expensive. ``OTHER`` is in scope: subject
-    decides, not language.
+    Set by hand: it routes alerts, where a wrong guess is expensive.
+    ``OTHER`` is in scope: subject decides, not language.
     """
 
     EN = "en"
@@ -553,8 +551,8 @@ class YtCommand(enum.StrEnum):
 class YtSearchType(enum.StrEnum):
     """What a search asks YouTube for.
 
-    ``VIDEO`` is uploads of the last 30 days, so every channel a result
-    names publishes now; ``CHANNEL`` is channels whose own data matches,
+    ``VIDEO`` is uploads of the last ``youtube_answers_fresh_days``, so
+    every channel a result names publishes now; ``CHANNEL`` is channels whose own data matches,
     dormant ones included. Either way only the result's channel id is
     read.
     """
@@ -1789,13 +1787,11 @@ class YtChannel(Base):
     """One YouTube channel, and the review it has had.
 
     Holds nothing read from the API. Title, handle, description and
-    statistics live only in ``YtRawChannel.payload``, which expires after
-    30 days (Developer Policies III.E.4); keeping a copy here — the way
-    Telegram's ``channels`` keeps ``username`` and ``title`` — would give
-    every expiry two places to clear, and the one it missed would be the
-    violation. What is here is the operator's: the review, the provenance,
-    and the channel id, which the policies say nothing about and which is
-    kept for as long as the record.
+    statistics live only in ``YtRawChannel.payload``, which every refresh
+    replaces; a copy here — the way Telegram's ``channels`` keeps
+    ``username`` and ``title`` — would be a second place to keep current.
+    What is here is the operator's: the review, the provenance, and the
+    channel id, kept for as long as the record.
     """
 
     __tablename__ = "yt_channels"
@@ -1865,22 +1861,19 @@ class YtChannel(Base):
 class YtRawChannel(Base):
     """The latest channel resource YouTube returned, and when.
 
-    The one place data read from the API is kept, so the one place the
-    30-day rule has to reach: a refresh replaces the row, expiry deletes
-    it, a channel YouTube stops returning loses it. Never versioned —
-    keeping every fetch would be keeping data past 30 days by another
-    name — and never in a backup, because fetching the whole inventory
-    again costs about ten units and keeping it is not allowed.
+    The one place what YouTube said about a channel is kept: a refresh
+    replaces the row, and a channel YouTube stops returning loses it.
+    Never versioned: the latest fetch is what is wanted.
 
     The opposite of ``RawMessage`` on purpose. There the first fetch wins
-    because re-fetching is expensive and keeping is free; here both are
-    reversed.
+    because re-fetching is expensive; here fetching the whole inventory
+    again costs about ten units.
     """
 
     __tablename__ = "yt_raw_channels"
     __table_args__ = (
-        # The two questions asked of this table: which payloads are due
-        # for a refresh, and which have expired.
+        # The question asked of this table: which payloads are due for a
+        # refresh.
         Index("ix_yt_raw_channels_fetched_at", "fetched_at"),
     )
 
@@ -1937,12 +1930,10 @@ class YtChannelPoll(Base):
 class YtRawVideo(Base):
     """The latest video resource YouTube returned, with the loop's schedule.
 
-    API data, so it lives under the 30-day rule: replaced by every
-    reading, expired 30 days after its last fetch, deleted the moment
-    YouTube stops returning the video. Everything the loop works out
-    from it — when the video is due, when and how it was found — is kept
-    in the same row and goes with it, so nothing derived from what
-    YouTube said can outlive what YouTube said.
+    Replaced by every reading, deleted the moment YouTube stops
+    returning the video. Everything the loop works out from it — when the
+    video is due, when and how it was found — is kept in the same row and
+    goes with it.
 
     ``channel_id`` is generated from the payload by Postgres rather than
     written beside it, so the two cannot disagree; a video reassigned to
@@ -1956,8 +1947,8 @@ class YtRawVideo(Base):
         CheckConstraint("video_id ~ '^[0-9A-Za-z_-]{11}$'", name="id_shape"),
         Index("ix_yt_raw_videos_fetched_at", "fetched_at"),
         Index("ix_yt_raw_videos_channel_id", "channel_id"),
-        # Finished videos stay until they expire and are never due; the
-        # index holds only those still being read.
+        # Finished videos stay and are never due; the index holds only
+        # those still being read.
         Index(
             "ix_yt_raw_videos_due_at",
             "due_at",
@@ -1989,11 +1980,8 @@ class YtRawVideoStat(Base):
     """One reading of one video's counters, at one moment.
 
     Append-only, never updated: the YouTube counterpart of
-    ``MessageMetric``. Statistics read with the key may be kept 30 days
-    (III.E.4.b), and each reading expires on its own clock — longer only
-    once the derived-metrics use case is accepted and the date is
-    recorded in ``yt_policy``. Counters only: the title is the video's,
-    and lives in its payload.
+    ``MessageMetric``. Counters only: the title is the video's, and lives
+    in its payload.
 
     ``bigint``, because view counts pass 2³¹. NULL is absent — a counter
     YouTube did not report — and never zero.
@@ -2004,8 +1992,8 @@ class YtRawVideoStat(Base):
         Index("ix_yt_raw_video_stats_observed_at", "observed_at"),
     )
 
-    # A reading of a video that is gone, or whose data expired, is a
-    # statistic of nothing: it goes with the video.
+    # A reading of a video that is gone is a statistic of nothing: it
+    # goes with the video.
     video_id: Mapped[str] = mapped_column(
         ForeignKey("yt_raw_videos.video_id", ondelete="CASCADE"),
         primary_key=True,
@@ -2027,12 +2015,9 @@ class YtRawVideoStat(Base):
 class YtRawLookup(Base):
     """Which channel YouTube said a linked name belongs to, and when.
 
-    API data — the answer to ``videos.list`` or ``channels.list`` — so
-    it lives under the 30-day rule like every other ``yt_raw_`` table,
-    and stays out of every dump by that prefix. Never refreshed: a name
-    in date is not asked again, and one past 30 days is removed by the
-    expiry every YouTube command runs first, to be looked up anew by the
-    next run that needs it. ``channel_id`` NULL is YouTube having named
+    The answer to ``videos.list`` or ``channels.list``. A name answered
+    within ``youtube_answers_fresh_days`` is not asked again; an older
+    answer is not read, and is replaced by the next run that needs it. ``channel_id`` NULL is YouTube having named
     no channel — remembered, so a dead video linked in an old post is
     not paid for on every run.
 
@@ -2079,14 +2064,13 @@ class YtRawChannelSections(Base):
     channel ids, the section's type deliberately not read: the probe of
     2026-11-01 got lowercase and undocumented types back, and the
     reference says ``contentDetails.channels`` is the featured channels
-    whatever the type. Replaced by every read, removed at 30 days by the
-    shared expiry, out of every dump by the prefix. A seed with no
-    sections is stored with an empty ``items``, so it is not asked again
-    before the refresh age.
+    whatever the type. Replaced by every read. A seed with no sections is
+    stored with an empty ``items``, so it is not asked again before the
+    refresh age.
 
-    Kept when its channel stops being a seed — nothing reads it then,
-    and the expiry takes it within 30 days. What is worked out from it —
-    which seeds feature which channel — is never stored.
+    Kept when its channel stops being a seed — nothing reads it then.
+    What is worked out from it — which seeds feature which channel — is
+    never stored.
     """
 
     __tablename__ = "yt_raw_channel_sections"
@@ -2137,11 +2121,9 @@ class YtSearchQuery(Base):
 class YtSearchRun(Base):
     """One search of one query: when, bounded how, and how many pages.
 
-    Holds no API data, and is still left out of every dump with the
-    results it describes, for ``YtBackfillWalk``'s reason: restored
-    without them, a run would say a query was answered when its answer
-    is gone, and the query would not be asked again for 30 days. Removed
-    at 30 days with its results by the shared expiry.
+    A query is not asked again while a run of it is younger than
+    ``youtube_answers_fresh_days``, and only such runs feed the search
+    queue.
     """
 
     __tablename__ = "yt_search_runs"
@@ -2165,9 +2147,8 @@ class YtSearchRun(Base):
 class YtRawSearchResult(Base):
     """One search result: which channel it belongs to, at which position.
 
-    API data — the channel id of a result and YouTube's order — so it
-    lives 30 days, goes with its run, and stays out of every dump by the
-    prefix. Nothing else of the result is read: no title, no video id.
+    The channel id of a result and YouTube's order; goes with its run.
+    Nothing else of the result is read: no title, no video id.
     """
 
     __tablename__ = "yt_raw_search_results"
@@ -2242,17 +2223,12 @@ class YtAlert(Base):
 
     **It lives as long as the reading it was scored on.** The reading is
     a row of ``yt_raw_video_stats``, which goes with its video's payload,
-    so a video YouTube stops returning takes its alerts at once, expiry
-    stays one ``DELETE``, and no clock of this table's own can keep a
-    video named past its data. That is also why no dump holds it: a dump
-    leaves the readings out, and would carry video ids with nothing to
-    hang them on.
+    so a video YouTube stops returning takes its alerts at once.
 
     **It copies nothing YouTube said.** No title, channel name or count:
-    the message reads them from their one home when it is sent, and the
-    count that crossed is read back through ``scored_at``. ``value`` and
-    ``expected`` are itgraph's own numbers, derived metrics that only
-    exist once the derived-metrics use case is accepted.
+    the message reads them from where they are stored when it is sent,
+    and the count that crossed is read back through ``scored_at``.
+    ``value`` and ``expected`` are itgraph's own numbers.
 
     Where it goes is the channel's language at the moment of sending, not
     of raising: ``route`` records where it went, and is written by the bot.
@@ -2326,14 +2302,7 @@ class YtBackfillWalk(Base):
     Ours: times, flags and counts of the walk's own work and of what the
     API did — never a title, a date or a count YouTube returned. The
     depth a capped walk actually reached is the oldest stored video's
-    publication date, read from that video while it lasts and never
-    copied here, where it would be API data outside its one home.
-
-    Left out of every dump, although it holds no API data, because it
-    describes data the dumps leave out. Restored without its videos, a
-    record would claim a walk that is not there — what ``yt_channel_polls``
-    did on the move to the server, when every channel's first listing
-    there looked like a moved count. A restore therefore walks again.
+    publication date, read from that video and never copied here.
     """
 
     __tablename__ = "yt_backfill_walks"

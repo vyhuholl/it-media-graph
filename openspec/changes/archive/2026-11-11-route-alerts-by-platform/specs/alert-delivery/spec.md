@@ -109,13 +109,6 @@ The system SHALL let the operator ask, in each chat the bot is configured for, w
 - **WHEN** the operator asks for status in the Telegram chat
 - **THEN** the reply says how recent the derived data the detection reads is
 
-#### Scenario: The YouTube chat
-
-- **WHEN** the operator asks for status in the YouTube chat
-- **THEN** the reply says how many YouTube alerts were raised, folded and excluded, and, per topic, how many are undelivered, held and failing
-- **AND** when YouTube's last poll pass completed
-- **AND** while no acceptance of derived metrics is recorded, that YouTube is not scored
-
 #### Scenario: Asked in a topic
 
 - **WHEN** the operator asks for status in the Russian topic

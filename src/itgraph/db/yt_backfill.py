@@ -5,12 +5,8 @@ walked, how far back, and counts of the walk's work and of what the API
 did. A channel's uploads playlist is read out of ``yt_raw_channels``
 when needed and never copied here.
 
-A record is kept only while the history it describes is kept. It is
-forgotten when its channel stops being a seed or goes gone, and — while
-the walk is disabled, so nothing refreshes past uploads — once its videos
-have had time to expire. It is also left out of every dump
-(``db/backup.py``), so a restore walks again rather than trusting
-records whose videos did not come back.
+A record is forgotten when its channel stops being a seed or goes gone,
+so a channel that comes back is walked again.
 
 The lock is the poll loop's pattern with a key of its own: a walk and a
 pass never refuse each other, and neither touches the Telegram lease,
@@ -28,7 +24,6 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from itgraph import yt_policy
 from itgraph.db.models import (
     ChannelStatus,
     YtBackfillWalk,
@@ -47,7 +42,6 @@ __all__ = [
     "backfill_lock",
     "channels_to_walk",
     "finish_walk",
-    "forget_unkept_walks",
     "forget_walks",
     "record_page",
     "record_walk_failure",
@@ -260,21 +254,6 @@ async def forget_walks(
         await session.execute(
             delete(YtBackfillWalk).where(YtBackfillWalk.channel_id.in_(ids))
         )
-
-
-async def forget_unkept_walks(session: AsyncSession, *, now: datetime) -> int:
-    """Forget walks whose videos nothing has kept. Returns how many.
-
-    For when the walk is disabled: the refresh keeps no past upload then,
-    so a walk that ended more than 30 days ago describes videos that have
-    expired. The caller decides whether the walk is enabled.
-    """
-    forgotten = await session.scalars(
-        delete(YtBackfillWalk)
-        .where(YtBackfillWalk.finished_at < now - yt_policy.RETENTION)
-        .returning(YtBackfillWalk.channel_id)
-    )
-    return len(list(forgotten))
 
 
 @dataclass(frozen=True, slots=True)

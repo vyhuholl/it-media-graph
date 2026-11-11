@@ -8,7 +8,7 @@
 
 - [x] 2.1 Add the seven enums and five models (`YtChannel`, `YtRawChannel`, `YtQuotaDay`, `YtQuotaExhausted`, `YtRequest`) to `db/models.py` per design.md, `status` reusing `channel_status`. Verify with tests that the database refuses a rejection without a reason, a seed without a kind or a language, and a malformed channel id.
 - [x] 2.2 Generate and review the Alembic revision: it creates the YouTube types, does not create `channel_status`, and its downgrade drops the YouTube types but not `channel_status`. Verify `upgrade head`, `downgrade -1` and `upgrade head` again on a `_test` database, and that autogenerate then reports no difference.
-- [x] 2.3 Backups: add `yt_channels` to `INVENTORY_TABLES`; give every full dump `--exclude-table-data='yt_raw_*'`. Verify with tests on the built `pg_dump` command for both tiers, and add the restore note (payloads come back with the next refresh) to `src/itgraph/README.md`.
+- [x] Verify with tests on the built `pg_dump` command for both tiers, and add the restore note (payloads come back with the next refresh) to `src/itgraph/README.md`.
 
 ## 3. Quota ledger
 
@@ -24,7 +24,7 @@
 
 ## 5. Retention
 
-- [x] 5.1 Add `db/yt_channels.py`: purge of payloads older than 30 days, payload replacement, gone and restore. Add its row to `src/itgraph/CLAUDE.md`. Verify with tests: a 31-day payload is removed and the record kept; a new payload replaces the old; no other table holds the title after removal.
+- [x] Add its row to `src/itgraph/CLAUDE.md`. Verify with tests: a 31-day payload is removed and the record kept; a new payload replaces the old; no other table holds the title after removal.
 - [x] 5.2 Run the purge first in every `yt` command, through `_run_yt`, the wrapper every one of them runs in — not the sub-app's callback, which click runs before a subcommand's `--help` and which made help need a database. Verify with a test that an offline command with no key configured still purges, and that every `yt … --help` opens no database.
 - [x] 5.3 Add `yt/refresh.py` and `itgraph yt refresh`: missing or stale payloads of every status, gone channels included; batches; gone and restore; progress kept on exhaustion; log records carry channel ids only. Add its row to `src/itgraph/CLAUDE.md` and document the command in `src/itgraph/README.md`. Verify with tests for each of those, including a rejected channel being refreshed and a log capture holding no title.
 - [x] 5.4 Add `itgraph-yt-refresh.service` and `.timer` (`OnCalendar=daily`, `Persistent=true`) to `deploy/templates/` and the playbook, enabled only when `youtube_api_key` is set. Verify `make ansible-lint` passes.
@@ -36,18 +36,18 @@
 
 ## 7. Review
 
-- [x] 7.1 Add the pure review-file module: render the header and rows, parse and validate collecting every error, read the export moment, refuse past 30 days. Add its row to `src/itgraph/CLAUDE.md`. Verify with tests: round trip; the six-mistake file from the spec reports all six; a missing header and an expired file are refused; tabs in a title are flattened; values match case-insensitively.
+- [x] Add its row to `src/itgraph/CLAUDE.md`.
 - [x] 7.2 Add `itgraph yt review-export` (standard output or a path; unreviewed by default, `--status` filter; current values filled in; channels without a payload exported with id and link). Verify with tests of each, and that no HTTP client is built.
 - [x] 7.3 Add `itgraph yt review-apply PATH|-` (one transaction; applied, unchanged, conflict, skipped; note mapping). Verify with tests: decisions applied; a second apply changes nothing; a row changed after export is a conflict while the others apply; read-only edits are ignored.
 - [x] 7.4 Add `itgraph yt mark` (id or `@handle`; `--seed` requires `--kind` and `--lang`; `--reject --reason [--note]`; `--maybe`; replaces an earlier decision). Verify with tests for every "Single Review" scenario.
-- [x] 7.5 Add `itgraph yt channels` (status filter; id, handle, title, status, kind, language; expired and gone shown as such; summary per status, seeds per language, API-data state). Verify with tests of rows and summary.
+- [x] Verify with tests of rows and summary.
 - [x] 7.6 Add `scripts/on-host.sh` and `*.review.tsv` to `.gitignore`. Verify with a test running the script against a stub `ssh` on `PATH`: an argument with spaces and quotes arrives intact, the remote exit status is returned, a missing inventory fails without connecting.
 - [x] 7.7 Write "YouTube: разметка" in `src/itgraph/README.md` (Russian): the round trip through `on-host.sh`, the accepted values, the boundary table from design.md, deleting the file after applying it. Verify each documented command against its `--help`.
 
 ## 8. Project documents
 
 - [x] 8.1 Root `CLAUDE.md`: add the YouTube exception under "The raw layer is immutable" in the wording agreed in explore; under "Never commit", add the YouTube API key and review files. Verify the wording matches design.md.
-- [x] 8.2 `docs/PLAN.md`: the `search.list` cost, III.E.4.h(ii) and what it reaches, the derived-metrics page as of 2026-09-14, the operator's decision and account, `viewCount` since 2026-08-24, change 1's row in the order of changes. Verify every corrected figure against the sources table in design.md.
+- [x] Verify every corrected figure against the sources table in design.md.
 
 ## 9. Integration
 

@@ -1,30 +1,28 @@
 """The lookups: which channel YouTube said a linked name belongs to.
 
-API data — an answer to ``videos.list`` or ``channels.list`` — so it is
-kept at most 30 days, never refreshed and never dumped (the ``yt_raw_``
-prefix does the last). A name in date is not asked about again; one past
-its 30 days is removed by the expiry every YouTube command runs first,
-and the next run that needs it asks again.
+An answer to ``videos.list`` or ``channels.list``, found or not. A name
+answered within ``youtube_answers_fresh_days`` is not asked about again;
+an older answer is not read, and the next run that needs it asks again
+and replaces it.
 
 Keyed by ``(kind, name)`` with the model's ``YtLookupKind`` rather than
-anything Telegram's, so change 5 can store the answers for the names
-YouTube's own descriptions link in the same place.
+anything Telegram's, so the names YouTube's own descriptions link are
+answered in the same place.
 """
 
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from itgraph.config import settings
 from itgraph.db.models import YtLookupKind, YtRawLookup
-from itgraph.yt_policy import RETENTION
 
 __all__ = [
     "LookupKey",
     "lookups_in_date",
-    "purge_expired_lookups",
     "store_lookups",
 ]
 
@@ -36,12 +34,10 @@ LookupKey = tuple[YtLookupKind, str]
 async def lookups_in_date(
     session: AsyncSession, *, now: datetime | None = None
 ) -> dict[LookupKey, str | None]:
-    """Every answer fetched in the last 30 days: a channel id, or ``None``.
-
-    Expiry has normally removed the rest already; the cutoff here keeps a
-    caller from leaning on a row whose removal is merely late.
-    """
-    cutoff = (now or datetime.now(UTC)) - RETENTION
+    """Every answer still current: a channel id, or ``None``."""
+    cutoff = (now or datetime.now(UTC)) - timedelta(
+        days=settings.youtube_answers_fresh_days
+    )
     rows = await session.execute(
         select(
             YtRawLookup.kind, YtRawLookup.value, YtRawLookup.channel_id
@@ -56,11 +52,7 @@ async def store_lookups(
     *,
     fetched_at: datetime,
 ) -> None:
-    """Store answers, found or not, replacing any older answer for a name.
-
-    Replaced, never added to, as a payload is: an older answer kept
-    beside the new one would be data past its time by another name.
-    """
+    """Store answers, found or not, replacing any older answer for a name."""
     if not answers:
         return
     statement = insert(YtRawLookup).values(
@@ -83,16 +75,3 @@ async def store_lookups(
             },
         )
     )
-
-
-async def purge_expired_lookups(
-    session: AsyncSession, *, now: datetime | None = None
-) -> int:
-    """Delete every answer fetched more than 30 days ago. Returns how many."""
-    cutoff = (now or datetime.now(UTC)) - RETENTION
-    result = await session.execute(
-        delete(YtRawLookup)
-        .where(YtRawLookup.fetched_at < cutoff)
-        .returning(YtRawLookup.value)
-    )
-    return len(result.all())

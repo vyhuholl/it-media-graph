@@ -1,7 +1,7 @@
 # youtube-featured-channels Specification
 
 ## Purpose
-The channels a seed lists in its channel sections: the request that reads them, when it is made, where the answer lives for at most 30 days, and the review queue built from them. Featuring a channel on one's own page is a deliberate recommendation, so one seed is enough evidence by default.
+The channels a seed lists in its channel sections: the request that reads them, when it is made, where the answer lives, and the review queue built from them. Featuring a channel on one's own page is a deliberate recommendation, so one seed is enough evidence by default.
 
 ## Requirements
 
@@ -128,7 +128,7 @@ The system SHALL work the featured evidence and the ranking out of the stored li
 #### Scenario: Reporting writes nothing
 
 - **WHEN** the report runs without `--add`
-- **THEN** no row in the database is inserted, updated or deleted, apart from what expiry removes before any command
+- **THEN** no row in the database is inserted, updated or deleted
 
 ### Requirement: Featured Candidates Are Not Scheduled
 

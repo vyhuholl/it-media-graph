@@ -1,12 +1,11 @@
-"""Asking YouTube whose a linked name is, and keeping the answer 30 days.
+"""Asking YouTube whose a linked name is, and keeping the answer.
 
 The requests name the narrowest fields there are; a missing video and a
 handle nobody holds are answers too; the answers live in one table and
-leave it at 30 days. Every id and handle is invented; nothing touches a
-socket.
+are read while current. Every id and handle is invented; nothing touches
+a socket.
 """
 
-import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -14,7 +13,6 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 from sqlalchemy import select
-from typer.testing import CliRunner
 from ytfakes import (
     FakeYouTube,
     channel_id,
@@ -25,13 +23,10 @@ from ytfakes import (
     video_resource,
 )
 
-from itgraph.cli import app
-from itgraph.db import session as db_session
 from itgraph.db.models import YtCommand, YtLookupKind, YtRawLookup
 from itgraph.db.session import Database
 from itgraph.db.yt_lookups import (
     lookups_in_date,
-    purge_expired_lookups,
     store_lookups,
 )
 from itgraph.yt import channels, videos
@@ -246,7 +241,7 @@ async def test_a_lookup_holds_a_channel_id_only(database: Database) -> None:
     }
 
 
-async def test_removing_a_lookup_removes_the_answer(
+async def test_an_old_lookup_is_kept_and_not_read(
     database: Database,
 ) -> None:
     async with database.session() as session:
@@ -255,50 +250,8 @@ async def test_removing_a_lookup_removes_the_answer(
             {(YtLookupKind.VIDEO, video_id(1)): channel_id(7)},
             fetched_at=NOW - timedelta(days=31),
         )
-        removed = await purge_expired_lookups(session, now=NOW)
-        left = await lookups_in_date(session, now=NOW - timedelta(days=40))
+        current = await lookups_in_date(session, now=NOW)
+        then = await lookups_in_date(session, now=NOW - timedelta(days=20))
 
-    assert removed == 1
-    assert left == {}
-
-
-# --- expiry before any work ------------------------------------------
-
-
-runner = CliRunner()
-
-
-async def _expired_lookup(database_url: str) -> None:
-    database = Database(database_url)
-    try:
-        async with database.session() as session:
-            await store_lookups(
-                session,
-                {(YtLookupKind.HANDLE, "fake-old"): channel_id(7)},
-                fetched_at=datetime.now(UTC) - timedelta(days=31),
-            )
-    finally:
-        await database.dispose()
-
-
-async def _lookups_left(database_url: str) -> int:
-    database = Database(database_url)
-    try:
-        async with database.session() as session:
-            return len((await session.scalars(select(YtRawLookup))).all())
-    finally:
-        await database.dispose()
-
-
-@pytest.mark.parametrize("command", [["yt", "tg-candidates"], ["yt", "quota"]])
-def test_an_expired_lookup_is_removed_before_any_work(
-    database_url: str, monkeypatch: pytest.MonkeyPatch, command: list[str]
-) -> None:
-    original = db_session.Database
-    monkeypatch.setattr(db_session, "Database", lambda: original(database_url))
-    asyncio.run(_expired_lookup(database_url))
-
-    result = runner.invoke(app, command)
-
-    assert result.exit_code == 0, result.output
-    assert asyncio.run(_lookups_left(database_url)) == 0
+    assert current == {}
+    assert then == {(YtLookupKind.VIDEO, video_id(1)): channel_id(7)}

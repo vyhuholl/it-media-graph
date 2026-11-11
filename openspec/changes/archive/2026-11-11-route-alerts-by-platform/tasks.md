@@ -25,16 +25,15 @@ Tasks marked **(operator)** reach a server, a chat or the test environment, and 
 ## 4. The YouTube queue
 
 - [x] 4.1 Revision B: types `yt_alert_kind`, `yt_alert_delivery`, `yt_alert_route`; table `yt_alerts` as design.md, Decision 3, with the foreign key to the reading `ON DELETE CASCADE`, the self-reference for folds, the unique constraint and the two partial indexes. Grants: the bot's role `SELECT` on `yt_channels`, `yt_raw_channels`, `yt_raw_videos`, `yt_raw_video_stats`, `yt_watch_passes`, `yt_alerts` and `UPDATE` on `yt_alerts`' delivery columns; the exporter's `SELECT` on `yt_alerts`' moments and delivery state. The downgrade revokes and drops. Verify on a `_test` database: upgrade, downgrade, upgrade; autogenerate reports nothing; grant tests under `SET LOCAL ROLE` — the bot cannot insert an alert or change its video, reading, kind or score, the exporter cannot select the video, the reading or the score.
-- [x] 4.2 The model and `db/yt_alerts.py`: claim, held, delivered, failed, excluded, folds settled, counts per route; the evidence a message reads, refusing a video payload and showing no channel name when either was fetched more than 30 days before. Verify: tests of "YouTube Alerts Have A Queue Of Their Own", "An Alert Goes With Its Video's Data" (gone video, expired reading, a head taking its folds) and "An Alert Copies Nothing YouTube Said".
 
 ## 5. YouTube routing and wording
 
 - [x] 5.1 Routing when sending, by the channel's current language; `other` closed as `excluded`; a channel no longer a seed delivered; a digest entry routed when the digest is sent; the route recorded. Verify: tests per scenario of "Alerts Are Routed By The Channel's Language When Sent" and "Channels In Other Languages Get No Alert".
 - [x] 5.2 `bot/render.py`: the YouTube alert and digest entry of design.md, Decision 4, pure. Verify: tests per scenario of "A YouTube Alert Names Its Source And Dates What It Shows" — attribution and link on every entry, the counts' time and the score's time, a counter left out rather than zero, a broadcast's age, a comment's count and expectation, the folds' line — and Telegram's wording unchanged.
 - [x] 5.3 No YouTube configured: nothing sent and the alert counted undelivered; a topic refused by Telegram: an attempt counted, nothing sent elsewhere. Verify: tests of "YouTube Delivery Needs Its Chat And Both Topics", "Nothing configured", and "A Topic That Cannot Be Reached Fails The Send".
-- [x] 5.4 YouTube's `/status`, in the YouTube chat: raised, folded and excluded, and per route undelivered, held and failing — an excluded alert has no route; the last complete poll pass; «оценок YouTube нет до одобрения» while `DERIVED_METRICS_ACCEPTED_ON` is empty. Verify: a test of "The Bot Reports Its Own State", "The YouTube chat" and "Asked in a topic".
+- [x] Verify: a test of "The Bot Reports Its Own State", "The YouTube chat" and "Asked in a topic".
 - [x] 5.5 Docs of this group:
-  - `docs/index.html` and `docs/privacy.html`: where alerts go (two chats, a topic per language), what a YouTube alert contains, its channel included; that channels in other languages get none; that the bot answers in the chats it is configured for; that alert messages stay in the chat as sent, with the moment of the counts; the 30-day sentence scoped to what itgraph stores; "Last updated". The wording is proposed, and the operator words both pages before archiving.
+  - The wording is proposed, and the operator words both pages before archiving.
   - `docs/PLAN.md`'s "### Alerts" with what was decided and the aggregates of design.md, Context; the row of change 6, and for change 7 that `other` is not scored.
   - `src/itgraph/CLAUDE.md`'s rows for the modules touched and added; `src/itgraph/README.md`'s bot section.
 
@@ -42,11 +41,11 @@ Tasks marked **(operator)** reach a server, a chat or the test environment, and 
 
 ## 6. Metrics
 
-- [x] 6.1 `itgraph_alerts_oldest_undelivered_seconds` and `itgraph_alerts_failing` with `platform`, `telegram` or `youtube`, held alerts counted, excluded ones not. Verify: tests of the modified "The Series Come From What Is Already Recorded" and "Metrics Carry No API Data"; `src/itgraph/README.md`'s series table updated.
+- [x] 6.1 `itgraph_alerts_oldest_undelivered_seconds` and `itgraph_alerts_failing` with `platform`, `telegram` or `youtube`, held alerts counted, excluded ones not.
 
 ## 7. Backups and the restore
 
-- [x] 7.1 `EXCLUDED_DATA` and `files/readback.sql` gain `yt_alerts`. Verify: the existing test holding the two lists equal; a test that a full dump holds the table's definition and no row; a restore of a dump carrying an alert fails naming it, in the role's tests.
+- [x] Verify: the existing test holding the two lists equal; a test that a full dump holds the table's definition and no row; a restore of a dump carrying an alert fails naming it, in the role's tests.
 - [x] 7.2 `tasks/trials.yml`: one synthetic YouTube alert per configured topic on a synthetic video of a restored seed of that language, after the read-back; waits for its delivery and route; removes the synthetic video at the end, the alert and the reading going with it; says "could not be proven" inside a quiet window, and that YouTube delivery is not configured where it is not. Verify: the role's tests against a stub `kubectl` for both configurations; `deploy/runbook.md`'s restore section.
 
 ## 8. The role's inputs

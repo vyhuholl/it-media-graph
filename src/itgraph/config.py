@@ -19,7 +19,6 @@ from pydantic import (
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from itgraph.db.models import Metric
-from itgraph.yt_policy import RETENTION
 from itgraph.yt_quota import general_cap, search_cap
 
 __all__ = ["ProxyType", "Settings", "settings"]
@@ -595,9 +594,8 @@ class Settings(BaseSettings):
     # --- YouTube ------------------------------------------------------
     #
     # Everything YouTube is read with one API key against one daily
-    # quota, and both belong to the one API project a client may have
-    # (Developer Policies III.D.1.c). A leaked key is therefore not a
-    # nuisance but someone else spending the only quota there is.
+    # quota. A leaked key is therefore not a nuisance but someone else
+    # spending the only quota there is.
 
     # Optional, unlike the api hash: required, it would fail settings on
     # every machine without it, and take every Telegram command and the
@@ -625,9 +623,14 @@ class Settings(BaseSettings):
     # search pool is this less the same margin: 90 by default.
     youtube_search_daily_quota: int = Field(default=100, ge=1)
     # How old a channel's payload may grow before the refresh asks for it
-    # again. Strictly under the policy's 30 days — the difference is what
-    # a few missed runs of the daily timer may eat.
+    # again. The same age decides when a seed's featured list and a past
+    # upload are read again.
     youtube_refresh_after_days: int = Field(default=25, ge=1)
+    # How long an answer from YouTube that decides what to ask next
+    # counts as current: a lookup of a linked name, a seed's featured
+    # list, a search run and its results. Past it the answer is no longer
+    # read, and the question is asked again.
+    youtube_answers_fresh_days: int = Field(default=30, ge=1)
     # One request. The API answers in well under a second; this bounds
     # only the request that never answers.
     youtube_request_timeout_seconds: float = Field(default=30.0, gt=0)
@@ -659,11 +662,9 @@ class Settings(BaseSettings):
         30240,
         40320,
     )
-    # Past this age a video is not read again. Strictly past the last
-    # offset, or that reading could never be taken. Not a retention
-    # limit — a reading at day 28 may legally be kept to day 58 — but a
-    # usefulness one: under the base policies a video's whole trajectory
-    # exists only until its earliest reading turns 30 days old.
+    # Past this age the poll loop reads a video no more; the refresh of
+    # past uploads takes over. Strictly past the last offset, or that
+    # reading could never be taken.
     youtube_watch_horizon_days: float = Field(default=29.0, gt=0)
     # How often every watched channel's uploads are listed whatever its
     # video count says. The count is a cheap trigger, not the truth; this
@@ -682,17 +683,15 @@ class Settings(BaseSettings):
 
     # --- the YouTube history walk ----------------------------------------
     #
-    # Off until something reads the history. An edge parsed from a
-    # description lives no longer than its payload, so a year of payloads
-    # kept fresh before the mention graph exists would be data held for
-    # nobody. Off, nothing walks unattended, the refresh keeps no past
-    # upload, and a walk run by hand expires like any data nobody
-    # refreshes — which is what a verification run wants. Turned on with
-    # the mention graph, or at acceptance if that comes first.
+    # Off, nothing walks unattended and the refresh reads no past upload
+    # again; a walk run by hand still stores what it finds. On, a daily
+    # job walks every seed not yet walked, and the refresh keeps the year
+    # current.
     youtube_backfill_enabled: bool = False
     # How far back a walk reaches, counted from the moment each channel's
-    # walk begins. The refresh keeps what is younger than this and lets
-    # the rest expire, so the year rolls forward without walking again.
+    # walk begins. The refresh reads again what is younger than this; an
+    # older video stays as it was last read, so the year rolls forward
+    # without walking again.
     youtube_backfill_days: int = Field(default=365, ge=1)
     # The most videos one walk stores for one channel. Measured, the
     # busiest seed publishes about 590 a year, so this binds nothing today
@@ -1103,26 +1102,6 @@ class Settings(BaseSettings):
         if value is not None and not value.strip():
             return None
         return value
-
-    @model_validator(mode="after")
-    def _youtube_refresh_beats_the_policy(self) -> Self:
-        """Refuse a refresh age the retention rule would overtake.
-
-        A payload is deleted at 30 days whether or not it was refreshed,
-        so a refresh age at or past that would mean channels quietly
-        losing their titles every cycle — which looks exactly like a
-        refresh that ran.
-        """
-        limit = RETENTION.days
-        if self.youtube_refresh_after_days >= limit:
-            raise ValueError(
-                f"youtube_refresh_after_days "
-                f"({self.youtube_refresh_after_days}) is not under "
-                f"{limit}: YouTube API data may be kept at most {limit} "
-                "days, so every payload would expire before it was "
-                "refreshed"
-            )
-        return self
 
     @model_validator(mode="after")
     def _youtube_schedule_is_reachable(self) -> Self:

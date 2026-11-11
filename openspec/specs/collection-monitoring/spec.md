@@ -1,7 +1,7 @@
 # collection-monitoring Specification
 
 ## Purpose
-What the project tells the shared monitoring: which series it serves, where they come from, on which port, who may read them, and that they carry no API data. The alerts and the dashboard built on them belong to the infrastructure repository.
+What the project tells the shared monitoring: which series it serves, where they come from, on which port, who may read them, and that they carry nothing YouTube said. The alerts and the dashboard built on them belong to the infrastructure repository.
 
 ## Requirements
 
@@ -60,7 +60,7 @@ Every series SHALL be worked out at scrape time from durable state in the databa
 | `itgraph_youtube_quota_cap_units{pool}` | gauge | the pool's cap |
 | `itgraph_youtube_quota_exhausted{bucket}` | gauge | 1 when this quota day was declared over for that bucket |
 | `itgraph_youtube_last_complete_pass_timestamp_seconds` | gauge | the newest poll pass that completed, 0 when none |
-| `itgraph_youtube_oldest_payload_age_seconds{kind}` | gauge | the oldest fetch time of each kind of stored API data, absent when there is none |
+| `itgraph_youtube_oldest_payload_age_seconds{kind}` | gauge | how long ago the oldest stored channel payload was read, `kind="channel"` only; absent when there is none |
 | `itgraph_alerts_oldest_undelivered_seconds{platform}` | gauge | the oldest alert of that platform's queue not delivered, held ones included, 0 when none |
 | `itgraph_alerts_failing{platform}` | gauge | undelivered alerts of that platform's queue past the failure-report attempts |
 
@@ -82,9 +82,9 @@ Every series SHALL be worked out at scrape time from durable state in the databa
 - **WHEN** a client scrapes
 - **THEN** it counts in neither alert series
 
-### Requirement: Metrics Carry No API Data
+### Requirement: Metrics Carry Nothing YouTube Said
 
-No series SHALL carry a title, handle, description, channel id, video id or statistic read from YouTube, and none SHALL aggregate statistics across channels. What the exporter reads of API data SHALL be limited to when each row was fetched, enforced by the database role it connects as. Of a YouTube alert it SHALL read only its moments and delivery state.
+No series SHALL carry a title, handle, description, channel id, video id or statistic read from YouTube. What the exporter reads of YouTube's tables SHALL be limited to when each row was fetched, enforced by the database role it connects as. Of a YouTube alert it SHALL read only its moments and delivery state.
 
 #### Scenario: The role cannot read a title
 
@@ -132,4 +132,3 @@ The exporter SHALL run wherever the role runs, so that its series, its role's gr
 - **GIVEN** a test environment on a restored copy, with the collector at zero replicas and no YouTube key
 - **WHEN** a client scrapes
 - **THEN** the response is 200
-- **AND** no `itgraph_youtube_oldest_payload_age_seconds` series is present, since a dump carries no API data

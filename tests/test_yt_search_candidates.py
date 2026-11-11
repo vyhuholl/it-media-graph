@@ -133,10 +133,10 @@ def test_runs_out_of_date_are_not_read(database_url: str) -> None:
     assert lines[0] == "searches in date: 1"
 
 
-def test_an_expired_run_is_removed_before_the_report(
+def test_an_old_run_is_kept_with_its_results(
     database_url: str,
 ) -> None:
-    """Gone before anything is read, with its results; the query stays."""
+    """Out of date for the report, but nothing removes it."""
     arrange(database_url, searched("fake old", [A], days_ago=31))
 
     _candidates()
@@ -155,8 +155,8 @@ def test_an_expired_run_is_removed_before_the_report(
 
     arrange(database_url, count)
     assert left == {
-        "yt_search_runs": 0,
-        "yt_raw_search_results": 0,
+        "yt_search_runs": 1,
+        "yt_raw_search_results": 1,
         "yt_search_queries": 1,
     }
 

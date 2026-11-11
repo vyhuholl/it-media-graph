@@ -3,7 +3,7 @@
 import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -16,10 +16,8 @@ from itgraph.yt.videos import (
     FIELDS,
     LOOP,
     PARTS,
-    PAST_UPLOADS,
     Asked,
     by_ids,
-    for_past_uploads,
 )
 
 NOW = datetime(2026, 10, 26, 12, 0, tzinfo=UTC)
@@ -140,29 +138,14 @@ def _named(fields: str) -> set[str]:
     return set(re.findall(r"[A-Za-z]+", fields)) - STRUCTURE
 
 
-@pytest.mark.parametrize("asked", [LOOP, PAST_UPLOADS], ids=["loop", "past"])
-def test_every_field_named_is_on_the_privacy_page(asked: Asked) -> None:
+def test_every_field_named_is_on_the_privacy_page() -> None:
+    asked = LOOP
     page = (Path(__file__).parent.parent / "docs" / "privacy.html").read_text()
     videos = page[page.index("About videos") :]
     videos = videos[: videos.index("</li>")]
     for field in _named(asked.fields):
         assert field in DECLARED, f"{field} is read and not declared"
         assert DECLARED[field] in videos, f"{DECLARED[field]!r} not on page"
-
-
-def test_a_past_upload_is_asked_for_without_counters() -> None:
-    assert "statistics" not in PAST_UPLOADS.parts.split(",")
-    assert not _named(PAST_UPLOADS.fields) & {
-        "viewCount",
-        "likeCount",
-        "commentCount",
-    }
-    # Everything else the loop reads, so the payload has the same shape.
-    assert _named(PAST_UPLOADS.fields) == _named(FIELDS) - {
-        "viewCount",
-        "likeCount",
-        "commentCount",
-    }
 
 
 def test_the_loop_s_request_is_unchanged() -> None:
@@ -175,31 +158,3 @@ def test_the_loop_s_request_is_unchanged() -> None:
         "actualStartTime,actualEndTime,scheduledStartTime,scheduledEndTime),"
         "statistics(viewCount,likeCount,commentCount))"
     )
-
-
-def test_past_uploads_get_counters_only_after_acceptance(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from itgraph import yt_policy
-
-    assert for_past_uploads() == PAST_UPLOADS
-    monkeypatch.setattr(
-        yt_policy, "DERIVED_METRICS_ACCEPTED_ON", date(2026, 12, 1)
-    )
-    assert for_past_uploads() == LOOP
-
-
-async def test_a_past_upload_request_comes_back_without_counters(
-    database: Database,
-) -> None:
-    fake = _fake(1)
-
-    async with client(database, fake) as yt:
-        found = await by_ids(yt, [video_id(1)], asked=PAST_UPLOADS)
-
-    [call] = fake.calls("videos")
-    assert (call["part"], call["fields"]) == (
-        PAST_UPLOADS.parts,
-        PAST_UPLOADS.fields,
-    )
-    assert "statistics" not in found[video_id(1)]

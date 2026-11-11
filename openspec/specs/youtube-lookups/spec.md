@@ -1,7 +1,7 @@
 # youtube-lookups Specification
 
 ## Purpose
-Finding which YouTube channel a linked video, handle or legacy name belongs to. It owns the requests that ask, how their spending is ordered and bounded, and the answers kept for at most 30 days, so that whatever names channels by such links can be ranked by channel without asking twice.
+Finding which YouTube channel a linked video, handle or legacy name belongs to. It owns the requests that ask, how their spending is ordered and bounded, and the answers kept, so that whatever names channels by such links can be ranked by channel without asking twice.
 
 ## Requirements
 
@@ -31,7 +31,7 @@ The system SHALL provide `itgraph yt tg-lookup`, finding the channel behind ever
 
 ### Requirement: What Needs No Request
 
-The system SHALL NOT make a request for a name that is already answered: a channel id, a video whose stored payload names its channel, a handle exactly one stored channel payload carries, or a name with a lookup that has not expired.
+The system SHALL NOT make a request for a name that is already answered: a channel id, a video whose stored payload names its channel, a handle exactly one stored channel payload carries, or a name with a lookup still in date.
 
 #### Scenario: A channel id is its own answer
 
@@ -113,11 +113,11 @@ The system SHALL look up a linked handle or legacy name one to a request, asking
 
 ### Requirement: Lookups Are Kept, Not Refreshed
 
-The system SHALL store each answer — a channel id, or not found — with the moment it was fetched. An answer SHALL NOT be fetched again while it is in date. Once removed at 30 days, its name is looked up again by the next run that needs it.
+The system SHALL store each answer — a channel id, or not found — with the moment it was fetched. An answer SHALL NOT be fetched again while it is in date, younger than `youtube_answers_fresh_days`. Past that, its name is looked up again by the next run that needs it, and the new answer replaces the old.
 
-#### Scenario: An expired lookup is asked again
+#### Scenario: A lookup no longer current is asked again
 
-- **GIVEN** a video whose lookup was removed after 30 days
+- **GIVEN** a video whose lookup was fetched 31 days ago
 - **AND** a post still linking it
 - **WHEN** the command runs
 - **THEN** the video is looked up again

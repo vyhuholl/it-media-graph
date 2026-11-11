@@ -344,26 +344,18 @@ def render_youtube(
 ) -> RenderedAlert:
     """One video doing unusually well, as one message or digest entry.
 
-    What the site promises an alert holds, and what the Developer
-    Policies ask of it:
+    What the site promises an alert holds:
 
-    * **YouTube named as the source on this very message** — not once
-      for a digest, which III.F.2.a calls "one general set of
-      attribution" — by its name and a link to the video on YouTube.
+    * **YouTube named as the source on this very message**, not once for
+      a whole digest, by its name and a link to the video on YouTube.
       Telegram's preview of that link shows YouTube's own card.
     * **YouTube's counts with the moment they were read.** The newest
-      stored, which is "the most updated API Data available"; dated,
-      because a message stays in the chat and so becomes "historical API
-      Data", which may be shown "presented accurately in context of
-      time" (III.E.4.f). A counter YouTube did not report is left out,
-      never written as zero.
-    * **itgraph's score, said to be itgraph's,** with its own moment:
-      III.E.4.h's "clear and prominent disclosure" that it is "not from
-      YouTube", and the derived-metrics page's "distinguish these
-      metrics".
+      stored, and dated, because a message stays in the chat. A counter
+      YouTube did not report is left out, never written as zero.
+    * **itgraph's score, said to be itgraph's,** with its own moment.
 
-    The channel's title is left out when its stored data has expired; the
-    rest of the message stands without it.
+    The channel's title is left out when its data is not stored; the rest
+    of the message stands without it.
     """
     lines = [f"▶️ YouTube · {route.value.upper()}"]
 

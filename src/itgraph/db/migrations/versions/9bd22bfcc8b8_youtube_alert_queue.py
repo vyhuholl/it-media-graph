@@ -11,9 +11,7 @@ collected should stay unrepresentable there.
 **An alert lives as long as the reading it was scored on**, by a foreign
 key with `ON DELETE CASCADE` to `yt_raw_video_stats`, which goes with its
 video's payload. So a video YouTube stops returning takes its alerts at
-once, expiry stays one `DELETE`, and no clock of this table's own can keep
-a video named past its data. Dumps leave the table out by name, as they
-leave out `yt_search_runs`.
+once.
 
 **The grants.** The bot reads what a YouTube message is made of — the
 inventory's labels, the payloads, the readings, when the poll loop last

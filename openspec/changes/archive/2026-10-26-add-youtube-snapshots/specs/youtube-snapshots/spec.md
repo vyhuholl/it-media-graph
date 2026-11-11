@@ -98,12 +98,6 @@ The system SHALL start tracking a listed video when no video with its id is trac
 - **THEN** the video is not asked about and not tracked
 - **AND** nothing about it is stored
 
-#### Scenario: A video whose data expired is not taken for new
-
-- **GIVEN** a video tracked earlier, past the horizon, whose stored data has since expired
-- **WHEN** a listing contains it again
-- **THEN** it is not tracked again
-
 ### Requirement: Discovery Is Recorded
 
 The system SHALL record, with each tracked video, when it was found and by which path: a changed video count, the daily check, or the channel's first listing.
@@ -267,7 +261,7 @@ The system SHALL compare the poll loop's spending in the current quota day with 
 
 ### Requirement: A Spent Pool Ends A Pass Quietly
 
-When the poll loop's pool is spent, or YouTube has declared the quota day over, a pass SHALL make no further request, keep what it completed, and exit successfully, saying when spending can resume. Expiry SHALL still run.
+When the poll loop's pool is spent, or YouTube has declared the quota day over, a pass SHALL make no further request, keep what it completed, and exit successfully, saying when spending can resume.
 
 #### Scenario: The pool runs out part way
 
@@ -275,12 +269,6 @@ When the poll loop's pool is spent, or YouTube has declared the quota day over, 
 - **WHEN** the next request is refused by the ledger
 - **THEN** the pass stops, keeping what it stored
 - **AND** exits with a zero status, naming the next reset
-
-#### Scenario: A pass after exhaustion
-
-- **GIVEN** a quota day YouTube declared over
-- **WHEN** a pass starts
-- **THEN** expired data is removed, no request is made, and the pass exits with a zero status
 
 ### Requirement: One Pass At A Time
 

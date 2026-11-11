@@ -4,12 +4,6 @@
 
 The system SHALL accept exactly these review values for YouTube. Status: `candidate`, `seed`, `maybe`, `rejected`. Kind: `personal`, `company`, `media`, `event`, `education`. Rejection reason: `not_it`, `adjacent`, `crypto`, `infobiz`, `ads`, `content_farm`, `consumer_tech`. Language: `en`, `ru`, `other`. Discovery source: `manual`, `telegram`, `mention`, `featured`, `search`.
 
-#### Scenario: A value outside the set is refused
-
-- **WHEN** a review names a kind, reason or language outside its set
-- **THEN** the review fails, naming the value and the accepted ones
-- **AND** nothing is written
-
 #### Scenario: Telegram's values are unaffected
 
 - **WHEN** a Telegram channel is reviewed

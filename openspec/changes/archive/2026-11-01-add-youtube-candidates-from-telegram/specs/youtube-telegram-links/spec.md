@@ -249,12 +249,6 @@ With `--add`, `itgraph yt tg-candidates` SHALL create a record for each of the r
 - **WHEN** the command runs with `--add` again
 - **THEN** none of them is added again, and the next ranked channels are
 
-#### Scenario: A candidate's data arrives with the refresh
-
-- **GIVEN** a candidate added from Telegram, with no API data
-- **WHEN** `itgraph yt refresh` runs
-- **THEN** its payload is fetched, and it can be exported for review
-
 ### Requirement: Nothing Joined Is Stored
 
 The system SHALL work the links, families and ranking out of `raw_messages`, the stored payloads and the lookups each time it is asked, and MUST NOT store which families link a channel, a count, a rank, or anything else joined from Telegram and the API. A record created by `--add` holds only what any record holds.
@@ -262,13 +256,7 @@ The system SHALL work the links, families and ranking out of `raw_messages`, the
 #### Scenario: Reporting writes nothing
 
 - **WHEN** the report runs without `--add`
-- **THEN** no row in the database is inserted, updated or deleted, apart from what expiry removes before any command
-
-#### Scenario: An expired lookup changes the next report
-
-- **GIVEN** a channel ranked through a video's lookup
-- **WHEN** that lookup expires and the report runs before the next lookup run
-- **THEN** that video awaits a lookup, and the channel loses that link
+- **THEN** no row in the database is inserted, updated or deleted
 
 ### Requirement: Not Scheduled
 

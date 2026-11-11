@@ -371,8 +371,7 @@ Handed to the operator as it stands, once this design is accepted. Nothing here 
     | `ItgraphYoutubeNotPassing` | `time() - itgraph_youtube_last_complete_pass_timestamp_seconds > 3600 and on () kube_cronjob_info{namespace="itgraph",cronjob="itgraph-yt-watch"}` | 15m | critical |
     | `ItgraphYoutubeQuotaHigh` | `itgraph_youtube_quota_spent_units{pool="watch"} / itgraph_youtube_quota_cap_units{pool="watch"} > 0.9` | | warning |
     | `ItgraphYoutubeQuotaExhausted` | `itgraph_youtube_quota_exhausted == 1` | | warning |
-    | `ItgraphYoutubeRetention` | `itgraph_youtube_oldest_payload_age_seconds > 2593800` (30 days and 30 minutes: what is not refreshed lawfully reaches 30 days, and expiry runs with every YouTube command, every 15 minutes, so past this expiry has stopped) | | critical |
-    | `ItgraphYoutubeRefreshBehind` | `itgraph_youtube_oldest_payload_age_seconds{kind="channel"} > 2332800` (27 days: a channel's payload is fetched again before 25, so this leaves three days to act before the limit) | 1h | warning |
+    | `ItgraphYoutubeRefreshBehind` | `itgraph_youtube_oldest_payload_age_seconds{kind="channel"} > 2332800` (27 days: a channel's payload is fetched again before 25, so this says the refresh has fallen behind) | 1h | warning |
     | `ItgraphAlertsFailing` | `itgraph_alerts_failing > 0` | 15m | warning |
     | `ItgraphAlertsStuck` | `itgraph_alerts_oldest_undelivered_seconds > 93600` (26 hours: the 09:00 digest normally clears what is held) | | critical |
 

@@ -32,7 +32,6 @@ from itgraph.db.yt_backfill import (
     backfill_lock,
     channels_to_walk,
     finish_walk,
-    forget_unkept_walks,
     forget_walks,
     record_page,
     record_walk_failure,
@@ -298,27 +297,6 @@ async def test_forgotten_walks_are_due_again(database: Database) -> None:
         await forget_walks(session, [channel_id(1)])
 
     assert await _due(database) == [channel_id(1)]
-
-
-async def test_walks_nothing_kept_are_forgotten_after_thirty_days(
-    database: Database,
-) -> None:
-    await _seeds(database, 1, 2, 3)
-    await _walked(database, 1, at=NOW - timedelta(days=31))
-    await _walked(database, 2, at=NOW - timedelta(days=29))
-    async with database.session() as session:
-        # Begun long ago and never ended: due anyway, and kept.
-        await start_walk(
-            session,
-            channel_id(3),
-            now=NOW - timedelta(days=40),
-            cutoff=NOW - timedelta(days=40) - YEAR,
-            whole=False,
-        )
-        forgotten = await forget_unkept_walks(session, now=NOW)
-
-    assert forgotten == 1
-    assert await _due(database) == [channel_id(1), channel_id(3)]
 
 
 # --- the status ---------------------------------------------------------

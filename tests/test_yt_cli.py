@@ -199,10 +199,9 @@ async def _payload_count(database_url: str) -> int:
     return int(count or 0)
 
 
-def test_every_yt_command_expires_old_payloads_first(
+def test_no_yt_command_deletes_old_payloads(
     monkeypatch: pytest.MonkeyPatch, database_url: str, offline: None
 ) -> None:
-    """With no key and no network: expiry needs neither."""
     monkeypatch.setattr(settings, "youtube_api_key", None)
     asyncio.run(_old_payload(database_url))
     use_test_database(monkeypatch, database_url)
@@ -210,7 +209,7 @@ def test_every_yt_command_expires_old_payloads_first(
     result = runner.invoke(app, ["yt", "quota"])
 
     assert result.exit_code == 0, result.output
-    assert asyncio.run(_payload_count(database_url)) == 0
+    assert asyncio.run(_payload_count(database_url)) == 1
 
 
 async def _videos_with_readings(database_url: str) -> None:
@@ -261,39 +260,18 @@ async def _video_counts(database_url: str) -> tuple[int, int]:
     return int(videos or 0), int(readings or 0)
 
 
-def test_every_yt_command_expires_old_videos_and_readings_first(
+def test_no_yt_command_deletes_old_videos_or_readings(
     monkeypatch: pytest.MonkeyPatch, database_url: str, offline: None
 ) -> None:
     monkeypatch.setattr(settings, "youtube_api_key", None)
     asyncio.run(_videos_with_readings(database_url))
+    before = asyncio.run(_video_counts(database_url))
     use_test_database(monkeypatch, database_url)
 
     result = runner.invoke(app, ["yt", "quota"])
 
     assert result.exit_code == 0, result.output
-    # Video 1 gone with its reading; video 2 keeps only today's.
-    assert asyncio.run(_video_counts(database_url)) == (1, 1)
-
-
-def test_after_acceptance_readings_from_its_date_survive_expiry(
-    monkeypatch: pytest.MonkeyPatch, database_url: str, offline: None
-) -> None:
-    from itgraph import yt_policy
-
-    # The day of the 31-day reading, whatever the hour: the 32-day one is
-    # then always a day earlier. Half a day back, as this used to be, put
-    # both on one date whenever the suite ran before noon UTC.
-    accepted = (datetime.now(UTC) - timedelta(days=31)).date()
-    monkeypatch.setattr(yt_policy, "DERIVED_METRICS_ACCEPTED_ON", accepted)
-    asyncio.run(_videos_with_readings(database_url))
-    use_test_database(monkeypatch, database_url)
-
-    result = runner.invoke(app, ["yt", "quota"])
-
-    assert result.exit_code == 0, result.output
-    # The 31-day reading was taken on the acceptance date and stays; the
-    # 32-day one predates it and goes. Video 1's payload still expires.
-    assert asyncio.run(_video_counts(database_url)) == (1, 2)
+    assert asyncio.run(_video_counts(database_url)) == before
 
 
 async def _walks_ended(database_url: str, *ages: int) -> None:
@@ -346,27 +324,15 @@ async def _walks_left(database_url: str) -> int:
     return int(count or 0)
 
 
-def test_while_the_walk_is_disabled_unkept_walks_are_forgotten(
-    monkeypatch: pytest.MonkeyPatch, database_url: str, offline: None
+@pytest.mark.parametrize("enabled", [False, True])
+def test_walks_are_kept_whether_or_not_the_walk_is_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    database_url: str,
+    offline: None,
+    enabled: bool,
 ) -> None:
-    """Nothing refreshed their videos, so they have expired."""
     monkeypatch.setattr(settings, "youtube_api_key", None)
-    monkeypatch.setattr(settings, "youtube_backfill_enabled", False)
-    asyncio.run(_walks_ended(database_url, 31, 29))
-    use_test_database(monkeypatch, database_url)
-
-    result = runner.invoke(app, ["yt", "quota"])
-
-    assert result.exit_code == 0, result.output
-    assert asyncio.run(_walks_left(database_url)) == 1
-
-
-def test_while_the_walk_is_enabled_walks_are_kept(
-    monkeypatch: pytest.MonkeyPatch, database_url: str, offline: None
-) -> None:
-    """The refresh keeps their videos, so the walk still stands."""
-    monkeypatch.setattr(settings, "youtube_api_key", None)
-    monkeypatch.setattr(settings, "youtube_backfill_enabled", True)
+    monkeypatch.setattr(settings, "youtube_backfill_enabled", enabled)
     asyncio.run(_walks_ended(database_url, 90))
     use_test_database(monkeypatch, database_url)
 
@@ -395,8 +361,7 @@ def test_while_the_walk_is_enabled_walks_are_kept(
 def test_help_needs_no_database(
     monkeypatch: pytest.MonkeyPatch, command: str
 ) -> None:
-    """Expiry runs before every command, and must not run before its
-    help: a group callback would, and `--help` would need a `.env`."""
+    """`--help` must not need a database, or a `.env`."""
 
     def refuse() -> None:
         raise AssertionError("--help opened the database")
@@ -411,8 +376,7 @@ def test_help_needs_no_database(
 def test_refused_input_never_reaches_the_database(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Refused before anything is spent — expiry included: the next
-    command that reaches the database does it."""
+    """Refused before anything is spent."""
 
     def refuse() -> None:
         raise AssertionError("refused input opened the database")

@@ -39,7 +39,7 @@ The system SHALL keep every local full dump taken in the last 28 days, the dump 
 
 ### Requirement: Every Verified Dump Is Copied Off-Site
 
-The system SHALL copy every dump that passed its read-back to an off-site store: inventory and full dumps alike, the dump taken before a migration included. A dump that failed its read-back SHALL NOT be copied. The copy is the same dump, so it carries no YouTube API data.
+The system SHALL copy every dump that passed its read-back to an off-site store: inventory and full dumps alike, the dump taken before a migration included. A dump that failed its read-back SHALL NOT be copied. The copy is the same dump.
 
 #### Scenario: A scheduled dump is copied
 

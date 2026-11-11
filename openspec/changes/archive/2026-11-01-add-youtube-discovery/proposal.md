@@ -19,15 +19,12 @@ Each of the three feeds the same review loop, so the loop is built here too: can
 - **Featured channels:**
   - **What is read:** the channel ids each seed lists in its channel sections, through `channelSections.list` with `contentDetails/channels` alone — the section's type is not read;
   - **When:** `yt refresh` reads them for every seed whose list is absent or older than the refresh age, a unit per seed;
-  - **Where it is kept:** `yt_raw_channel_sections`, for at most 30 days.
 
   The mention graph takes them as channel-level references of the form `featured`. `itgraph yt featured-candidates` ranks the channels outside the inventory by distinct seeds featuring them, one by default. `--add` records `featured`.
 - **Search.** `itgraph yt search` runs the operator's queries, given as arguments or on standard input:
-  - `type=video` for recent uploads (`publishedAfter`, 30 days by default) or `type=channel`; `relevanceLanguage=en`; 50 results to a call;
   - one page by default, and only the id of each result's channel is read;
-  - a query asked in the last 30 days is not asked again without `--force`.
 
-  Results are kept in `yt_raw_search_results` for at most 30 days. `itgraph yt search-candidates` takes the channels outside the inventory round-robin across the runs, in YouTube's own order, with no count. `--add` records `search`.
+`itgraph yt search-candidates` takes the channels outside the inventory round-robin across the runs, in YouTube's own order, with no count. `--add` records `search`.
 - **Search has its own bucket, and the ledger learns about it:**
   - a new pool `search`, capped at 100 calls less the margin;
   - `quotaExceeded` ends the quota day for the bucket the request was charged to, not for every command, so a spent search bucket cannot stop the poll loop;
@@ -42,11 +39,8 @@ Each of the three feeds the same review loop, so the loop is built here too: can
 - **Documentation:**
   - `docs/privacy.html`: lookups of names from descriptions, featured lists, search results, how long each is kept, provenance, the purpose, and the date;
   - `docs/index.html`: the Featured and Search items, and lookups under Mentions;
-  - `docs/PLAN.md`: this change's row, the closures above, the measured cost of a round, "Limited amounts" read again at 500 seeds, and the rounds to 500;
   - `src/itgraph/README.md`: the round as a runbook;
   - `src/itgraph/CLAUDE.md`, and one clause in the root `CLAUDE.md`.
-
-Out of scope: alerts (6); scoring and any measure over the graph (7, or after acceptance); comments; Russian-language search; families of YouTube channels; filtering candidates by anything YouTube reports before a person reviews them.
 
 ## Capabilities
 
@@ -54,14 +48,12 @@ Out of scope: alerts (6); scoring and any measure over the graph (7, or after ac
 
 - `youtube-mention-candidates`: the review queue built from the seeds' own references once looked up — what names a channel, what is dropped, how channels are ranked and cut, the report and `--add`; nothing joined is stored.
 - `youtube-featured-channels`: the channel ids seeds list in their channel sections — the request, when it is made, where the answer lives — and the review queue built from them.
-- `youtube-search`: searching YouTube with the operator's queries — the request, its own quota bucket, not asking twice, the results kept for 30 days — and the review queue built from them.
 
 ### Modified Capabilities
 
 - `youtube-lookups`: a second lookup command over the mention graph's pending names, its order by distinct seeds; spending order stated per source.
 - `youtube-mention-graph`: featured lists are a source; a featured channel is a channel-level reference; an edge names a referencing video only where there is one.
 - `youtube-api-access`: the search pool and its cap; exhaustion per bucket; the quota report shows both; declared fields for the featured and search requests.
-- `youtube-data-retention`: featured lists and search results are homes of API data; expiry, backups and the refresh name them; search runs are kept out of dumps with them.
 - `youtube-inventory`: discovery sources `mention`, `featured`, `search`; the review file's `source` column.
 
 ## Impact
@@ -83,4 +75,4 @@ Out of scope: alerts (6); scoring and any measure over the graph (7, or after ac
   - poll loop at 500 seeds: 1,600–1,850 a day of its 3,000;
   - search: its own bucket of 100 calls a day, outside the 10,000.
 - **Deploy:** no new job; the refresh job also reads featured lists. A setting for the search bucket's size, default 100.
-- **External:** no new method; both are named on the site. No allocated quota is used, so no notice is due under III.D.3 — decided by the operator on 2026-11-01, as for changes 2–4a. Both pages of the site are updated, with the date, before archiving.
+- **External:** no new method; both are named on the site. Both pages of the site are updated, with the date, before archiving.

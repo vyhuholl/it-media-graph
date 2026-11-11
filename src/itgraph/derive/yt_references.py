@@ -10,10 +10,9 @@ turns that reading into the lines a person reads, ordered by
 :func:`ranked` — by how many distinct seeds name a target, the only
 number worked out per target.
 
-Nothing here is stored, by anyone. A handle read out of a description is
-API data, which lives only in its payload, so the graph is worked out
-from the payloads each time it is asked for and can never outlive them
-(``youtube-data-retention``, "API Data Has One Home").
+Nothing here is stored, by anyone. A handle read out of a description
+lives only in its payload, so the graph is worked out from the payloads
+each time it is asked for and always reflects them.
 
 Two handle readers, and they are not interchangeable. A handle *link* is
 an open set: an unknown one becomes a pending target and, in change 5, a
@@ -632,9 +631,8 @@ def ranked[T](
     """Targets with their seeds, most distinct seeds first, then by key.
 
     The count of distinct seeds is the only number worked out per
-    target: no weight, no score, nothing over the graph — the
-    derived-metrics amendment does not reach relations between
-    channels. ``limit`` of ``None`` or zero lifts the bound.
+    target: no weight, no score, nothing over the graph. ``limit`` of
+    ``None`` or zero lifts the bound.
     """
     rows = [
         (target, seeds)

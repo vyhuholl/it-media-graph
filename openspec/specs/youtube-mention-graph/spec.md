@@ -1,7 +1,7 @@
 # youtube-mention-graph Specification
 
 ## Purpose
-What a seed's YouTube videos reference — other channels and other videos — read from the stored payloads on demand, without the network and without storing anything, so that the graph and the queue of channels to review never outlive the API data they come from.
+What a seed's YouTube videos reference — other channels and other videos — read from the stored payloads on demand, without the network and without storing anything, so that the graph and the queue of channels to review always reflect the payloads they come from.
 
 ## Requirements
 
@@ -313,7 +313,7 @@ When two channels in the inventory carry the same handle in their stored data, t
 
 ### Requirement: References Live With Their Payloads
 
-The system SHALL work references out of the payloads and featured lists stored at the moment they are asked for, and MUST NOT store a reference, an edge, a pending target or anything else read out of a title, a description or a featured list. A payload or list refreshed, expired or removed SHALL change what is referenced from the next reading on.
+The system SHALL work references out of the payloads and featured lists stored at the moment they are asked for, and MUST NOT store a reference, an edge, a pending target or anything else read out of a title, a description or a featured list. A payload or list refreshed or removed SHALL change what is referenced from the next reading on.
 
 #### Scenario: A description edited upstream
 
@@ -321,22 +321,22 @@ The system SHALL work references out of the payloads and featured lists stored a
 - **WHEN** its payload is refreshed with a description that no longer links it, and references are read
 - **THEN** that reference is not recorded
 
-#### Scenario: An expired video
+#### Scenario: A removed video
 
-- **GIVEN** a seed's video linking an unknown handle, whose payload then expires
+- **GIVEN** a seed's video linking an unknown handle, which YouTube then stops returning
 - **WHEN** references are read
 - **THEN** that handle is not pending, unless another stored video names it
 
-#### Scenario: An expired featured list
+#### Scenario: A featured list no longer current
 
-- **GIVEN** a seed whose featured list named an unknown channel id, and whose list then expires
+- **GIVEN** a seed whose featured list named an unknown channel id, and whose list is then older than `youtube_answers_fresh_days`
 - **WHEN** references are read
 - **THEN** that id is not pending, unless another stored source names it
 
 #### Scenario: Reading writes nothing
 
 - **WHEN** references are read, or the report runs
-- **THEN** no row in the database is inserted, updated or deleted, apart from what expiry removes before any command
+- **THEN** no row in the database is inserted, updated or deleted
 
 ### Requirement: No Network
 

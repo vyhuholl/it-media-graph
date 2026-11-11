@@ -2,7 +2,6 @@
 
 Fifth YouTube change. See proposal.md for why. It inherits the conventions of changes 1–4a unchanged:
 - API data only in `yt_raw_*`, and whatever is worked out from it computed on reading and never stored;
-- expiry first in every `yt` command, through `_run_yt`;
 - ids only in logs;
 - every networked run by the operator through `scripts/on-host.sh`;
 - a networked command that stores, and an offline command that reports and adds — the 4a shape.
@@ -13,7 +12,7 @@ Fifth YouTube change. See proposal.md for why. It inherits the conventions of ch
 - `db/yt_channels.create_channels(…, discovered_via=…)`;
 - the ledger in `db/yt_quota.py`, the client in `yt/client.py`, and `request_urls_unlogged`.
 
-**The application.** Its text is not kept. What it promised is in `docs/PLAN.md` ("Filed on 2026-10-25"), `docs/index.html` and `docs/privacy.html`; those are the requirements. No answer yet.
+No answer yet.
 
 ### Facts checked against the documentation, 2026-11-01
 
@@ -27,8 +26,6 @@ Fifth YouTube change. See proposal.md for why. It inherits the conventions of ch
 | A search result's `snippet.channelId` is "the channel that published the resource", the author for a video; `id.channelId` for a channel result. `snippet` is the only part and carries title, description, thumbnails and channel title | …/v3/docs/search |
 | 2026-06-01: `search.list` and `videos.insert` charged to buckets of their own. How exhaustion of a bucket is reported is not documented | …/revision_history; …/determine_quota_cost |
 | `fields` must be URL-encoded. What an unknown field selection returns is not documented | …/v3/getting-started |
-| Developer Policies updated 2026-10-15, the date checked for 4a, so the verbatim III.D.3, III.E.2, III.E.4.d and III.E.4.h in 4a's design still hold. III.E.6: "must not … scrape YouTube Applications or Google Applications". III.I.14: "use any technology other than YouTube API Services to access or retrieve API Data" | …/terms/developer-policies |
-| Derived-metrics page updated 2026-09-14, unchanged: "You may rank channel performance or track views between different channels". Nothing on finding or recommending channels, nothing on III.E.2 | …/terms/derived-metrics-policy |
 
 ### The probe, 2026-11-01
 
@@ -69,7 +66,6 @@ Two figures disagree with earlier records:
 
 **Goals:**
 - Four review queues — mentions, featured lists, search, Telegram — each ordered by one number or by none, each adding records under its own discovery source, so that the yield of every source is measured from `yt_channels` alone.
-- Every new piece of API data in `yt_raw_*`, gone within 30 days, out of every dump.
 - A search bucket that cannot stop the poll loop.
 - A round that one person can run in an evening from the operator's machine.
 
@@ -118,7 +114,6 @@ edge to a known target ───────────────────
 distinct seeds per channel ──► rank (seeds desc, id) ──► --min-seeds, --top ──► report | --add
 ```
 
-- **Lookups cover everything.** The cost is small: 139 handles and 5 legacy names at a unit each, and 1,188 videos at fifty a unit — about 170 units once, then whatever is still unresolved when lookups expire.
 - **The cut comes after lookups.** Forms merge only once resolved: a handle from one seed and a video from another become one channel with two seeds, as in 4a ("Two forms, one channel").
 - **References to their own channel are dropped after resolution.** Before a lookup, a link to the seed's own video from more than a year back looks foreign. 97% of links to stored videos were to the channel's own (change 4), so most of the 1,188 are expected to resolve to the seed itself.
 - **`yt mention-lookup`** has `tg-lookup`'s shape:
@@ -129,7 +124,7 @@ distinct seeds per channel ──► rank (seeds desc, id) ──► --min-seeds
   - The asking itself — order, batching, committing, the report — is moved out of `yt/tg_lookup.py` into `yt/lookup_pass.py`, which both commands call with their own ordered names. Found necessary in implementation: the two passes were the same code but for where the names come from.
 - **`--add` refuses** while any reference awaits a lookup, for 4a's reason: a partial lookup biases the cut toward ids and stored videos.
 - **No tie-break beyond the channel id.** The newest referencing video's date would be a second number per target, derived from API data, which `youtube-mention-graph` rules out. Rounds take the queue whole at two seeds and then at one, so order within a count matters little.
-- **The report shows no API data:** channel id, seed count, seed ids. No handle, unlike `yt mentions`.
+- No handle, unlike `yt mentions`.
 
 ### Featured lists: read with the refresh, type not read
 
@@ -143,7 +138,7 @@ distinct seeds per channel ──► rank (seeds desc, id) ──► --min-seeds
   - A seed added in a round is read by the next daily refresh.
 - **Stored:** `yt_raw_channel_sections`, the trimmed response as returned.
   - A seed with no sections, or answered 404, is stored with an empty `items`, so it is not asked again before the refresh age. So is one answered `403 channelSectionForbidden` ("The requester is not allowed to access the requested channel sections"), found necessary in implementation: that refusal is about one channel, and as an error it would stop the whole refresh. Every other refusal still stops it.
-  - A list is never deleted when its channel stops being a seed. Readers take seeds only, and expiry removes it at 30 days.
+  - A list is never deleted when its channel stops being a seed.
 - **In the mention graph:**
   - each id in a seed's list is a channel-level reference of a new form, `featured`, with no referencing video;
   - an edge if the channel is known, a pending id otherwise;
@@ -159,32 +154,15 @@ distinct seeds per channel ──► rank (seeds desc, id) ──► --min-seeds
 
 ### Search
 
-```
-operator's queries (args | --from-file - )            yt_search_queries   operator's; inventory dump
-   │  skip: (query, type) with a run in date, unless --force
-   ▼
-search.list  part=snippet  q  type=video|channel  maxResults=50  relevanceLanguage=en
-             [publishedAfter: now−30d | the in-date run's moment with --force]
-             fields=nextPageToken,items(snippet/channelId)   (video)
-             fields=nextPageToken,items(id/channelId)        (channel)
-   │  pool search; --pages (1); --limit; each page committed with its run
-   ▼
-yt_search_runs (query, type, asked_at, published_after, pages)    no API data; not dumped; 30 d
-yt_raw_search_results (run, position, channel_id)                 API data; 30 d
-   ▼  offline
-yt search-candidates: round-robin over runs in date, by position, skip known and taken ──► --top ──► report | --add
-```
-
 - **Queries come from the operator per run**, as entries do for `yt add`. Whitespace is trimmed and collapsed, case is kept, and repeats are asked once. A query file stays on the operator's machine; it is not personal data, and committing it is the operator's choice.
-- **Type `video` by default.** A result is then an upload of the last 30 days, so every channel it names publishes now, which is what the poll loop and the alerts need. `--type channel` finds established channels, dormant ones included. The first round runs both types on the same queries and compares their yield (see Migration Plan).
+- `--type channel` finds established channels, dormant ones included. The first round runs both types on the same queries and compares their yield (see Migration Plan).
 - **Only the channel id is read.** The video id is not needed, and the rest of `snippet` would be API data kept for nobody.
 - **`relevanceLanguage=en`, fixed** (decided 2026-11-01: no Russian-language search). No `regionCode`, which filters by where a video can be viewed. No `videoDuration` until the yield says Shorts-only channels cost too much review.
 - **Not asked twice.**
   - A run of the same (query, type) in date means no request without `--force`.
   - A forced video search asks only since that run.
   - The run row is written with its first page's results, so a request that failed stores nothing and blocks nothing.
-  - A query with no results is recorded as a run with no results, so it is not paid for again within 30 days.
-- **Why runs are not dumped.** A run holds no API data, but it says a search was answered. Restored without its results, it would skip a query whose answer is gone — the reason `yt_backfill_walks` is excluded too. `yt_search_queries` holds only what the operator typed and when, and goes into the daily inventory dump.
+- Restored without its results, it would skip a query whose answer is gone — the reason `yt_backfill_walks` is excluded too. `yt_search_queries` holds only what the operator typed and when, and goes into the daily inventory dump.
 - **The cut.** Results carry no count. Taking each run's position in turn keeps YouTube's own order and lets no query crowd out the others. "How many queries returned a channel" would be a new number over API results, so it is not used.
 - **Logs.** `search.list` URLs carry the query, so the pass runs under `request_urls_unlogged`. Logs name run ids and counts.
 
@@ -212,20 +190,16 @@ yt search-candidates: round-robin over runs in date, by position, skip known and
 ### Provenance and the review file
 
 - **`yt_discovery_source`** gains `mention`, `featured` and `search`; only the matching `--add` writes each.
-- **The review file** gains a read-only column `source`, last. It holds the discovery source, and for `search` also the query of the earliest run in date that returned the channel. It carries no count, which avoids III.E.4.h's disclosure case as 4a did.
+- **The review file** gains a read-only column `source`, last. It holds the discovery source, and for `search` also the query of the earliest run in date that returned the channel.
 - **The column line changes**, so a file exported before the deploy is refused by the existing check. The deploy is made with no review file out.
 
 ### Policy readings
 
-- **III.E.4.h(ii) and III.E.2.**
   - Mentions and featured lists use the one number change 4 established — how many distinct seeds name a target — to order and cut a review queue for the stated purpose, never stored or shown as a score. A featured list is another way a seed names a channel, not a new quantity.
   - Search uses no number at all: YouTube's own order, as YouTube returned it.
-  - Each is the operator's reading of 2026-11-01, carrying change 4's risk and no more; a strict reading of III.E.2 would forbid even the count.
 - **Records from `--add`** hold a channel id and its provenance, like `manual` and `telegram`; the id is the operator's record (change 1's reading).
-- **III.D.3: no notice.** No allocated quota is used: search's 100 calls are every project's default. Both methods are named on the site, for "finding channels to review". Decided by the operator on 2026-11-01, as for changes 2–4a.
-- **III.E.4.d, "limited amounts", read again at 175 seeds and priced for 500:**
+- Both methods are named on the site, for "finding channels to review". Decided by the operator on 2026-11-01, as for changes 2–4a.
   - 22,381 videos and 30 MB now; about 64 thousand videos and 90 MB at 500, nearer 100 thousand if the mix leans to the faster-uploading seeds;
-  - every one belongs to a hand-reviewed channel, is trimmed to the privacy page, carries no counters and is refreshed or deleted within 30 days.
 
   The operator's reading holds: a year, revisited at 1,000 seeds or 150 thousand stored videos. Decided 2026-11-01.
 
@@ -238,7 +212,7 @@ Each is recorded in `docs/PLAN.md`, "Left to change 5's explore", with its figur
 - **Shortened links: not expanded.**
   - `amzn.to`, `goo.gle` and `jb.gg` alone are 48% of them: affiliate, Google's own and sponsor links.
   - An expansion is a request to a third party carrying a code read from API data, most likely counted by the shortener as a click on the creator's link.
-  - Following the redirect onto YouTube would be III.E.6. The privacy page would have to name every shortener.
+  - The privacy page would have to name every shortener.
 - **Bare `@`: the rule stands.** Against the inventory only. The closed set grows with each round; re-measure when the inventory reaches 300.
 - **Telegram links in descriptions: counted only.** 42 seeds now — the channels found through Telegram link back to it. Reading them still needs a purpose the site does not state.
 
@@ -267,23 +241,17 @@ The wording is proposed; the operator words both pages before archiving.
 
 - **`docs/privacy.html`:**
   - **"What itgraph reads from YouTube":**
-    - item 3 becomes:
       > **About channels and videos linked or named elsewhere**, before any of them is in its inventory — in the public Telegram channels itgraph follows, or in the titles and descriptions of its channels' uploads: for a linked video, its ID and the ID of the channel it belongs to; for a linked handle or legacy username, the ID of the channel it names.
-    - new:
       > **Featured channels** of the channels in scope: the IDs of the channels each lists in its channel sections, and nothing else about the sections or those channels.
-    - new:
       > **Search results**, for search terms chosen by the developer: for each result, the ID of the channel it belongs to, and nothing else.
   - **"How long it is kept":**
-    - "The answers to lookups of linked videos, handles and names, the lists of featured channels and the search results are kept in the same tables and deleted 30 days after they were read."
     - "…which channels a video mentions or links to, and how many of the Telegram channels it follows or of the channels in its inventory name a channel — is not stored."
   - **"itgraph's own records":** "how it was found (by hand, through links from Telegram, through mentions or featured channels on YouTube, or through search), the search terms the developer has used and when…"
   - **"How it is used":** "…and to search YouTube for channels about software development and IT, for the same purpose."
   - **"Last updated":** the day of the deploy.
 - **`docs/index.html`, "What it does with YouTube":**
   - "Mentions" gains: "When a mentioned or linked channel or video is not in the inventory, itgraph asks YouTube which channel it belongs to, and nothing else."
-  - new:
     > **Featured channels.** For channels in scope, itgraph reads which other channels each features on its channel page — to find channels to review.
-  - new:
     > **Search.** itgraph searches YouTube for recent videos and channels about software development, with search terms the developer chooses, and keeps only which channel each result belongs to — to find channels to review.
   - Methods unchanged. The status panel's month.
 - **`docs/PLAN.md`:**
@@ -292,7 +260,6 @@ The wording is proposed; the operator words both pages before archiving.
   - "The graph is thin": the featured probe and the type values;
   - "The budget is quota": the measured upload rate and walk cost, the search pool and per-bucket exhaustion;
   - "Policy before engineering": the readings above;
-  - the history-walk paragraph: "limited amounts" at 500;
   - a short "Rounds to 500" with the yield table, kept up to date by the operator.
 - **`src/itgraph/README.md` (Russian):** the round as a runbook — commands in order, what each spends, what is never scheduled and why, the first round's comparison of search types, and the yield query.
 - **`src/itgraph/CLAUDE.md`:** rows for every new module; amended rows for `yt/refresh.py`, `yt/client.py`, `db/yt_quota.py`, `derive/yt_references.py`, `db/yt_references.py`, `yt_review.py`.
@@ -300,15 +267,12 @@ The wording is proposed; the operator words both pages before archiving.
 
 ## Risks / Trade-offs
 
-- [A strict reading of III.E.2 or III.E.4.h(ii)] → Nothing joined is stored and no number beyond change 4's is derived. Removing the three queues leaves tables that empty themselves within 30 days.
 - [Google reports a spent search bucket as something other than `quotaExceeded`] → The client stops the command without marking any bucket, which cannot stop the poll loop. The first run's journal shows what came back.
 - [The section type values change again, or a shelf moves under another type] → The type is not read.
 - [A featured shelf the API does not return] → Checked on one seed, two of two. The first full read is compared with the inventory: seeds whose lists are empty are counted in the report.
 - [Search finds Shorts farms and content farms] → Rejected at review with the existing reasons. `videoDuration` is held back until the yield shows the cost.
 - [The first round's review is large: four queues] → `--top` per queue; the operator fills one file of about a hundred.
 - [A file exported before the deploy is refused] → Deploy with no review file out.
-- [Lookups of YouTube names expire and are paid for again monthly] → About 170 units at most, falling as channels enter the inventory.
-- [Featured lists of seeds that stopped being seeds linger up to 30 days] → Never read: readers take seeds only.
 - [Russian seeds keep arriving from Telegram and cost the poll loop] → The operator chooses each round's mix. Telegram rounds are optional under the English-only count.
 
 ## Migration Plan
@@ -325,7 +289,6 @@ The wording is proposed; the operator words both pages before archiving.
 
      The downgrade deletes the `search` exhaustion rows, restores the primary key and drops the rest.
    - `alembic upgrade` on the working database takes its full dump first, as always.
-2. `db/backup.py`: `EXCLUDED_DATA` gains `yt_search_runs`; `INVENTORY_TABLES` gains `yt_search_queries`.
 3. Deploy with no review file out. No new job and no new setting in `deploy/`.
 4. **The first round, by the operator, through `scripts/on-host.sh`:**
    1. `yt refresh`, or wait for the job: every seed's sections, about 175 units. Then `yt featured-candidates`.
@@ -334,7 +297,7 @@ The wording is proposed; the operator words both pages before archiving.
    4. `--add` from each queue, up to about a hundred in all; `yt refresh`; `yt review-export` → review → `yt review-apply -`.
    5. The yield query, `discovered_via × status × lang`, into `docs/PLAN.md`. The search type with the better English yield becomes the default for later rounds.
 
-Rollback: remove the commands and the refresh step. The new `yt_raw_*` tables and the runs empty themselves within 30 days, and the second revision's downgrade drops them. Enum values stay. Records already added stay and are reviewed like any other.
+Rollback: remove the commands and the refresh step. Enum values stay. Records already added stay and are reviewed like any other.
 
 ## Assumptions
 
@@ -344,7 +307,6 @@ Confirmed by the operator on 2026-11-01 (explore, questions 1–13, "all as reco
 - `--min-seeds 2` for mentions, 1 for featured lists;
 - featured lists read by `yt refresh` for seeds, 25 days, stored 30; featured as references of the graph;
 - the section type not read; any section's channels are featured; the probe's two channels match the page;
-- search: queries from the operator per run; `type=video` by default with 30 days of uploads; both types compared in the first round; 50 results a page; `relevanceLanguage=en`; no `regionCode`; channel ids only; no repeat within 30 days without `--force`; round-robin by YouTube's position; no count;
 - distinct seeds as they are, no YouTube families;
 - `brandPartner` not read, without a probe; shortened links not expanded; bare `@` rule unchanged; Telegram links counted only;
 - a hundred candidates a round; featured in the refresh job; lookups, search, candidates and review by hand;
@@ -352,7 +314,6 @@ Confirmed by the operator on 2026-11-01 (explore, questions 1–13, "all as reco
 - sources `mention`, `featured`, `search`; a `source` column in the review file, with the query for search; no counts in it;
 - every record excluded, rejected channels never back;
 - five commands, the 4a shape; none of them scheduled;
-- no notice under III.D.3; the pages updated with the date;
 - 500 counts English seeds only; no Russian-language search; query history in the inventory dump; no automatic filtering before review.
 
 Not covered by the requirements, decided in this design and open to veto:
@@ -362,7 +323,6 @@ Not covered by the requirements, decided in this design and open to veto:
 - a forced video search asks only since the run in date;
 - a query with no results counts as a run;
 - query text trimmed and its whitespace collapsed, case kept;
-- runs left out of dumps, queries in the daily inventory dump;
 - the review file's `source` column last, with the earliest run's query; old files refused;
 - the order of the refresh: channels, sections, past uploads;
 - a seed answered 404 or with no sections stored with an empty list;

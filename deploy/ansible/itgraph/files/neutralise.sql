@@ -24,5 +24,6 @@ DELETE FROM pending_mentions WHERE true;
 
 -- Whatever was on its way out in production stays there.
 UPDATE alerts SET delivered_at = now(), delivery = 'digest' WHERE delivered_at IS NULL;
+UPDATE yt_alerts SET delivered_at = now(), delivery = 'digest' WHERE delivered_at IS NULL;
 
 COMMIT;

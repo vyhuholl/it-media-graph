@@ -3,11 +3,10 @@
 
 Two tables because they hold two kinds of thing. A record is the
 operator's — the id, the review, the provenance — and is never deleted.
-A payload is YouTube's — title, handle, statistics — and may be kept at
-most 30 days (Developer Policies III.E.4): a refresh replaces it, expiry
-deletes it, a channel YouTube stops returning loses it. Nothing here
-copies a payload field into a record, so deleting a payload is all it
-takes to delete the data.
+A payload is YouTube's — title, handle, statistics: a refresh replaces
+it, and a channel YouTube stops returning loses it. Nothing here copies
+a payload field into a record, so a payload is the one place what
+YouTube said about a channel lives.
 """
 
 from collections.abc import Iterable, Mapping, Sequence
@@ -30,7 +29,6 @@ from itgraph.db.models import (
 )
 from itgraph.db.yt_backfill import forget_walks
 from itgraph.yt_entries import CHANNEL_ID as CHANNEL_ID_SHAPE
-from itgraph.yt_policy import RETENTION
 from itgraph.yt_review import (
     Decision,
     ParsedReview,
@@ -59,7 +57,6 @@ __all__ = [
     "list_channels",
     "mark_channel",
     "mark_gone",
-    "purge_expired",
     "store_payloads",
     "stored_handle",
 ]
@@ -135,8 +132,8 @@ async def ids_by_handle(
 ) -> dict[str, str]:
     """Handles a stored payload carries, lowercased, mapped to channel ids.
 
-    Only what is stored now: a payload that expired took its handle with
-    it, and such a channel costs one unit to recognise again.
+    Only what is stored now: a channel whose payload is not stored costs
+    one unit to recognise again.
     """
     wanted = [handle.lower() for handle in handles]
     if not wanted:
@@ -148,25 +145,6 @@ async def ids_by_handle(
     return {found: channel_id for found, channel_id in rows.tuples()}
 
 
-async def purge_expired(
-    session: AsyncSession, *, now: datetime | None = None
-) -> int:
-    """Delete every payload fetched more than 30 days ago. Returns how many.
-
-    The records stay, with their reviews; only what YouTube said goes.
-    Run by every YouTube command before anything else it does in the
-    database, network or not — a payload past its 30 days is a violation
-    whether or not anything reads it.
-    """
-    cutoff = (now or datetime.now(UTC)) - RETENTION
-    result = await session.execute(
-        delete(YtRawChannel)
-        .where(YtRawChannel.fetched_at < cutoff)
-        .returning(YtRawChannel.channel_id)
-    )
-    return len(result.all())
-
-
 async def store_payloads(
     session: AsyncSession,
     payloads: Mapping[str, Payload],
@@ -175,9 +153,8 @@ async def store_payloads(
 ) -> list[str]:
     """Store what YouTube just returned, replacing what was there.
 
-    Replaced, never added to: keeping each fetch would be keeping data
-    past 30 days by another name. A channel that had been marked gone and
-    is returned again is restored. Returns the ids of those restored.
+    Replaced, never added to. A channel that had been marked gone and is
+    returned again is restored. Returns the ids of those restored.
     """
     if not payloads:
         return []
@@ -246,9 +223,8 @@ async def due_for_refresh(
     """Channels whose payload is missing or older than ``older_than``.
 
     Every status, rejected included: five hundred channels cost ten units
-    a cycle, and a channel nobody refreshes is a channel whose title
-    quietly expires. Gone channels come back here too, which is how one
-    that returns is noticed.
+    a cycle. Gone channels come back here too, which is how one that
+    returns is noticed.
     """
     statement = (
         select(YtChannel.channel_id)
@@ -278,7 +254,7 @@ class YtChannelNotFoundError(YtChannelLookupError):
         super().__init__(
             f"no YouTube channel {ref} in the inventory; add it with "
             "`itgraph yt add` first. A handle is found only while its "
-            "channel's data is stored — give the UC… id if it expired"
+            "channel's data is stored — give the UC… id if it is not"
         )
         self.ref = ref
 
@@ -341,9 +317,10 @@ async def _write(
         channel.status is ChannelStatus.SEED
         and review.status is not ChannelStatus.SEED
     ):
-        # Out of scope, its history stops being refreshed and expires;
-        # a walk record left behind would claim it is still there when
-        # the channel comes back.
+        # Out of scope, its history stops being kept current; a walk
+        # record left behind would keep it from being walked again when
+        # the channel comes back, and the uploads of the time between
+        # would be missed.
         await forget_walks(session, [channel.channel_id])
     channel.status = review.status
     channel.kind = review.kind
@@ -364,7 +341,7 @@ async def find_channel(session: AsyncSession, ref: str) -> YtChannel:
     """One channel by its ``UC…`` id, or by a handle its stored data carries.
 
     Handles match case-insensitively, with or without ``@``. A channel
-    whose data expired has no handle to be found by until the next
+    whose data is not stored has no handle to be found by until the next
     refresh; its id always works.
     """
     if CHANNEL_ID_SHAPE.match(ref):
@@ -543,7 +520,7 @@ class InventorySummary:
     by_status: Mapping[ChannelStatus, int]
     seeds_by_lang: Mapping[YtLang, int]
     current: int
-    expired: int
+    unfetched: int
     gone: int
 
 
@@ -582,6 +559,6 @@ async def inventory_summary(session: AsyncSession) -> InventorySummary:
         by_status=by_status,
         seeds_by_lang=seeds_by_lang,
         current=row[0],
-        expired=row[1],
+        unfetched=row[1],
         gone=row[2],
     )

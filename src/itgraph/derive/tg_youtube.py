@@ -18,11 +18,10 @@ it, which identifying a channel by would take API-like data outside the
 API), and ``@name``, which on Telegram is a username.
 
 Nothing worked out here is stored, by anyone. Which families link a
-channel is joined from Telegram's posts and the API's answers, and the
-API's half lives only in ``yt_raw_*`` for 30 days — so the join is made
-each time it is asked for (``youtube-telegram-links``, "Nothing Joined
-Is Stored"). The family count orders a review queue and is the only
-number used to: no weight, no score.
+channel is joined from Telegram's posts and the API's answers each time
+it is asked for (``youtube-telegram-links``, "Nothing Joined Is
+Stored"). The family count orders a review queue and is the only number
+used to: no weight, no score.
 """
 
 from collections import Counter

@@ -5,7 +5,6 @@
 See `proposal.md`, Why, and its decision record. The requirements are in `specs/`. What shapes the approach, read on 2026-11-11:
 
 - **The bot today.** One chat: `BotSender` sends to `alert_chat_id`, and the dispatcher filters messages and button presses to it. One process runs the delivery loop beside aiogram's polling, under `supervise`. Delivery polls every 60 s; `LISTEN` is not wired. Claim → commit → send → mark, `FOR UPDATE SKIP LOCKED`, `BATCH = 10`.
-- **Telegram's alerts in production, the 28 full days to 2026-11-11, Moscow time** (aggregates only):
 
   | | |
   |---|---|
@@ -28,17 +27,7 @@ See `proposal.md`, Why, and its decision record. The requirements are in `specs/
   - `deleteMessage`: "A message can only be deleted if it was sent less than 48 hours ago." `editMessageText` and `editMessageReplyMarkup` limit to 48 hours only "business messages that were not sent by the bot".
   - aiogram's `Message.answer` "Automatically fills chat_id, message_thread_id": a reply lands in the topic it answers.
   - `getChat` returns `is_forum`.
-- **YouTube API Services Developer Policies and the derived-metrics page**, read 2026-11-11, quoted in fragments as the pages allow:
-  - III.E.4.b: "must not store statistics retrieved as Non-Authorized Data for more than 30 days"; "must also verify, every 30 days, that the video has not been deleted."
-  - III.E.4.d: "may temporarily store limited amounts of Non-Authorized Data for as long as is necessary" … "but not longer than 30 calendar days" … "must either delete or refresh the stored data."
-  - III.E.4.f: "must display the most updated API Data available in their user-facing presentations"; "may display historical API Data provided that it is presented accurately in context of time."
-  - III.E.4.h: "must not … (ii) access or use API Data to create new or derived data or metrics"; for metrics not from YouTube shown beside API Data, "must include a clear and prominent disclosure there that such information, data and metrics are not from YouTube" … "are part of your own product".
-  - III.F.2.a: "must make clear to the viewer that YouTube is the source of the relevant content" … "by displaying YouTube Brand Features in accordance with the requirements below"; and one "cannot provide one general set of attribution for all search results from various sources".
-  - III.D.3: "use case changes, to use any allocated quota for the new use case, you must notify YouTube" … "by resubmitting an API Compliance Audit and receive approval for the application".
-  - Derived metrics: "Policy III E.4.b, E.4.c, and E.4.d are amended to allow accepted API Clients to store metrics" … "from statistical endpoints for up to 36 calendar months."; "Derived metrics (such as sentiment analysis) based on retrieved data may also be stored for up to 36 calendar months."; "Other data (such as video titles, creator names, descriptions, and comment text)" … "must still follow the 30-day refresh and deletion policy in Section III(4)."; "You must distinguish these metrics from metrics sourced from API Data."
-  - The definitions define neither "store" nor "display", and nothing in the policies speaks of messaging services. The branding guidelines speak of logos and icons alone, require a logo to link back to YouTube content, and say nothing of attribution in text.
-- **What already binds the queue.** `youtube-data-retention`, "API Data Has One Home": "What the system works out from a video's data SHALL be stored with that video's payload and removed with it", and no title or statistic copied into another table. Root `CLAUDE.md`: a payload is "deleted when YouTube stops returning the object", and no API data is in a backup. `yt_raw_video_stats` cascades from `yt_raw_videos`; readings expire on their own clock, 30 days or, after acceptance, 36 months.
-- **Dumps** leave out the rows of `yt_raw_*`, `yt_backfill_walks` and `yt_search_runs` (`EXCLUDED_DATA`); `files/readback.sql` reads the same tables back as empty, by name, and a test holds both lists equal.
+  - The branding guidelines speak of logos and icons alone, require a logo to link back to YouTube content, and say nothing of attribution in text.
 
 ## Goals / Non-Goals
 
@@ -108,14 +97,11 @@ yt_alerts
   partial indexes: undelivered by raised_at; folded_into
 ```
 
-- **It lives as long as the reading it was scored on.** That reading goes with its video's payload, so a video YouTube stops returning takes its alerts at once, and expiry stays one `DELETE`. Before acceptance a reading lives 30 days; after it, 36 months, with its video refreshed meanwhile.
-- **It copies nothing YouTube said.** No title, channel name or count; the count that crossed is read through the pointer when it is needed. `expected` and `value` are itgraph's numbers. Both exist only from change 7, after acceptance, which keeps derived metrics 36 months.
-- **Out of every dump,** by name in `EXCLUDED_DATA` and in the read-back, as `yt_search_runs` is: a dump that kept it would keep video ids, and its foreign key could not be restored without the readings. Not `yt_raw_` by name, since none of it is API data; the exclusion is explicit.
+- **It copies nothing YouTube said.** No title, channel name or count; the count that crossed is read through the pointer when it is needed. `expected` and `value` are itgraph's numbers.
+- Not `yt_raw_` by name, since none of it is API data; the exclusion is explicit.
 - **Its own types.** `yt_alert_delivery` carries `excluded`, which Telegram's alerts can never be; a shared `alert_delivery` would make it valid there — `YtChannelKind`'s reasoning. `yt_alert_kind` names YouTube's three signals.
 - **The kinds are declared now — not covered by the requirements.** `AlertKind` added its spikes only when something could raise them, since "a value nothing can raise is a promise made in a type". Here the wording of each kind is this change's, and the restore's trial and the tests raise all three. Leaving them to change 7 would ship a renderer whose branches nothing exercises.
 - **Notification:** change 7 raises through the same `itgraph_alerts` channel; nothing listens yet.
-
-*Alternatives.* A table of its own with a 30-day clock: a video deleted upstream would stay named for up to 30 days, against root `CLAUDE.md`, and an accepted alert would be cut at 30 days instead of 36 months. The verdict kept apart without the video id, in dumps: moot once the buttons are gone, and it would have kept a derived metric past its video's data.
 
 ### 4. What a YouTube alert says
 
@@ -128,17 +114,17 @@ https://www.youtube.com/watch?v=VIDEO_ID
 📶 Вместе с ним выше нормы ещё 2 видео канала — …      (only when folds exist)
 ```
 
-- **YouTube is named on each alert, and on each entry of a digest** (III.F.2.a: no "general set of attribution"), by its name in text, as a link to the video. The link preview stays on, so Telegram shows YouTube's own card. A logo is not possible in a text message.
-- **Counts:** the newest stored reading at the moment of sending — direct or in a digest — with its time (III.E.4.f, "most updated"; "in context of time"). A counter YouTube did not report is left out, never written as zero.
-- **The score** with its own moment, `scored_at`, and the disclosure III.E.4.h and the derived-metrics page ask for. The magnitude in words, by `_magnitude` as Telegram's; a comment spike states its count, read through `scored_at`, and its expectation.
+- The link preview stays on, so Telegram shows YouTube's own card. A logo is not possible in a text message.
+- A counter YouTube did not report is left out, never written as zero.
+- The magnitude in words, by `_magnitude` as Telegram's; a comment spike states its count, read through `scored_at`, and its expectation.
 - **The age** from the broadcast's actual start when it has one, else publication — `derive/yt_videos.facts_of`, the schedule's rule.
-- **The channel's title** comes from its payload; the site lists it among an alert's contents from this change. A payload older than 30 days is treated as absent — expiry may run late, and the bot cannot delete — and the line goes without it. A video payload older than that is not rendered: the alert is skipped as gone, as a vanished Telegram post is.
+- **The channel's title** comes from its payload; the site lists it among an alert's contents from this change. A video payload older than that is not rendered: the alert is skipped as gone, as a vanished Telegram post is.
 - **Russian in both topics — not covered by the requirements:** the readers are Telegram's.
 - **Telegram's wording is unchanged.** Every rendered alert is cut to fit one message — a YouTube title is at most 100 characters, so this holds by construction and a test pins it.
 
 ### 5. A sent message is display
 
-The operator's decision. III.E.4.f allows historical data "presented accurately in context of time", which is why the counts and the score each carry their moment (Decision 4). Nothing is deleted or edited later. `docs/index.html` says today "Data read from YouTube is refreshed or deleted within 30 days", and is reworded to say what itgraph stores; `docs/privacy.html` adds that alert messages stay in the chat as sent.
+The operator's decision. Nothing is deleted or edited later.
 
 ### 6. Each destination keeps its own account
 
@@ -167,7 +153,7 @@ At Moscow's quiet hours, a large share of English alerts may be raised at night 
 ### 9. Chats and commands
 
 - **Messages and presses are filtered to the configured chats**, in any topic, General included: `F.chat.id.in_(…)`, applied to the dispatcher as today, so a later handler inherits it.
-- **`/status` answers about the platform of its chat**, in the topic it was asked in. Telegram's report is unchanged, plus held and excluded counts. YouTube's: alerts raised, folded and excluded, and per route undelivered — held and not — and stuck (an excluded alert has no route); the last poll pass that completed; the quiet window; and, while `DERIVED_METRICS_ACCEPTED_ON` is empty, «оценок YouTube нет до одобрения».
+- **`/status` answers about the platform of its chat**, in the topic it was asked in. Telegram's report is unchanged, plus held and excluded counts.
 
 ### 10. Grants
 
@@ -184,7 +170,6 @@ At Moscow's quiet hours, a large share of English alerts may be raised at night 
 
 ### 12. Backups and the restore
 
-- `EXCLUDED_DATA` and `files/readback.sql` gain `yt_alerts`; the existing test holds them equal.
 - The trial of `tasks/trials.yml` raises, besides Telegram's synthetic alert, one YouTube alert per configured topic, where the environment configures YouTube:
   1. picks a restored seed of that language;
   2. inserts a synthetic video payload, its reading and the alert — after the read-back, so the copy was proven empty first;
@@ -217,7 +202,7 @@ At Moscow's quiet hours, a large share of English alerts may be raised at night 
 
 ### 15. What the infrastructure repository is asked
 
-Handed to the operator once this design is accepted. Nothing in it names that repository or holds a value.
+Nothing in it names that repository or holds a value.
 
 1. **Inputs per environment:** `itgraph_youtube_alert_chat_id`, `_topic_en`, `_topic_ru`. Production's are kept with its other inputs on the controller; the test environment's name its own forum chat and topics, reached by its own test bot.
 2. **Rules:** `ItgraphAlertsFailing` and `ItgraphAlertsStuck` name `platform` in their message; the expressions stay.
@@ -228,16 +213,15 @@ Handed to the operator once this design is accepted. Nothing in it names that re
 - **A channel with no language to route by is excluded too — not covered by the requirements.** A label cleared by a later review, or a video YouTube now attributes to a channel outside the inventory, has neither `en` nor `ru` to send by. It is closed as `excluded`, as `other` is. Left outstanding, it would wait for ever and read as delivery being stuck.
 - **What never failed is claimed before what did.** Both queues order a claim by whether the alert has failed, then by when it was raised. A topic Telegram keeps refusing, or a message it will never take, then stands behind fresh alerts rather than in front of them: the same failure as the held alerts of Decision 7, by another road.
 - **Everything taken from a post, a channel or a video is escaped,** Telegram's wording included. Messages are HTML: a `<` in a post's excerpt, or `&` in a channel's or video's title, would be refused on every retry. Nothing so far tripped it in Telegram's 813 alerts; YouTube's titles would have.
-- **"Never attempted" leaves held alerts out,** and `/status`'s warning that delivery is not running looks only at alerts not held: a quiet night's held alerts are waiting by design.
 - **The bot's modules:** `bot/destinations.py` (where, and each destination's account), `bot/queues.py` (the two queues behind one interface), `bot/status.py` (`/status` per platform), `db/yt_alerts.py` (YouTube's queue and the evidence its message reads).
 - **Observed, not changed:** the exporter's engine does not ping its pooled connections, so the first scrape after the database is dropped and recreated — a restore — answers 503 once, and the next succeeds. The end-to-end suite now retries its scrape, as the scraper does.
 
 ## Risks / Trade-offs
 
-- **[YouTube reads a chat message as storage]** The policies define neither word, and the site will say messages stay. → Should YouTube ask, deleting the two topics removes every message in them whatever their age, by `deleteForumTopic`, given the right; nothing kept would find single messages to edit. Accepted by the operator.
+- Accepted by the operator.
 - **[A topic closed or deleted by hand]** → The send fails loudly, with no fallback (Decision 1). How the API words it is probed in test (tasks.md, 12.3).
 - **[No delivery to try in production before change 7]** → Every route is tried in the end-to-end suite and in each test restore. Production proves the inputs and the check at start.
-- **[A leaked bot token reads YouTube's API data]** The bot's role gains `SELECT` on payloads to render them. → It can write only delivery columns. What it reads lives at most 30 days, and is what the chat receives anyway.
+- **[A leaked bot token reads YouTube's API data]** The bot's role gains `SELECT` on payloads to render them. → It can write only delivery columns.
 - **[A night's English alerts arrive in one morning digest]** → In parts, so it arrives; the timing is the value of the quiet window. Change 7 can move the window with its measured volume.
 - **[Dropping `alert_feedback`]** removes a table from production. → It holds one test row, the migration's dump keeps it, and the downgrade recreates the table.
 - **[Kinds declared ahead of their producer]** → Raised by the trial and the suite. If change 7 measures likes as useless, it removes a value — a type recreated under an empty table.

@@ -59,31 +59,6 @@ INVENTORY_TABLES = (
     "yt_search_queries",
 )
 
-# Tables whose rows no dump may carry, only their definitions. YouTube API
-# data may be kept at most 30 days (Developer Policies III.E.4), and a
-# dump is kept as long as pruning decides — which, since pruning only
-# follows a good dump, is as long as dumps keep failing. Leaving the rows
-# out makes that irrelevant, and costs nothing worth having: fetching the
-# whole YouTube inventory again is about ten units of quota, the one
-# thing in this database cheaper to fetch than to keep.
-#
-# `yt_backfill_walks` holds no API data and is left out for another
-# reason: it says which channels' history was walked, and that history
-# is in `yt_raw_videos`. Restored without it, the record would claim
-# walks that are not there — and nothing would walk them again.
-# `yt_search_runs` is left out for the same reason: restored without the
-# results it describes, a run would say a query was answered, and the
-# query would not be asked again for 30 days. `yt_alerts` names videos by
-# id and lives as long as the readings it was scored on, which no dump
-# keeps: restored, it would name videos with nothing to hang them on, and
-# its foreign key could not be restored at all.
-EXCLUDED_DATA = (
-    "yt_raw_*",
-    "yt_backfill_walks",
-    "yt_search_runs",
-    "yt_alerts",
-)
-
 # UTC, and said so in the name: a dump taken at 13:08 local is stamped
 # 10:08, and without the Z that reads as a machine with the wrong clock.
 # UTC also spares the ordering an hour that repeats every autumn.
@@ -263,10 +238,6 @@ def _pg_dump_command(kind: BackupKind) -> list[str]:
     ]
     for table in kind.tables or ():
         args += ["--table", table]
-    # On every tier, not only the full one: a tier that named one of these
-    # tables later would otherwise start carrying their rows unnoticed.
-    for pattern in EXCLUDED_DATA:
-        args += ["--exclude-table-data", pattern]
     return _exec_in_postgres(*args)
 
 

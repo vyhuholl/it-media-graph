@@ -164,12 +164,12 @@ The system SHALL work the references, the channels they name and the ranking out
 #### Scenario: Reporting writes nothing
 
 - **WHEN** the report runs without `--add`
-- **THEN** no row in the database is inserted, updated or deleted, apart from what expiry removes before any command
+- **THEN** no row in the database is inserted, updated or deleted
 
-#### Scenario: An expired lookup changes the next report
+#### Scenario: A lookup no longer current changes the next report
 
 - **GIVEN** a channel ranked through a video's lookup
-- **WHEN** that lookup expires and the report runs before the next lookup run
+- **WHEN** that lookup grows older than `youtube_answers_fresh_days` and the report runs before the next lookup run
 - **THEN** that video awaits a lookup, and the channel loses that reference
 
 ### Requirement: Mention Candidates Are Not Scheduled

@@ -188,8 +188,8 @@ def test_the_exporter_cannot_read_what_an_alert_is_about(
 
 
 def test_an_alert_goes_with_its_reading(migrated: URL) -> None:
-    """Expiry and a video YouTube stopped returning both delete the
-    payload; the reading goes with it, and the alert with the reading."""
+    """A video YouTube stopped returning loses its payload; the reading
+    goes with it, and the alert with the reading."""
     other = "fakeVid0002"
     asyncio.run(
         run(

@@ -10,9 +10,8 @@ leak: not a title, not a handle, not a post, not which channels came from
 the operator's own subscriptions.
 
 So the grants are by column wherever a table holds anything else. Of the
-YouTube tables it sees only when each row was fetched, which is what the
-retention alert needs, and API data stays where the policies keep it. Of
-the inventory it sees the three columns that say a channel is in scope.
+YouTube tables it sees only when each row was fetched. Of the inventory
+it sees the three columns that say a channel is in scope.
 
 **This revision creates no password**, for the reason the bot's role gives:
 a password in a migration is a committed secret. The deploy sets it.

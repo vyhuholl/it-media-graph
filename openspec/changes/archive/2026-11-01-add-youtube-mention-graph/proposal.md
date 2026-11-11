@@ -1,8 +1,8 @@
 ## Why
 
-Change 3 stored a year of every seed's uploads — 7,660 videos for 95 of the 105 seeds, walked by hand on 2026-11-01 — and nothing reads them yet. The site already states what they are read for: "to see which other channels they mention or link to — to map how the channels refer to one another, and to find channels to review" (`docs/index.html`). This change is that reader. It also turns on `youtube_backfill_enabled`, which keeps the year fresh. Without it, the manual walk expires on 2026-12-01: the refresh at 05:00 Moscow that day is the last one before it.
+Change 3 stored a year of every seed's uploads — 7,660 videos for 95 of the 105 seeds, walked by hand on 2026-11-01 — and nothing reads them yet. The site already states what they are read for: "to see which other channels they mention or link to — to map how the channels refer to one another, and to find channels to review" (`docs/index.html`). This change is that reader. It also turns on `youtube_backfill_enabled`, which keeps the year fresh.
 
-The base rules shape it. Decided on 2026-11-01: an edge or a pending mention may exist before acceptance, and lives no longer than the payload it was parsed from. A handle read out of a description is API data, and API data lives only in `yt_raw_*`. So the references are worked out from the current payloads whenever they are asked for, and never stored.
+So the references are worked out from the current payloads whenever they are asked for, and never stored.
 
 ## What Changes
 
@@ -23,7 +23,6 @@ The base rules shape it. Decided on 2026-11-01: an edge or a pending mention may
   - `docs/index.html` and `docs/privacy.html`: mentions read from new uploads as well as past ones, and the date;
   - `docs/PLAN.md`:
     - what `brandPartner` actually is;
-    - what the derived-metrics amendment does and does not cover;
     - the measured shape of references;
     - observations on shorteners and `t.me`;
     - change 4's row;
@@ -32,7 +31,6 @@ The base rules shape it. Decided on 2026-11-01: an edge or a pending mention may
 Out of scope:
 - resolving pending targets, featured channels and search (change 5);
 - alerts (6);
-- scoring, PageRank, clustering and any other measure over the graph (see design: the amendment does not cover them);
 - channel descriptions as a source;
 - bare `@` mentions of handles outside the inventory;
 - expanding shortened links;
@@ -49,7 +47,7 @@ Out of scope:
 
 ### Modified Capabilities
 
-None. `youtube-data-retention`'s "API Data Has One Home" already forbids keeping a handle outside its payload, and nothing here is stored. Turning the walk on is a deploy setting: `youtube-backfill` already says what happens when it is on.
+None. Turning the walk on is a deploy setting: `youtube-backfill` already says what happens when it is on.
 
 ## Impact
 
@@ -63,4 +61,4 @@ None. `youtube-data-retention`'s "API Data Has One Home" already forbids keeping
   - `tests/test_deploy_manifests.py`'s check that the walk is off becomes a check that it is on.
   - The first refresh of the walked year, on 2026-11-27, costs about 154 units at once, then 6–12 a day.
 - **Quota:** none spent by this change. What it hands to change 5, measured on 2026-11-01: 93 unknown channel targets (84 handle links, 9 channel ids) at a unit per handle and 50 ids a unit; 1,047 unknown videos at 50 a unit, about 21 units; and the legacy names.
-- **External:** no new method, no new field. The use case is the one the site states. No allocated quota is used, so no notice is due under III.D.3, as decided for change 3. The site's two pages are updated before archiving.
+- **External:** no new method, no new field. The use case is the one the site states. The site's two pages are updated before archiving.

@@ -16,11 +16,8 @@ by id, as ``channels.list`` is: whether one dead id can fail a batch is
 not documented, and one must not cost forty-nine their reading.
 
 Past uploads — what the history walk finds and the refresh keeps — are
-asked for in the same shape less the counters until the derived-metrics
-use case is accepted. A video linked from elsewhere is asked for its
-channel id alone (``OWNER``). Before then nothing may score them, so a count
-would be kept for nobody; and the same unit buys the same payload
-either way.
+asked for in the poll loop's shape, counters included. A video linked
+from elsewhere is asked for its channel id alone (``OWNER``).
 """
 
 from collections.abc import Iterable, Sequence
@@ -28,7 +25,6 @@ from dataclasses import dataclass
 from itertools import batched
 from typing import Any
 
-from itgraph import yt_policy
 from itgraph.yt.client import YouTube
 
 __all__ = [
@@ -37,11 +33,9 @@ __all__ = [
     "LOOP",
     "OWNER",
     "PARTS",
-    "PAST_UPLOADS",
     "Asked",
     "Resource",
     "by_ids",
-    "for_past_uploads",
 ]
 
 Resource = dict[str, Any]
@@ -69,13 +63,9 @@ class Asked:
     fields: str
 
 
-# The poll loop's request: everything the privacy policy lists.
+# The poll loop's request, and a past upload's: everything the privacy
+# policy lists.
 LOOP = Asked(parts=PARTS, fields=FIELDS)
-# A past upload's before acceptance: the same, less the counters.
-PAST_UPLOADS = Asked(
-    parts="snippet,contentDetails,liveStreamingDetails",
-    fields=f"items(id,{_SNIPPET},contentDetails/duration,{_LIVE})",
-)
 
 
 # A linked video's lookup: which channel it belongs to, and nothing else.
@@ -83,13 +73,6 @@ PAST_UPLOADS = Asked(
 # description and everything else in it out of the answer, so a video of
 # a channel outside the inventory costs the privacy page two fields.
 OWNER = Asked(parts="snippet", fields="items(id,snippet/channelId)")
-
-
-def for_past_uploads() -> Asked:
-    """How a past upload is asked for: without counters until acceptance."""
-    if yt_policy.DERIVED_METRICS_ACCEPTED_ON is None:
-        return PAST_UPLOADS
-    return LOOP
 
 
 # The most ids one request carries. The reference states no maximum for

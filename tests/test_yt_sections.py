@@ -2,14 +2,14 @@
 
 The request asks for the channel ids each section lists and nothing
 else; any section's ids are featured, whatever its type; and a list is
-API data under the 30-day rule, replaced by every read.
+replaced by every read.
 """
 
 from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import select
 from ytfakes import (
     FakeYouTube,
     channel_id,
@@ -32,7 +32,6 @@ from itgraph.db.session import Database
 from itgraph.db.yt_channels import create_channels
 from itgraph.db.yt_sections import (
     featured_lists,
-    purge_expired_sections,
     sections_due,
     seeds_without_list,
     store_sections,
@@ -262,18 +261,4 @@ async def test_only_seeds_lists_in_date_are_read(database: Database) -> None:
         lists = await featured_lists(session)
         missing = await seeds_without_list(session)
     assert set(lists) == {channel_id(1)}
-    assert missing == 1  # seed 3, whose list is past its time
-
-
-async def test_an_expired_list_is_removed(database: Database) -> None:
-    await _channels(database, {1: ChannelStatus.SEED, 2: ChannelStatus.SEED})
-    await _store(database, 1, [], at=NOW - timedelta(days=31))
-    await _store(database, 2, [], at=NOW - timedelta(days=29))
-
-    async with database.session() as session:
-        removed = await purge_expired_sections(session)
-    async with database.session() as session:
-        left = await session.scalar(
-            select(func.count()).select_from(YtRawChannelSections)
-        )
-    assert (removed, left) == (1, 1)
+    assert missing == 1  # seed 3, whose list is no longer current

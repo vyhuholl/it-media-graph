@@ -1,11 +1,9 @@
 """The poll loop's videos: payloads, readings, and when each is due.
 
-Everything here is API data or worked out from it, so everything here
-expires. A video's row holds its latest payload and the schedule the
-loop derived from it; its readings hang off that row and go with it.
-Nothing about a video lives anywhere else, which is what lets one
-``DELETE`` — expiry, or a video YouTube no longer returns — be the whole
-of forgetting it.
+A video's row holds its latest payload and the schedule the loop
+derived from it; its readings hang off that row and go with it. Nothing
+about a video lives anywhere else, which is what lets one ``DELETE`` —
+of a video YouTube no longer returns — be the whole of forgetting it.
 
 Nothing here decides anything. When a video is due is computed in
 ``yt_schedule`` and written down here; what a payload means is read in
@@ -14,25 +12,21 @@ Nothing here decides anything. When a video is due is computed in
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, time
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
     ColumnElement,
     DateTime,
-    and_,
     cast,
     delete,
     func,
-    literal,
-    not_,
     select,
     update,
 )
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from itgraph import yt_policy
 from itgraph.db.models import (
     ChannelStatus,
     YtChannel,
@@ -56,12 +50,10 @@ __all__ = [
     "known_video_ids",
     "oldest_due",
     "past_uploads_due_for_refresh",
-    "purge_expired_videos",
     "remove_videos",
     "replace_payloads",
     "store_found_videos",
     "store_videos",
-    "videos_due_for_refresh",
 ]
 
 
@@ -226,8 +218,8 @@ class FoundVideo:
 
     ``due_at`` is set only for a broadcast yet to start, which the walk
     hands to the poll loop; every other video it stores is past the
-    horizon and never due. ``reading`` is ``None`` until acceptance is
-    recorded, and for a broadcast in any case.
+    horizon and never due. ``reading`` is ``None`` for a broadcast yet
+    to start, which has nothing to count.
     """
 
     video_id: str
@@ -287,37 +279,6 @@ async def store_found_videos(
             insert(YtRawVideoStat).values(readings).on_conflict_do_nothing()
         )
     return [video.video_id for video in found if video.video_id in stored]
-
-
-async def videos_due_for_refresh(
-    session: AsyncSession, *, older_than: datetime
-) -> list[str]:
-    """Finished videos whose readings outlive 30 days and whose payload is stale.
-
-    Only once an acceptance date is recorded; before it there are none,
-    since no reading outlives its video's payload. A reading taken on or
-    after that date may be kept 36 months, and it goes if its video's
-    payload expires — so such videos are fetched again, as channels are.
-    """
-    accepted_on = yt_policy.DERIVED_METRICS_ACCEPTED_ON
-    if accepted_on is None:
-        return []
-    accepted_at = datetime.combine(accepted_on, time(), tzinfo=UTC)
-    kept = (
-        select(YtRawVideoStat.video_id)
-        .where(YtRawVideoStat.observed_at >= accepted_at)
-        .distinct()
-    )
-    rows = await session.scalars(
-        select(YtRawVideo.video_id)
-        .where(
-            YtRawVideo.due_at.is_(None),
-            YtRawVideo.fetched_at < older_than,
-            YtRawVideo.video_id.in_(kept),
-        )
-        .order_by(YtRawVideo.fetched_at, YtRawVideo.video_id)
-    )
-    return list(rows)
 
 
 async def past_uploads_due_for_refresh(
@@ -396,7 +357,7 @@ async def replace_payloads(
 async def finish_videos(
     session: AsyncSession, video_ids: Iterable[str]
 ) -> None:
-    """Stop reading these videos; their rows stay until they expire.
+    """Stop reading these videos; their rows and readings stay.
 
     For a video whose last reading was missed and which is now past the
     horizon: reading it late would be a reading the schedule never asked
@@ -430,49 +391,6 @@ async def remove_videos(
         .returning(YtRawVideo.video_id)
     )
     return list(removed)
-
-
-async def purge_expired_videos(
-    session: AsyncSession, *, now: datetime | None = None
-) -> tuple[int, int]:
-    """Delete video payloads and readings past their time. Returns both counts.
-
-    A payload goes 30 days after its last fetch, taking its readings
-    with it. A reading goes 30 days after it was taken — unless the
-    derived-metrics use case has been accepted and the reading was taken
-    on or after that date, when it may stay 36 calendar months. Postgres
-    counts the months, so a month is a month and not 30 days.
-
-    Readings first: a payload removed second would take them anyway, but
-    the count of readings expired on their own clock would be wrong.
-    """
-    moment = now or datetime.now(UTC)
-    cutoff = moment - yt_policy.RETENTION
-
-    old_reading = YtRawVideoStat.observed_at < cutoff
-    accepted_on = yt_policy.DERIVED_METRICS_ACCEPTED_ON
-    if accepted_on is not None:
-        accepted_at = datetime.combine(accepted_on, time(), tzinfo=UTC)
-        limit = literal(moment, DateTime(timezone=True)) - func.make_interval(
-            0, yt_policy.STATISTICS_RETENTION_MONTHS
-        )
-        kept_longer = and_(
-            YtRawVideoStat.observed_at >= accepted_at,
-            YtRawVideoStat.observed_at >= limit,
-        )
-        old_reading = and_(old_reading, not_(kept_longer))
-
-    readings = await session.execute(
-        delete(YtRawVideoStat)
-        .where(old_reading)
-        .returning(YtRawVideoStat.video_id)
-    )
-    videos = await session.execute(
-        delete(YtRawVideo)
-        .where(YtRawVideo.fetched_at < cutoff)
-        .returning(YtRawVideo.video_id)
-    )
-    return len(videos.all()), len(readings.all())
 
 
 async def count_tracked(session: AsyncSession) -> int:
@@ -528,9 +446,8 @@ async def discoveries_since(
 ) -> dict[YtDiscoveryPath, int]:
     """How many videos each of the poll loop's paths found since a moment.
 
-    Read from the videos themselves, so it reaches back only as far as
-    their data does — 30 days, which is more than the week the status
-    command asks for. The history walk's finds are left out: a year of
+    Read from the videos themselves. The history walk's finds are left
+    out: a year of
     uploads counted beside a week of the loop's would say nothing about
     how often the count misses, which is what these numbers are for.
     """

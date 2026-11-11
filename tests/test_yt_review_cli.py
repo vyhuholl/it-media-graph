@@ -334,7 +334,7 @@ def test_a_file_without_its_header_is_refused(inventory: str) -> None:
     assert _record(inventory, 1).status is ChannelStatus.CANDIDATE
 
 
-def test_an_expired_file_is_refused(inventory: str) -> None:
+def test_an_old_file_is_applied(inventory: str) -> None:
     _channels(inventory, 1)
     old = (datetime.now(UTC) - timedelta(days=31)).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
@@ -347,8 +347,8 @@ def test_an_expired_file_is_refused(inventory: str) -> None:
 
     result = _apply(text)
 
-    assert result.exit_code == 1
-    assert "Delete it and export a new one" in result.stderr
+    assert result.exit_code == 0, result.output
+    assert _record(inventory, 1).status is ChannelStatus.MAYBE
 
 
 # --- mark ----------------------------------------------------------------
@@ -538,7 +538,7 @@ def test_channels_without_data_are_said_to_be(inventory: str) -> None:
 
     result = runner.invoke(app, ["yt", "channels", "--status", "candidate"])
 
-    assert "(expired)" in result.stdout
+    assert "(not fetched)" in result.stdout
     assert "(gone)" in result.stdout
 
 
@@ -556,7 +556,7 @@ def test_the_progress_summary(inventory: str) -> None:
     assert "seed       2" in lines
     assert "rejected   1" in lines
     assert "seeds      en 1, ru 0, other 1" in lines
-    assert "data       current 3, expired 1, gone 0" in lines
+    assert "data       current 3, not fetched 1, gone 0" in lines
 
 
 def test_reviewed_records_are_never_deleted(inventory: str) -> None:

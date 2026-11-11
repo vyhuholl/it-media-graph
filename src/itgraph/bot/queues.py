@@ -307,7 +307,7 @@ class YoutubeQueue(Queue[yt.YtPendingAlert]):
         now: datetime,
     ) -> str | None:
         async with database.session() as session:
-            evidence = await yt.yt_alert_evidence(session, alert, now=now)
+            evidence = await yt.yt_alert_evidence(session, alert)
             folded = await yt.folded_videos(session, head=alert)
         if evidence is None:
             return None

@@ -2,14 +2,13 @@
 
 Every scenario of the walk's spec a run can show: how deep it reaches,
 where it stops, what it counts, what it stores and leaves to the poll
-loop, what it reads before and after acceptance, and how it stops and
-resumes. The clock is fixed, so a scenario states a moment.
+loop, what it reads, and how it stops and resumes. The clock is fixed, so a scenario states a moment.
 """
 
 import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -29,7 +28,6 @@ from ytfakes import (
     video_resource,
 )
 
-from itgraph import yt_policy
 from itgraph.config import settings
 from itgraph.db.models import (
     Base,
@@ -58,7 +56,6 @@ from itgraph.yt import client as yt_client
 from itgraph.yt.backfill import WalkReport, run_walk, walk_channels
 from itgraph.yt.client import youtube
 from itgraph.yt.errors import ApiError, RequestLimitReached
-from itgraph.yt.videos import PAST_UPLOADS
 from itgraph.yt.watch import watch_pass
 
 NOW = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
@@ -492,33 +489,10 @@ async def test_the_poll_loop_checks_reads_and_gives_up_what_it_was_handed(
     assert given_up.due_at is None
 
 
-# --- No Counters Before Acceptance -----------------------------------------
+# --- Every Stored Video Is A Reading ---------------------------------------
 
 
-async def test_before_acceptance_no_counts_are_read(
-    database: Database,
-) -> None:
-    await seeds(database, 1)
-    fake = api({1: listing(40, 400)}, resources(40))
-
-    await walk(database, fake)
-
-    [call] = fake.calls("videos")
-    assert (call["part"], call["fields"]) == (
-        PAST_UPLOADS.parts,
-        PAST_UPLOADS.fields,
-    )
-    found = await video(database, 0)
-    assert found is not None and "statistics" not in found.payload
-    assert await readings(database) == []
-
-
-async def test_after_acceptance_each_stored_video_is_a_reading(
-    database: Database, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        yt_policy, "DERIVED_METRICS_ACCEPTED_ON", date(2026, 10, 30)
-    )
+async def test_each_stored_video_is_a_reading(database: Database) -> None:
     await seeds(database, 1)
     fake = api({1: listing(40, 400)}, resources(40))
 
@@ -649,12 +623,11 @@ async def test_a_spent_pool_ends_a_walk_with_no_floor(
     assert (await record(database)).finished_at is None
 
 
-async def test_after_a_restore_every_seed_is_walked_anew(
+async def test_without_records_or_videos_every_seed_is_walked_anew(
     database: Database,
 ) -> None:
-    """A dump carries neither the videos nor the walk records, so a
-    restored database is one where both are empty; the next walk finds
-    the seed due and walks it from the newest page."""
+    """With both empty — a database restored from before any walk — the
+    next walk finds the seed due and walks it from the newest page."""
     await seeds(database, 1)
     ages = _years_of(30)
     await walk(database, api({1: listing(*ages)}, resources(*ages)))
@@ -737,6 +710,7 @@ async def test_the_walk_derives_nothing(database: Database) -> None:
     changed = {name for name in after if after[name] != before[name]}
     assert changed == {
         "yt_raw_videos",
+        "yt_raw_video_stats",
         "yt_backfill_walks",
         "yt_requests",
         "yt_quota_days",

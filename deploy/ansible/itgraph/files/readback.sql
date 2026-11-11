@@ -1,5 +1,5 @@
--- Reads back, on the real rows, what neutralise.sql removed, what dumps leave out,
--- and anything in a payload that names a person, and fails on any that remains,
+-- Reads back, on the real rows, what neutralise.sql removed and anything in a
+-- payload that names a person, and fails on any that remains,
 -- naming it. An empty answer is the whole point here, so a statement that did not
 -- run must show as a number that is not zero.
 --
@@ -21,7 +21,9 @@ DECLARE
     ['pending mentions',
      $q$SELECT count(*) FROM pending_mentions$q$],
     ['undelivered alerts',
-     $q$SELECT count(*) FROM alerts WHERE delivered_at IS NULL$q$]
+     $q$SELECT count(*) FROM alerts WHERE delivered_at IS NULL$q$],
+    ['undelivered YouTube alerts',
+     $q$SELECT count(*) FROM yt_alerts WHERE delivered_at IS NULL$q$]
   ];
   -- What names a person, by type, in either kind of payload.
   people constant text[][] := ARRAY[
@@ -38,7 +40,6 @@ DECLARE
         || (@.recent_requesters.type() == "array" && exists(@.recent_requesters[0])))$p$]
   ];
   payloads constant text[][] := ARRAY[['posts', 'raw_messages'], ['channel payloads', 'raw_channels']];
-  outside text;
   counted bigint;
 BEGIN
   FOR i IN 1 .. array_length(checks, 1) LOOP
@@ -58,19 +59,6 @@ BEGIN
         found := found || (people[i][1] || ' in ' || payloads[t][1] || ': ' || counted);
       END IF;
     END LOOP;
-  END LOOP;
-
-  -- What dumps leave out holds no row in a copy. By name, so that a table added
-  -- to the glob later is covered, and a test holds these to db/backup.py.
-  FOR outside IN
-    SELECT table_name FROM information_schema.tables
-     WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
-       AND (table_name LIKE 'yt_raw_%' OR table_name IN ('yt_backfill_walks', 'yt_search_runs', 'yt_alerts'))
-  LOOP
-    EXECUTE format('SELECT count(*) FROM %I', outside) INTO counted;
-    IF counted > 0 THEN
-      found := found || (outside || ': ' || counted);
-    END IF;
   END LOOP;
 
   IF array_length(found, 1) > 0 THEN

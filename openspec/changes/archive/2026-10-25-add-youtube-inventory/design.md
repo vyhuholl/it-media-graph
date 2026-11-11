@@ -17,8 +17,6 @@ Where the operator works matters to the design. The live database, the bot and t
 | "All API requests, including invalid requests, incur a quota cost of at least one point"; quota resets at midnight Pacific time; 10,000 units a day, with `search.list` in its own bucket of 100 calls | developers.google.com/youtube/v3/determine_quota_cost |
 | `quotaExceeded` is a 403; the YouTube errors page shows no JSON example | developers.google.com/youtube/v3/docs/errors |
 | An API key goes in the `x-goog-api-key` header; the `key` parameter is a fallback that exposes the key in URLs | docs.cloud.google.com/docs/authentication/api-keys-use |
-| Non-Authorized Data at most 30 days (III.E.4.d), statistics likewise (III.E.4.b); no "new or derived data or metrics" (III.E.4.h(ii)); one project per API client (III.D.1.c); nothing said about channel ids | developers.google.com/youtube/terms/developer-policies |
-| Under the derived-metrics amendment, statistics and derived metrics up to 36 months; titles, creator names and descriptions stay at 30 days | developers.google.com/youtube/terms/derived-metrics-policy (updated 2026-09-14) |
 | `viewCount`: from 2026-08-24, every format counts a view the moment playback begins, autoplay and hover included | developers.google.com/youtube/v3/docs/videos |
 | httpx logs every request's full URL at INFO; `MockTransport` serves requests in tests without a network | Context7, encode/httpx |
 | google-api-python-client is "complete and in maintenance mode"; httplib2 is not thread-safe | Context7, googleapis/google-api-python-client |
@@ -29,7 +27,6 @@ Where the operator works matters to the design. The live database, the bot and t
 - A record of each YouTube channel that outlives any API data about it.
 - One ledger every YouTube request, present or future, books through.
 - A review that can be done on the operator's machine, in a text editor, with every mistake caught before anything is written.
-- Compliance with the base policies, so the derived-metrics application can take as long as it takes.
 
 **Non-Goals:**
 - Videos, statistics history, the poll loop and its own pool — change 2.
@@ -41,39 +38,13 @@ Where the operator works matters to the design. The live database, the bot and t
 
 ### Identity is the channel id, kept indefinitely
 
-The `UC…` id is the primary key. Handles change, titles change, a channel can have no handle at all. The id is kept for as long as the record — the policies say nothing about identifiers, and the operator decided to treat the id as an identifier rather than as expiring API data (**not covered by the requirements**: a policy reading, not a policy statement). Everything else read from the API expires.
+The `UC…` id is the primary key. Handles change, titles change, a channel can have no handle at all.
 
 A `CHECK` holds the id to `^UC[0-9A-Za-z_-]{22}$`. The shape is undocumented; if a real id fails it, the first import says so loudly, and the check is relaxed by migration.
 
 ### Two tables: what the operator decided, and what the API said
 
-```sql
-CREATE TABLE yt_channels (                      -- ours; kept indefinitely
-    channel_id      text PRIMARY KEY,
-    status          channel_status NOT NULL DEFAULT 'candidate',  -- shared with Telegram
-    kind            yt_channel_kind,
-    kind_note       text,
-    reject_reason   yt_reject_reason,
-    reject_note     text,
-    lang            yt_lang,
-    discovered_via  yt_discovery_source NOT NULL,
-    first_seen_at   timestamptz NOT NULL DEFAULT now(),
-    reviewed_at     timestamptz,
-    gone_at         timestamptz,  -- YouTube stopped returning it; payload removed
-    CONSTRAINT id_shape            CHECK (channel_id ~ '^UC[0-9A-Za-z_-]{22}$'),
-    CONSTRAINT rejected_has_reason CHECK ((status = 'rejected') = (reject_reason IS NOT NULL)),
-    CONSTRAINT seed_is_labelled    CHECK (status <> 'seed' OR (kind IS NOT NULL AND lang IS NOT NULL))
-);
-
-CREATE TABLE yt_raw_channels (                  -- the API's; at most 30 days old
-    channel_id  text PRIMARY KEY REFERENCES yt_channels ON DELETE CASCADE,
-    payload     jsonb NOT NULL,                 -- the whole channel resource
-    fetched_at  timestamptz NOT NULL
-);
-CREATE INDEX ON yt_raw_channels (fetched_at);
-```
-
-Unlike Telegram's `channels`, the record carries no title or handle columns. Listing, `mark @handle` and the review export read them out of `payload`. That costs a JSON accessor in three queries and buys the property the retention spec depends on: removing a payload removes the data, with no second copy to forget. Rejected: Telegram's denormalized `username`/`title` — every expiry and every "gone" would have to clear two places, and the one it missed would be the violation.
+Unlike Telegram's `channels`, the record carries no title or handle columns. Listing, `mark @handle` and the review export read them out of `payload`. That costs a JSON accessor in three queries and buys the property the retention spec depends on: removing a payload removes the data, with no second copy to forget.
 
 `status` reuses `channel_status`. The migration must declare it without creating it, and its downgrade must not drop it.
 
@@ -92,7 +63,7 @@ Status is a workflow: code filters on `'seed'`, the export rule is written again
 
 Rejection reasons are Telegram's, less `other_scene` — never used in Telegram review, where nearly every rejection was `not_it` or `adjacent` — plus `consumer_tech` for gadget reviews and PC building, which every machine-assembled list of "tech YouTubers" carries. A `content_farm` that slips through is not an incident; it is how the Telegram bot found a weakness in its own detector.
 
-Language is `en`, `ru` or `other`, set by the reviewer. An IT channel in a third language is in scope as `other`: subject decides, not language. Detection from titles was rejected: under the base policies it is "new or derived data" (III.E.4.h(ii)), and language routes alerts in change 6, where a wrong guess is expensive. The language and country a channel declares are shown as a hint; showing API data is not deriving from it.
+Language is `en`, `ru` or `other`, set by the reviewer. An IT channel in a third language is in scope as `other`: subject decides, not language. The language and country a channel declares are shown as a hint; showing API data is not deriving from it.
 
 A seed needs a kind and a language, at the database level. Telegram defaults kind to `personal`; YouTube does not, because most review happens in a file, where an empty column is a slip, not an intent.
 
@@ -170,7 +141,7 @@ The key goes in `x-goog-api-key`. httpx logs every URL at INFO, so a key in `?ke
 
 ### Requesting a channel
 
-`part=snippet,contentDetails,statistics,brandingSettings,status,topicDetails`. The cost is per call, not per part, so "greedy when collecting" would take everything; III.E.4.d allows "limited amounts". These six are what review needs and what change 2 needs (the uploads playlist id in `contentDetails`); `localizations` is left out.
+`part=snippet,contentDetails,statistics,brandingSettings,status,topicDetails`. These six are what review needs and what change 2 needs (the uploads playlist id in `contentDetails`); `localizations` is left out.
 
 Lookups after parsing:
 - Channel ids: `id=`, fifty to a call.
@@ -192,14 +163,14 @@ A bare word is a handle, never a legacy name. Handles compare case-insensitively
 
 ### Retention mechanics
 
-- **Expiry** is one statement, `DELETE FROM yt_raw_channels WHERE fetched_at < now() - interval '30 days'`, run in every `yt` command, network or not, before it reads or writes anything else in the database. It lives in `_run_yt`, the wrapper every command runs in — not the sub-app's callback, which click runs before a subcommand's `--help` and which made help need a database. A command that refuses its arguments or input exits before reaching the database, and so before expiry; the next command that reaches it expires. Thirty is the policy, a constant rather than a setting.
-- **Refresh** asks for every record whose payload is missing or older than `youtube_refresh_after_days` (default 25, refused at 30 or more), rejected and gone channels included: 500 channels are ten units a cycle, and nothing then expires by neglect. A channel absent from the answer is gone: payload deleted, `gone_at` set. One that comes back gets its payload and loses `gone_at`.
-- The **timer** is `itgraph-yt-refresh.timer`, daily at 05:00 host time (`OnCalendar=*-*-* 05:00:00`, overridable as `yt_refresh_schedule` like `baselines_schedule`) with `Persistent=true`, so a day missed while the host was off runs on its return. A host off for more than 30 days runs no expiry until it is back — a risk the operator accepted.
+- It lives in `_run_yt`, the wrapper every command runs in — not the sub-app's callback, which click runs before a subcommand's `--help` and which made help need a database.
+- A channel absent from the answer is gone: payload deleted, `gone_at` set. One that comes back gets its payload and loses `gone_at`.
+- The **timer** is `itgraph-yt-refresh.timer`, daily at 05:00 host time (`OnCalendar=*-*-* 05:00:00`, overridable as `yt_refresh_schedule` like `baselines_schedule`) with `Persistent=true`, so a day missed while the host was off runs on its return.
 - **Logs** carry channel ids only. The refresh logs to journald, whose retention is not ours to bound.
 
 ### Backups
 
-`yt_channels` joins `INVENTORY_TABLES`: it is hand work. Every full dump, the pre-migration one included, gets `--exclude-table-data='yt_raw_*'`. The payloads are the one thing in this database cheaper to fetch again (about ten units for the whole inventory) than to keep — and forbidden to keep. Current retention (inventory 30 dumps, full 4 weekly) happens to sit near 30 days, but pruning follows only a good dump, so a run of failures would keep old dumps past it; leaving the data out is what makes retention irrelevant. The ledger tables ride in full dumps only; losing a day's count costs at most an early `quotaExceeded`.
+`yt_channels` joins `INVENTORY_TABLES`: it is hand work. The payloads are the one thing in this database cheaper to fetch again (about ten units for the whole inventory) than to keep — and forbidden to keep. The ledger tables ride in full dumps only; losing a day's count costs at most an early `quotaExceeded`.
 
 A restore leaves `yt_raw_channels` empty; the next refresh fills it. Said so in `src/itgraph/README.md`, beside the restore procedure.
 
@@ -216,13 +187,6 @@ scripts/on-host.sh yt review-apply - < ~/itgraph-review/batch.review.tsv
 The file:
 
 ```
-# itgraph yt review-export
-# exported: 2026-10-26T09:12:00Z
-# expires:  2026-11-25 — holds YouTube API data: delete it once applied, never commit it
-# decision: seed | maybe | reject | (empty: leave undecided)
-# kind:     personal company media event education          (seed: required)
-# lang:     en ru other                                      (seed: required)
-# reason:   not_it adjacent crypto infobiz ads content_farm consumer_tech   (reject: required)
 # guide:    src/itgraph/README.md, "YouTube: разметка"
 channel_id	decision	kind	lang	reason	note	handle	title	subscribers	declared	link
 ```
@@ -231,7 +195,7 @@ channel_id	decision	kind	lang	reason	note	handle	title	subscribers	declared	link
 - **Validation** collects every error with its line number before writing anything, as `usernames.py` does. Two refusals go beyond what the database would refuse: a row with a kind, language, reason or note and no decision is a decision forgotten rather than one deferred, and a reason on a seed or a maybe is a value in the wrong column. Both are mistakes the operator would rather hear about than have applied.
 - **Conflicts.** A row equal to the record's current review is "unchanged" and moves no timestamp — which is what makes a second apply a no-op. Otherwise, if the record's `reviewed_at` is later than the header's export moment, someone changed it since: the row is a conflict, reported, not written. Everything else is written in one transaction. Changing a decision already made is `yt mark`'s job.
 - **`mark` keeps what it is not given.** The file shows the current values, so an emptied cell there means emptied. `mark` shows none, so a flag left out means "unchanged": kind, language, and the kind note unless the decision is a rejection — the way Telegram's `mark` keeps a kind it was not given. Without that, `mark --maybe` would erase a reviewer's kind and note. A rejection's note goes with its reason, as on Telegram.
-- **Expiry.** The header's export moment is also the file's expiry: past 30 days `review-apply` refuses it. Deleting the file is the operator's job; the header and the README say so, and `.gitignore` gains `*.review.tsv` for a file saved inside the repository by mistake.
+- Deleting the file is the operator's job; the header and the README say so, and `.gitignore` gains `*.review.tsv` for a file saved inside the repository by mistake.
 
 Alternatives rejected:
 - `mark` per channel over SSH: no tooling, and 100–500 commands.
@@ -249,7 +213,7 @@ A typer sub-app, `itgraph yt` — the first in the CLI, so YouTube's seven comma
 
 ### Settings
 
-`youtube_api_key` (`SecretStr | None`; empty counts as unset), `youtube_daily_quota` (10,000), `youtube_quota_margin` (0.10), `youtube_watch_reserve` (3,000), `youtube_refresh_after_days` (25, < 30), `youtube_request_timeout_seconds` (30). Constants, not settings, where the value is a fact about YouTube rather than a choice: the 30-day limit, the Pacific time zone, method costs, fifty ids per call, the parts requested.
+`youtube_api_key` (`SecretStr | None`; empty counts as unset), `youtube_daily_quota` (10,000), `youtube_quota_margin` (0.10), `youtube_watch_reserve` (3,000), `youtube_refresh_after_days` (25, < 30), `youtube_request_timeout_seconds` (30).
 
 Deploy: `youtube_api_key` in the vault and its example; `env.j2` writes `YOUTUBE_API_KEY` in a block skipped when it is empty, like the proxy's; the refresh unit is installed always and enabled only when the key is set.
 
@@ -258,7 +222,6 @@ Deploy: `youtube_api_key` in the vault and its example; `env.j2` writes `YOUTUBE
 - `src/itgraph/README.md` (Russian): the API key, `yt` commands, the review round trip, the review guide with the table above, the restore note.
 - Root `CLAUDE.md` (agreed with the operator): the YouTube exception to "the raw layer is immutable"; under "Never commit", the YouTube API key and review files.
 - `src/itgraph/CLAUDE.md`: layout rows for the new modules.
-- `docs/PLAN.md`: `search.list` is 1 unit from its own bucket of 100 calls, not 100 units of the 10,000; III.E.4.h(ii) covers "new or derived data", which reaches language detection and change 4's mention edges; the derived-metrics page as updated on 2026-09-14; the decision (apply, from the operator's personal Google account, base rules until accepted); `viewCount` counting at playback start since 2026-08-24, Shorts no longer differing by counting rule; change 1's row in the order of changes.
 
 ## Risks / Trade-offs
 
@@ -268,7 +231,6 @@ Deploy: `youtube_api_key` in the vault and its example; `env.j2` writes `YOUTUBE
 - [`customUrl` may not be the `@handle`] → costs a unit per known handle on import and nothing else.
 - [The id `CHECK` may be wrong] → fails loudly on the first import; relaxed by migration.
 - [The project belongs to a personal Google account] → if that account loses access, all YouTube work stops, and one project per client leaves no fallback. Accepted by the operator.
-- [A review file can outlive 30 days on the operator's machine] → apply refuses it; deleting it rests on the operator, and the header says so.
 - [Keeping channel ids is a reading of silent policy] → the operator's decision, recorded here and in `docs/PLAN.md`.
 - [The host must be on for review] → it is on: it runs the bot.
 
@@ -282,8 +244,6 @@ Deploy: `youtube_api_key` in the vault and its example; `env.j2` writes `YOUTUBE
 Rollback: disable the timer; `alembic downgrade -1` after a backup. Nothing outside `yt_*` is touched.
 
 ## Assumptions not covered by the requirements
-
-Confirmed by the operator on 2026-10-25: the derived-metrics application is filed (base rules until accepted); the project is owned by the operator's personal Google account; the channel id is kept indefinitely; rejected channels are refreshed like any other; no expiry runs while the host is off; the 10% margin; the key is used by itgraph alone; review by file over SSH, in a text editor; titles in the review file, bounded at 30 days.
 
 Open, settled by the first real run: the `x-goog-api-key` header; `customUrl` as `@handle`; the id shape; the response to a handle or id with no channel; Google's error body on YouTube; case-insensitive handles.
 

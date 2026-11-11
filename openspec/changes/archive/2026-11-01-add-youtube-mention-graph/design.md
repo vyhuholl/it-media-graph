@@ -2,14 +2,12 @@
 
 Fourth YouTube change. It inherits the conventions of changes 1–3 unchanged:
 - API data only in `yt_raw_*`;
-- expiry first in every `yt` command through `_run_yt`;
 - ids only in logs;
 - `scripts/on-host.sh` for every run on the host.
 
 Motivation is in `proposal.md`; requirements are in `specs/youtube-mention-graph/spec.md`.
 
 **Reused:**
-- `_run_yt`, so the report reads only what expiry has left;
 - the status allowlist pattern of `derive/edges.DERIVATION_SOURCE_STATUSES`;
 - `derive/yt_videos.moment_of` for the publication time.
 
@@ -19,17 +17,12 @@ Motivation is in `proposal.md`; requirements are in `specs/youtube-mention-graph
 - **`derive/references.py`.** Its handle grammar is Telegram's: `[a-z][a-z0-9_]{3,31}`, no dot, no hyphen. It would cut `@fake.seed.two` to `fake`, which is somebody else.
 - **`yt_entries._handle`.** It is loose on purpose, because the API judges what an operator pastes. An open set read from text needs the opposite (see "Bare mentions").
 
-**The application.** Its text is not kept. What it promised is in `docs/PLAN.md` ("Filed on 2026-10-25"), `docs/index.html` and `docs/privacy.html`, and those are the requirements here. No answer yet.
+No answer yet.
 
 ### Facts checked against the documentation, 2026-11-01
 
 | Fact | Source |
 |---|---|
-| III.E.2: "Do not aggregate API Data except that you may only aggregate API Data relating to YouTube channels that are under the same content owner as recognized by YouTube"; its example ends "The API Client must not combine API Data from the different content owners." "Aggregate" is not defined | developers.google.com/youtube/terms/developer-policies (updated 2026-10-15) |
-| III.E.4.h: "must not (i) replace API Data with similar, independently calculated data, or (ii) access or use API Data to create new or derived data or metrics" | same |
-| III.E.4.d: "temporarily store limited amounts of Non-Authorized Data … not longer than 30 calendar days" | same |
-| III.D.3: the notice is tied to using "any allocated quota for the new use case" | same |
-| The amendment: "Policy III E.4.b, E.4.c, and E.4.d are amended to allow accepted API Clients to store metrics". What it permits: "You may rank channel performance or track views between different channels"; "You may use analysis to assign descriptive sub-genres or tags to videos and channels". It does not mention III.E.2, III.E.4.h, or relationships between channels | …/terms/derived-metrics-policy (updated 2026-09-14) |
 | Handles: "Is between 3-30 characters", except Han/Hangul 1–10 and Ethiopic/Hiragana/Katakana 2–20; letters or numbers of 75 supported languages; "underscores (_), hyphens (-), periods (.), Latin middle dots (·)", not at the start or end; not "URL-like or phone number-like"; "Handles aren't case-sensitive." Nothing on when an old handle is released | support.google.com/youtube/answer/11585688 |
 | Mentions: a creator adds another channel's name or handle to a video's title or description by typing "@" and choosing from a list, and the channel is notified. Nothing says whether an `@word` not chosen from the list links anywhere | support.google.com/youtube/answer/9637404 |
 | Channel URLs: `/channel/<id>`, `/@handle`, `/c/<name>`, `/user/<name>`; "All legacy URLs now redirect users to your new channel URL that is based on your handle". `youtube.com/<name>` is not listed | support.google.com/youtube/answer/6180214 |
@@ -84,17 +77,14 @@ Decided by the operator on 2026-11-01. The three options, priced on 8 thousand v
 | | **A:** `yt_raw_*_refs` tables, cascading from the payload | **B: read on demand** | **C:** truncate and rebuild |
 |---|---|---|---|
 | Payload removed | `ON DELETE CASCADE` | nothing to do | cascade |
-| Payload refreshed with another description | stale until reparsed: a `source_fetched_at` column, a sweep in expiry, a reparse | nothing to do | stale until the next rebuild |
-| Dumps | covered by `yt_raw_*` | nothing to leave out | as A |
 | Migration | yes | none | yes |
 | Volume | tens to a few hundred thousand rows | 7 / 36 MB of text, parsed in seconds | as A |
-| Change 5 | its queue in SQL | the same function; its memory of handles not found is its own, under the 30-day rule | as A |
 
 B keeps the rule without machinery: what is not stored cannot outlive anything, including an older version of a description.
 - **Cheap to defer.** "Anything derivable can be deferred for free" holds here: the payloads are kept fresh for a year, so materializing later loses nothing.
 - **The cost.** Each reader parses again, which takes seconds.
 
-If a reader ever needs A, its rows hold handles, so the tables take the `yt_raw_` prefix and the dump exclusion that comes with it. A reference parsed from a replaced version is deleted at the replacement, not kept 30 days from the old fetch.
+If a reader ever needs A, its rows hold handles, so the tables take the `yt_raw_` prefix and the dump exclusion that comes with it.
 
 ### What is read, and from whom
 
@@ -150,7 +140,7 @@ So a bare `@h` is a reference only when the inventory carries `h`. That is the r
 - **Unknown mentions** were 339 distinct handles, 334 of them named by one seed. Re-measure when the inventory has grown.
 
 Rejected:
-- **A context heuristic** ("Twitter: @x" is not YouTube). It classifies description content, and the amendment lists "content categorization and tagging" among what acceptance permits. Before acceptance that puts it in the same class as language detected from titles, which was refused. It is also brittle: on the test data, the label `x` fired on an `x.com/…` link beside a YouTube handle.
+- **A context heuristic** ("Twitter: @x" is not YouTube). It is also brittle: on the test data, the label `x` fired on an `x.com/…` link beside a YouTube handle.
 - **A stop-list** of CSS at-rules and annotations. It is needed only for an open set.
 
 ### Known targets and pending targets
@@ -182,15 +172,13 @@ Rejected:
 
 Decided by the operator on 2026-11-01. The report and change 5's queue sort targets by how many distinct seeds name them, then by target. The count is computed when asked for, never stored, and shown only to the operator.
 - **It is triage.** It orders the review queue for the purpose the site states, "find channels to review". The edges decision already brought several owners' descriptions into one graph, and the sort adds no new quantity.
-- **The risk** is a strict reading of III.E.2, "must not combine API Data from the different content owners". It is named in `docs/PLAN.md`.
+- It is named in `docs/PLAN.md`.
 - **At 105 seeds the sort orders almost nothing.** Two seeds is the most any unknown target has.
 
-PageRank, centrality, clusters and weights over YouTube references are out — not deferred to acceptance, because the amendment does not cover them:
 - it amends the storage clauses;
 - it lists ranking "channel performance" and tagging;
-- it says nothing of III.E.2 or of relations between channels.
 
-If they are wanted, the question goes to YouTube in the application's thread. Telegram's plan is unaffected.
+Telegram's plan is unaffected.
 
 ### The code
 
@@ -239,7 +227,6 @@ Timeline, from the walk of 2026-11-01 07:00 Moscow:
 | the deploy | `backfill-status` says enabled; every seed is walked already, so the CronJob makes no request until a seed is added |
 | 2026-11-27 05:00 | the refresh takes the walked year for the first time: about 154 units at once, then 6–12 a day |
 | 2026-11-29 | the deploy's deadline, one spare run ahead |
-| 2026-12-01 05:00 | the last refresh before the walk's payloads expire at about 07:00 |
 | later than that | walks forgotten, payloads gone; the next day's CronJob walks every seed again, about 430 units |
 
 ### Documentation
@@ -247,11 +234,9 @@ Timeline, from the walk of 2026-11-01 07:00 Moscow:
 The wording is proposed, and the operator words both pages before archiving.
 
 - **`docs/index.html`, "What it does with YouTube":**
-  - "Past uploads" keeps its first and last sentences: up to a year listed, titles and descriptions read, no counts. What they are read for moves to a new item:
     > **Mentions.** From the titles and descriptions of those channels' uploads, new and past, itgraph works out which other channels and videos they mention or link to — to map how the channels refer to one another, and to find channels to review. It works this out when it is needed and keeps no copy.
   - The status panel's month, if the operator wants it.
 - **`docs/privacy.html`:**
-  - "How long it is kept", the first item, gains:
     > What itgraph works out from them — which channels a video mentions or links to — is not stored.
   - "Last updated".
 - **`docs/PLAN.md`:**
@@ -260,7 +245,6 @@ The wording is proposed, and the operator words both pages before archiving.
     - the measured shape of references;
     - bare mentions read against the inventory;
   - **"Policy before engineering":**
-    - what the amendment covers: storage and the listed metrics, not III.E.2;
     - PageRank and clusters out for YouTube;
     - the ordering as the operator's reading;
   - **"The history walk…":** switched on with change 4;
@@ -295,7 +279,7 @@ The wording is proposed, and the operator words both pages before archiving.
    - `scripts/on-host.sh yt mentions`: compared with the measured table, roughly, since the parser is stricter than the measuring patterns. Expect edges from about 84 handle links, 8 mentions and 14 video links to other seeds; about 93 unknown channel targets plus the legacy names; about 1,047 unknown videos.
 4. On 2026-11-27 or after: `yt quota` shows the refresh's burst, and `backfill-status` the year still there.
 
-Rollback: switch off and deploy. Walks are then forgotten 30 days after they ended, and the command can be removed with no schema to undo.
+Rollback: switch off and deploy.
 
 ## Assumptions
 
@@ -309,7 +293,6 @@ Confirmed by the operator on 2026-11-01 (explore, questions 1–13 and the measu
 - ordering by distinct seeds as triage; no PageRank, clusters or weights for YouTube;
 - `brandPartner` not read here, a probe in change 5;
 - the walk switched on in this change's deploy; a re-walk if it is late;
-- the site's wording changed for new uploads; no notice under III.D.3.
 
 Not covered by the requirements, decided in this design and open to veto:
 - one handle length for every script;

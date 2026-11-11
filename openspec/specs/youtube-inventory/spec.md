@@ -364,7 +364,7 @@ The system SHALL provide `itgraph yt channels`, showing the YouTube inventory so
 
 #### Scenario: A channel without API data is still listed
 
-- **GIVEN** a channel whose API data has expired, or that YouTube no longer returns
+- **GIVEN** a channel whose API data has not been fetched yet, or that YouTube no longer returns
 - **WHEN** it is listed
 - **THEN** its row shows its id and says which of the two it is, in place of handle and title
 
@@ -373,7 +373,7 @@ The system SHALL provide `itgraph yt channels`, showing the YouTube inventory so
 - **WHEN** the command runs without a filter
 - **THEN** a count per status is reported
 - **AND** a count of seeds per language
-- **AND** how many channels have current API data, expired API data, or are no longer returned
+- **AND** how many channels have API data, have none fetched yet, or are no longer returned
 
 ### Requirement: Remote Operation
 

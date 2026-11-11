@@ -6,9 +6,7 @@ pass has not run since Tuesday" look identical.
 
 Each chat is told about its own platform. The Telegram chat about the
 detection of Telegram's posts; the YouTube chat about YouTube's queue and
-its poll loop — and, while YouTube has not accepted the derived-metrics
-use case, that nothing is scored there, so that silence in that chat
-reads as what it is.
+its poll loop.
 """
 
 from collections.abc import Mapping
@@ -18,7 +16,6 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from itgraph import yt_policy
 from itgraph.bot.destinations import Destination
 from itgraph.bot.render import age_phrase
 from itgraph.config import settings
@@ -135,10 +132,6 @@ async def youtube_status(
     zone = next(iter(destinations.values())).zone if destinations else "UTC"
 
     lines = []
-    if yt_policy.DERIVED_METRICS_ACCEPTED_ON is None:
-        lines.append(
-            "оценок YouTube нет до одобрения: оповещениям неоткуда взяться"
-        )
     lines.append(
         f"оповещений YouTube всего: {totals['raised']} (свёрнуто в серии: "
         f"{totals['folded']}, исключено по языку: {totals['excluded']})"

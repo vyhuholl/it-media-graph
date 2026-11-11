@@ -5,8 +5,7 @@ Revises: eccc180aac8e
 Create Date: 2026-10-26 01:19:03.515609
 
 The YouTube poll loop's tables. Two are API data and carry the `yt_raw_`
-prefix, which is what keeps their rows out of every dump: a video's
-latest payload, with the schedule the loop works out from it, and the
+prefix: a video's latest payload, with the schedule the loop works out from it, and the
 readings of its counters. Two are the loop's own — where it stands with
 each channel, and what each pass did — and hold no API data.
 

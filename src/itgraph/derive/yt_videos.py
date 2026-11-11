@@ -10,9 +10,8 @@ Two readings of one payload. The **facts** are what the schedule runs
 on — which channel the video belongs to now, when it was published,
 whether its broadcast has started. The **counters** are what a reading
 records. Neither interprets anything: no format, no score. What a video
-*is* — a Short, a stream, a premiere — is a classification, and under
-the base Developer Policies that is derived data (III.E.4.h), which is
-change 7's to make once the derived-metrics use case is accepted.
+*is* — a Short, a stream, a premiere — is a classification, and scoring
+is where it is made.
 """
 
 from collections.abc import Mapping

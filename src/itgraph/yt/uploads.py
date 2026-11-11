@@ -2,8 +2,7 @@
 
 The uploads playlist is the documented way to a channel's videos, and
 its id is read from the channel's stored payload — never derived from
-the channel id by swapping a prefix, which works and is undocumented
-(III.D.7 forbids undocumented APIs).
+the channel id by swapping a prefix, which works and is undocumented.
 
 The poll loop reads one page of fifty, whatever the channel posts. The
 price is the same for five or fifty, and nothing documents the
@@ -12,8 +11,7 @@ rather than trusted to start with the newest video.
 
 The history walk pages on, one page a call, with the token each answer
 gives for the next. It asks for that token and nothing more: not
-``pageInfo.totalResults``, which counts the playlist's videos and so is
-a statistic (III.E.4.b names "the number of videos in a playlist").
+``pageInfo.totalResults``, which nothing reads.
 
 Asks for ids and publication times and nothing else: whether a video is
 new, or old enough, is decided from those two, and everything else about

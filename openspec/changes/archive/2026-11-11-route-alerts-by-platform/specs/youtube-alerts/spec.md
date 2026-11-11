@@ -1,9 +1,5 @@
 # Spec Delta
 
-## Purpose
-
-The YouTube alert queue: what a YouTube alert names and how long it lives, where it is sent according to its channel's language, and what its message says, so that alerts about videos are delivered under the YouTube API Services Developer Policies.
-
 ## ADDED Requirements
 
 ### Requirement: YouTube Alerts Have A Queue Of Their Own
@@ -34,19 +30,13 @@ The system SHALL keep YouTube alerts apart from Telegram's. A YouTube alert SHAL
 
 ### Requirement: An Alert Goes With Its Video's Data
 
-A YouTube alert SHALL be removed when the reading it was scored on is removed, and so whenever its video's data is removed: on expiry, or when YouTube stops returning the video. An alert folded into another SHALL be removed with its head. No other clock SHALL keep or remove an alert.
+An alert folded into another SHALL be removed with its head. No other clock SHALL keep or remove an alert.
 
 #### Scenario: The video is gone from YouTube
 
 - **GIVEN** a YouTube alert about a tracked video
 - **WHEN** a request for the video is answered without it
 - **THEN** the video's data and the alert are removed together
-
-#### Scenario: The reading expires
-
-- **GIVEN** a YouTube alert scored on a reading taken 31 days ago, and no acceptance recorded
-- **WHEN** any YouTube command reaches the database
-- **THEN** the reading and the alert are removed
 
 #### Scenario: A head takes its folds
 
@@ -56,7 +46,7 @@ A YouTube alert SHALL be removed when the reading it was scored on is removed, a
 
 ### Requirement: An Alert Copies Nothing YouTube Said
 
-A YouTube alert SHALL hold no title, channel name, description or count read from YouTube. What its message shows from YouTube SHALL be read, at the moment of sending, from the stored data of the video and its channel, and data fetched more than 30 days before SHALL NOT be shown.
+A YouTube alert SHALL hold no title, channel name, description or count read from YouTube.
 
 #### Scenario: The alert's row
 
@@ -68,18 +58,6 @@ A YouTube alert SHALL hold no title, channel name, description or count read fro
 - **GIVEN** a YouTube alert scored on a reading at 10:15, and a later reading at 14:05
 - **WHEN** it is sent at 14:20
 - **THEN** the message shows the counts of 14:05 with that time
-
-#### Scenario: A channel payload past 30 days
-
-- **GIVEN** an alert whose channel's stored data was fetched 31 days ago and not yet expired
-- **WHEN** it is sent
-- **THEN** the message names no channel, and is otherwise complete
-
-#### Scenario: A video payload past 30 days
-
-- **GIVEN** an alert whose video's stored data was fetched 31 days ago and not yet expired
-- **WHEN** the bot looks for work
-- **THEN** no message about it is sent
 
 ### Requirement: Alerts Are Routed By The Channel's Language When Sent
 

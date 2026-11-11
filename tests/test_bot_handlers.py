@@ -357,18 +357,6 @@ async def test_the_youtube_chat_is_told_about_youtube(
     assert "каналов в очереди опроса" not in reply
 
 
-async def test_youtube_says_nothing_is_scored_before_acceptance(
-    database_url: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from itgraph import yt_policy
-
-    monkeypatch.setattr(yt_policy, "DERIVED_METRICS_ACCEPTED_ON", None)
-
-    _, replies = await status(database_url, YOUTUBE_CHAT, kind="supergroup")
-
-    assert "оценок YouTube нет до одобрения" in replies[0]
-
-
 async def test_the_answer_lands_in_the_topic_it_was_asked_in(
     database_url: str,
 ) -> None:
