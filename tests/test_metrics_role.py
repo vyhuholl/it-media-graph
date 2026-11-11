@@ -107,7 +107,7 @@ def test_the_series_read_through_the_role(migrated: URL) -> None:
         finally:
             await engine.dispose()
 
-    assert len(asyncio.run(read())) == 12
+    assert len(asyncio.run(read())) == 14
 
 
 def test_the_role_reads_when_and_nothing_else_of_api_data(

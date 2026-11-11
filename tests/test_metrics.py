@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from itgraph.db.models import (
     Alert,
     AlertKind,
+    BaselineRun,
     Channel,
     ChannelStatus,
     CollectionCommand,
@@ -21,6 +22,7 @@ from itgraph.db.models import (
     FloodEvent,
     PollState,
     RawMessage,
+    YtBaselineRun,
     YtChannel,
     YtCommand,
     YtDiscoveryPath,
@@ -60,6 +62,8 @@ EXPECTED = {
     "itgraph_youtube_oldest_payload_age_seconds",
     "itgraph_alerts_oldest_undelivered_seconds",
     "itgraph_alerts_failing",
+    "itgraph_baselines_completed_timestamp_seconds",
+    "itgraph_baselines_channels",
 }
 
 
@@ -423,6 +427,8 @@ async def test_no_series_reads_the_big_tables_and_no_label_comes_from_data(
         "featured",
         "telegram",
         "youtube",
+        "in_scope",
+        "with_baseline",
     }
     body = render(read)
     for family in read:
@@ -539,3 +545,98 @@ async def test_a_database_that_refuses_is_a_503_and_the_process_lives() -> (
 
     assert first.split()[1] == "503"
     assert second.split()[1] == "503"
+
+
+# --- baseline runs ---------------------------------------------------
+
+
+def _yt_run(
+    *, completed_at: datetime | None, in_scope: int, scored: int
+) -> YtBaselineRun:
+    return YtBaselineRun(
+        completed_at=completed_at,
+        window_days=28,
+        mature_days=29,
+        mature_max_days=120,
+        min_channel_videos=10,
+        recent_videos=20,
+        recent_min_videos=10,
+        recent_max_days=180,
+        min_band_samples=20,
+        min_band_spread_posts=100,
+        channels_in_scope=in_scope,
+        channels_with_baseline=scored,
+        channels_on_fallback=0,
+    )
+
+
+async def test_baselines_that_stopped_being_refreshed(
+    database: Database,
+) -> None:
+
+    stale = NOW - timedelta(days=3)
+    fresh_run = NOW - timedelta(hours=4)
+    async with database.session() as session:
+        session.add(_yt_run(completed_at=stale, in_scope=669, scored=410))
+        session.add(
+            BaselineRun(
+                completed_at=fresh_run,
+                mature_days=28,
+                min_channel_posts=20,
+                min_band_samples=20,
+                channels_in_scope=550,
+                channels_with_baseline=470,
+            )
+        )
+
+    read = await families(database)
+
+    name = "itgraph_baselines_completed_timestamp_seconds"
+    assert value(read, name, platform="youtube") == stale.timestamp()
+    assert value(read, name, platform="telegram") == fresh_run.timestamp()
+    channels = "itgraph_baselines_channels"
+    assert value(read, channels, platform="youtube", state="in_scope") == 669
+    assert (
+        value(read, channels, platform="youtube", state="with_baseline") == 410
+    )
+
+
+async def test_a_run_in_progress_is_not_the_newest(database: Database) -> None:
+    done = NOW - timedelta(hours=20)
+    async with database.session() as session:
+        session.add(_yt_run(completed_at=done, in_scope=669, scored=400))
+        session.add(_yt_run(completed_at=None, in_scope=700, scored=0))
+
+    read = await families(database)
+
+    assert (
+        value(
+            read,
+            "itgraph_baselines_completed_timestamp_seconds",
+            platform="youtube",
+        )
+        == done.timestamp()
+    )
+    assert (
+        value(
+            read,
+            "itgraph_baselines_channels",
+            platform="youtube",
+            state="in_scope",
+        )
+        == 669
+    )
+
+
+async def test_no_baseline_run_reads_as_zero(database: Database) -> None:
+    read = await families(database)
+
+    for platform in ("telegram", "youtube"):
+        assert (
+            value(
+                read,
+                "itgraph_baselines_completed_timestamp_seconds",
+                platform=platform,
+            )
+            == 0
+        )

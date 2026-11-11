@@ -24,9 +24,11 @@ from itgraph.config import settings
 from itgraph.db import yt_alerts
 from itgraph.db.alerts import failing_alerts, outstanding_alerts
 from itgraph.db.models import (
+    BaselineRun,
     FloodEvent,
     Platform,
     PollState,
+    YtBaselineRun,
     YtPassOutcome,
     YtQuotaBucket,
     YtQuotaDay,
@@ -222,6 +224,60 @@ async def _alerts(session: AsyncSession, now: datetime) -> list[Family]:
     ]
 
 
+async def _baselines(session: AsyncSession) -> list[Family]:
+    """Each platform's newest completed baseline run: when, and how many.
+
+    A scoring pass that succeeds on baselines days old raises nothing a
+    failed-job alert would see; the moment of the newest run is what does.
+    Read from the run row alone — no reference, curve or factor, which the
+    exporter's role cannot read.
+    """
+    runs = {}
+    for platform, table in (
+        (Platform.TELEGRAM, BaselineRun),
+        (Platform.YOUTUBE, YtBaselineRun),
+    ):
+        runs[platform] = (
+            await session.execute(
+                select(
+                    table.completed_at,
+                    table.channels_in_scope,
+                    table.channels_with_baseline,
+                )
+                .where(table.completed_at.is_not(None))
+                .order_by(table.completed_at.desc())
+                .limit(1)
+            )
+        ).first()
+    return [
+        Family(
+            "itgraph_baselines_completed_timestamp_seconds",
+            "When the newest completed baseline run finished, by platform; "
+            "0 when none.",
+            [
+                (
+                    {"platform": platform.value},
+                    _timestamp(run[0]) if run is not None else 0.0,
+                )
+                for platform, run in runs.items()
+            ],
+        ),
+        Family(
+            "itgraph_baselines_channels",
+            "Channels of the newest completed baseline run, in scope and "
+            "with a baseline, by platform.",
+            [
+                (
+                    {"platform": platform.value, "state": state},
+                    float(run[index]) if run is not None else 0.0,
+                )
+                for platform, run in runs.items()
+                for state, index in (("in_scope", 1), ("with_baseline", 2))
+            ],
+        ),
+    ]
+
+
 async def read_families(
     session: AsyncSession, *, now: datetime
 ) -> list[Family]:
@@ -230,6 +286,7 @@ async def read_families(
         *await _telegram(session, now),
         *await _youtube(session, now),
         *await _alerts(session, now),
+        *await _baselines(session),
     ]
 
 
