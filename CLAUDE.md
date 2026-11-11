@@ -92,7 +92,7 @@ When the prompt and the actual behaviour of a library or of the code disagree, d
 - Code, identifiers and comments in English. Docs and commit messages may be Russian.
 
 ## Database access
-During explore you may read the production database as `itgraph_reader`, a read-only user. The tunnel is open, and the password is in `.pgpass`: do not look for it or print it.
+During explore you may read the production database as `itgraph_reader`, a read-only user. The operator opens SSH tunnel, and the password is in `.pgpass`: do not look for it or print it.
 ```bash
 PGOPTIONS='-c statement_timeout=60s' /opt/homebrew/opt/libpq/bin/psql -h localhost -p 15433 -U itgraph_reader -d itgraph
 ```

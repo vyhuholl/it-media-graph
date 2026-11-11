@@ -13,6 +13,9 @@
 *.gephi
 *.xlsx
 
+# Database password
+.pgpass
+
 # Reports generated per channel. Unlike the sheets above these are meant
 # to be handed to someone, which is exactly why they are ignored rather
 # than kept: what was sent out is a decision made once, and a copy in
