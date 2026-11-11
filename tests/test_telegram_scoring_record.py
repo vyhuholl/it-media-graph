@@ -431,4 +431,65 @@ async def test_telegram_scoring_matches_its_record(database: Database) -> None:
             json.dumps(produced, indent=1, ensure_ascii=False) + "\n"
         )
         pytest.fail(f"no record: written to {RECORD.name}, run again")
-    assert produced == json.loads(RECORD.read_text())
+    assert _differences(produced, json.loads(RECORD.read_text())) == []
+
+
+# How close a float must be to its record. Everything else must be equal.
+# The comment dispersion is a maximum of the likelihood found numerically, and
+# the C library's logarithm and gamma differ in their last bits between macOS
+# and Linux, so the optimum lands some 1e-7 apart: measured, 7.123320291 on
+# the machine that recorded it against 7.123319799 in CI, and a z of 2.8934810
+# that follows it. A change to what the scoring computes moves numbers by far
+# more than this.
+RELATIVE = 1e-6
+
+
+def _differences(produced: Any, recorded: Any, path: str = "") -> list[str]:
+    """Where the two disagree: exactly, but floats to ``RELATIVE``."""
+    if isinstance(produced, float) and isinstance(recorded, float):
+        if math.isclose(produced, recorded, rel_tol=RELATIVE):
+            return []
+        return [f"{path}: {produced!r} != {recorded!r}"]
+    if isinstance(produced, dict) and isinstance(recorded, dict):
+        if produced.keys() != recorded.keys():
+            return [f"{path}: keys {sorted(produced)} != {sorted(recorded)}"]
+        return [
+            difference
+            for key in produced
+            for difference in _differences(
+                produced[key], recorded[key], f"{path}.{key}"
+            )
+        ]
+    if isinstance(produced, list) and isinstance(recorded, list):
+        if len(produced) != len(recorded):
+            return [f"{path}: {len(produced)} items != {len(recorded)}"]
+        return [
+            difference
+            for index, (mine, theirs) in enumerate(
+                zip(produced, recorded, strict=True)
+            )
+            for difference in _differences(mine, theirs, f"{path}[{index}]")
+        ]
+    return (
+        []
+        if produced == recorded
+        else [f"{path}: {produced!r} != {recorded!r}"]
+    )
+
+
+def test_the_record_allows_the_platform_s_last_bits_and_nothing_more() -> None:
+    # The two numbers CI's Linux produced against the macOS record.
+    assert (
+        _differences(
+            {"a": [7.123320291, 2.893480996]},
+            {"a": [7.123319799, 2.893481045]},
+        )
+        == []
+    )
+    assert _differences({"a": [7.2]}, {"a": [7.123319799]}) == [
+        ".a[0]: 7.2 != 7.123319799"
+    ]
+    assert _differences({"n": 526, "k": "x"}, {"n": 527, "k": "x"}) == [
+        ".n: 526 != 527"
+    ]
+    assert _differences([1, None], [1, 0.0]) == ["[1]: None != 0.0"]
