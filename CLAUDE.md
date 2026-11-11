@@ -85,6 +85,8 @@ When the prompt and the actual behaviour of a library or of the code disagree, d
 - Standard / infrastructure tasks (collector, schema, API, bot): implement via OpenSpec: `/opsx:explore` -> write change artifacts -> `/opsx:apply` -> `/opsx:verify` -> `/opsx:archive`.
 - A small change — a bugfix, a narrow cleanup — needs no new OpenSpec change. But if it changes behaviour an existing spec describes, the spec in `openspec/specs/` should be updated, so the specs never disagree with what the code does.
 - Exploratory analytics (clustering, edge weights, engagement baselines): no spec. Iterate in `notebooks/`, promote to `src/` only once the approach is settled.
+- One commit per logical unit of work.
+- Commit messages — in English. Follow conventional commits standard.
 - **Commit to `master`. Never create a branch unless asked for one.** One person works on this repository, so a branch buys no review and costs a merge on every change. If something is risky enough to want isolating, say so and ask — do not decide it by branching.
 
 ## Style
