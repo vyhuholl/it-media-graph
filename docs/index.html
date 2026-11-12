@@ -23,7 +23,7 @@
       <p class="lead">A private analytics tool that follows a hand-reviewed set of IT channels and flags the videos and posts their audiences are responding to unusually strongly right now.</p>
 
       <div class="panel">
-        <p><strong>Status, November 2026.</strong> itgraph has been running for public Telegram channels since summer 2026. The YouTube part is being built on the same approach: the channel inventory, the tracking of video statistics and the delivery of alerts are in use; the scores that would raise YouTube alerts are not calculated yet.</p>
+        <p><strong>Status, November 2026.</strong> itgraph has been running for public Telegram channels since summer 2026. The YouTube part is being built on the same approach: the channel inventory, the tracking of video statistics, the scores that raise YouTube alerts and the delivery of alerts are in use; the weekly lists are being added.</p>
       </div>
 
       <h2>What it does with YouTube</h2>
@@ -36,6 +36,7 @@
         <li><strong>Search.</strong> itgraph searches YouTube for recent videos and channels about software development, with search terms the developer chooses, and keeps only which channel each result belongs to — to find channels to review.</li>
         <li><strong>Links from Telegram.</strong> When posts of the public Telegram channels itgraph follows link to YouTube channels or videos, itgraph asks YouTube which channel each linked video, handle or name belongs to, and nothing else — to find channels to review. It keeps that answer for at most 30 days and works out the rest when it is needed.</li>
         <li><strong>Alerts.</strong> When a video is doing much better than that channel's own videos usually do at the same age, itgraph sends a short message to a private Telegram chat for YouTube alerts, in a topic for the channel's language, English or Russian: the video's title and channel, a link to it on YouTube, the counts YouTube reports with the time they were read, and itgraph's score with the time it was calculated. Channels in other languages get no alerts. A message stays in the chat as it was sent.</li>
+        <li><strong>Weekly lists.</strong> Every Monday, itgraph sends to each language's topic a list of up to ten channels whose videos published the previous week did best against that channel's own videos, one video per channel, each with the same content as an alert. A list record holds IDs, itgraph's scores and when it was sent; an entry is deleted together with the reading it was calculated on.</li>
       </ul>
       <p>itgraph's score is calculated independently by itgraph. It is not a YouTube metric, it is labelled as itgraph's own wherever it appears, and it is always shown next to the counts YouTube reports.</p>
 
