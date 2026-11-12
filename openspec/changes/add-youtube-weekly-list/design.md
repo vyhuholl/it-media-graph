@@ -76,7 +76,7 @@ A list holds ids, moments and itgraph's own numbers: the score, the expectation 
 
 ### 6. The message
 
-One per language and week, in Russian as the alerts are, every moment in Moscow time. Each entry is three lines, and whole in one part:
+One per language and week, in Russian as the alerts are, every moment in Moscow time. Each entry is four lines — title, link, counts, score — and whole in one part:
 
 ```
 📋 YouTube · RU — выше нормы за неделю 16–22 ноября
@@ -143,7 +143,7 @@ The site describes alerts and nothing else that is sent; a weekly list is a new 
 - **[Russian lists are short]** → about six to ten entries at z 2.0 on one replayed week; a shorter list rather than noise. The floor and the size move with calibration.
 - **[A floor below the alerts' lists more that fades]** → 7% of decided crossings at z 2.0 against 3% at 3.0, on one week; the list is a ranking, so the faded sit at its bottom.
 - **[Sunday's videos are judged on hours]** → their wider spread already asks more of them; a video that takes off on Tuesday after a Sunday publication is in no list. Accepted for one list per video.
-- **[An entry is three lines]** → ten entries are about 3,500 characters; `digest_parts` splits what does not fit.
+- **[An entry is four lines]** → ten entries are about 3,500 characters; `message_parts` splits what does not fit.
 - **[Runs missing for days]** → each reading takes the newest run before it, however old, as the live pass would have; the summary names the runs used.
 - **[The site lags the product]** → the list does not go to production before the operator's edit (Migration Plan, 3).
 

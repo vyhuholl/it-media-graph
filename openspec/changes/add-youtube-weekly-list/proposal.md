@@ -65,7 +65,7 @@ Confirmed as of 2026-11-12:
 
 **Not covered by the requirements** — chosen in `design.md`, not by the operator:
 
-- "One line per channel" read as one entry per channel; an entry takes three lines of a message (design.md, Decision 6).
+- "One line per channel" read as one entry per channel; an entry takes four lines of a message — title, link, counts, score (design.md, Decision 6).
 - The readings counted are those up to the moment the list is computed, not up to the week's end (design.md, Decision 1).
 - Each reading against the run newest at its moment, not one run for the week and not a refit (design.md, Decision 2).
 - The list's language is the channel's label when the list is computed, not when it is sent, unlike an alert (design.md, Decision 4).
