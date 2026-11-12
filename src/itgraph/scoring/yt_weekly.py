@@ -48,7 +48,7 @@ from itgraph.db.yt_baselines import (
 )
 from itgraph.db.yt_weekly import NewEntry, NewList, store_week, week_has_lists
 from itgraph.scoring.score import Best
-from itgraph.scoring.yt_run import _best, _prepare
+from itgraph.scoring.yt_run import best_per_video, prepare_readings
 
 __all__ = [
     "WeekRefused",
@@ -142,19 +142,21 @@ def score_week(
     not scored, and are counted.
     """
     videos = list(videos)
-    everything = _prepare(videos, until=until)
+    everything = prepare_readings(videos, until=until)
     first = runs[0][0].completed_at if runs else until
-    unscored = len(_prepare(videos, until=min(first, until)).readings)
+    unscored = len(prepare_readings(videos, until=min(first, until)).readings)
 
     best: dict[tuple[str, str], Best] = {}
     for index, (run, baselines) in enumerate(runs):
         ends = (
             runs[index + 1][0].completed_at if index + 1 < len(runs) else until
         )
-        cut = _prepare(videos, since=run.completed_at, until=min(ends, until))
+        cut = prepare_readings(
+            videos, since=run.completed_at, until=min(ends, until)
+        )
         if not cut.readings:
             continue
-        for key, found in _best(
+        for key, found in best_per_video(
             cut, baselines, threshold=floor, comments_min=comments_min
         ).items():
             best[key] = _merge(found, best.get(key))

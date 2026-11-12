@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 
 from sqlalchemy import exists, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from itgraph.db.models import (
@@ -82,46 +83,63 @@ async def week_has_lists(session: AsyncSession, week_start: date) -> bool:
     )
 
 
+# The unique key on a list's week and language, as the revision names it.
+WEEK_KEY = "uq_yt_weekly_lists_week"
+
+
 async def store_week(session: AsyncSession, lists: Sequence[NewList]) -> bool:
     """Write a week's lists whole, in the caller's transaction.
 
     ``False``, writing nothing, when the week already has a list: a second
-    run of the pass for a week is an answer, not an error. Two runs at
-    once would meet the unique key, and the second fail.
+    run of the pass for a week is an answer, not an error. That holds for
+    two runs at once too — one by hand beside the scheduled one: the
+    second meets the unique key inside a savepoint, which is rolled back,
+    and is told the same as if it had come later. Any other refusal is
+    raised.
     """
     weeks = {found.week_start for found in lists}
     for week in weeks:
         if await week_has_lists(session, week):
             return False
-    for found in lists:
-        row = YtWeeklyList(
-            week_start=found.week_start,
-            route=found.route,
-            computed_at=found.computed_at,
-            threshold=found.threshold,
-            size=found.size,
-            comments_min=found.comments_min,
-            videos_scored=found.videos_scored,
-            channels_above=found.channels_above,
-        )
-        session.add(row)
-        await session.flush()
-        session.add_all(
-            YtWeeklyEntry(
-                list_id=row.id,
-                rank=entry.rank,
-                channel_id=entry.channel_id,
-                video_id=entry.video_id,
-                scored_at=entry.scored_at,
-                metric=entry.metric,
-                value=entry.value,
-                expected=entry.expected,
-                others=entry.others,
-            )
-            for entry in found.entries
-        )
-    await session.flush()
+    try:
+        async with session.begin_nested():
+            for found in lists:
+                await _store_list(session, found)
+    except IntegrityError as exc:
+        if WEEK_KEY not in str(exc.orig):
+            raise
+        return False
     return True
+
+
+async def _store_list(session: AsyncSession, found: NewList) -> None:
+    row = YtWeeklyList(
+        week_start=found.week_start,
+        route=found.route,
+        computed_at=found.computed_at,
+        threshold=found.threshold,
+        size=found.size,
+        comments_min=found.comments_min,
+        videos_scored=found.videos_scored,
+        channels_above=found.channels_above,
+    )
+    session.add(row)
+    await session.flush()
+    session.add_all(
+        YtWeeklyEntry(
+            list_id=row.id,
+            rank=entry.rank,
+            channel_id=entry.channel_id,
+            video_id=entry.video_id,
+            scored_at=entry.scored_at,
+            metric=entry.metric,
+            value=entry.value,
+            expected=entry.expected,
+            others=entry.others,
+        )
+        for entry in found.entries
+    )
+    await session.flush()
 
 
 @dataclass(frozen=True, slots=True)

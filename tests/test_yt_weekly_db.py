@@ -3,7 +3,9 @@
 import json
 from datetime import UTC, date, datetime, timedelta
 
+import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from ytfakes import channel_id, channel_resource, video_id
 from ytscoring import Video, seed_channel, seed_videos
 
@@ -199,3 +201,38 @@ async def test_an_entry_s_evidence_is_read_at_sending(
     # The reading the score came from.
     assert evidence.scored.views == 900
     assert evidence.scored_comments == 12
+
+
+async def test_a_second_run_at_once_is_told_the_week_is_stored(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One by hand beside the scheduled one: both see no list, and the
+    second meets the unique key — an answer, not a traceback."""
+    from itgraph.db import yt_weekly
+
+    await two_channels(database)
+    week = [a_list(an_entry(1, 1))]
+    async with database.session() as session:
+        assert await store_week(session, week)
+
+    async def nothing_yet(*args: object) -> bool:
+        return False
+
+    monkeypatch.setattr(yt_weekly, "week_has_lists", nothing_yet)
+    async with database.session() as session:
+        assert not await store_week(session, week)
+
+    assert await count(database, "yt_weekly_lists") == 1
+    assert await count(database, "yt_weekly_entries") == 1
+
+
+async def test_any_other_refusal_is_raised(database: Database) -> None:
+    """An entry naming a reading that is not stored is no answer."""
+    await two_channels(database)
+    broken = a_list(an_entry(1, 1, hours=3))
+
+    with pytest.raises(IntegrityError):
+        async with database.session() as session:
+            await store_week(session, [broken])
+
+    assert await count(database, "yt_weekly_lists") == 0

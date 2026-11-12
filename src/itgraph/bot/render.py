@@ -47,6 +47,7 @@ __all__ = [
     "units",
     "week_label",
     "weekly_empty",
+    "weekly_gone",
     "weekly_header",
 ]
 
@@ -584,6 +585,18 @@ def weekly_header(
 def weekly_empty(header: str) -> str:
     """A list with nothing above the floor: its header, and that."""
     return f"{header}\n\nВыше нормы — ничего."
+
+
+def weekly_gone(header: str) -> str:
+    """A list whose every video YouTube stopped returning before it went.
+
+    Not "nothing above the floor": something was, and the reader is told
+    it can no longer be shown rather than told the week was quiet.
+    """
+    return (
+        f"{header}\n\nВидео этого списка больше не доступны на YouTube, "
+        "показать их нельзя."
+    )
 
 
 def render_weekly_entry(

@@ -36,6 +36,7 @@ CANDIDATE_FROM_SUBSCRIPTIONS = 3
 MANUAL_SEED = 4
 FAKE_USER = 777000111
 FAKE_YT = "UCfake" + "0" * 18
+FAKE_YT_OTHER = "UCfake" + "1" * 18
 FAKE_VIDEO = "fakeVid0001"
 
 
@@ -185,17 +186,23 @@ async def seed(connection: Any) -> None:
         f"VALUES ('views_spike', '{FAKE_VIDEO}', $1, 1, 4)",
         NOW,
     )
-    # A weekly list computed and not yet sent, with its one entry.
+    # A weekly list half sent: its first part went, its second did not.
+    await connection.execute(
+        "INSERT INTO yt_channels (channel_id, status, kind, lang, "
+        "discovered_via) "
+        f"VALUES ('{FAKE_YT_OTHER}', 'seed', 'personal', 'en', 'manual')"
+    )
     list_id = await connection.fetchval(
         "INSERT INTO yt_weekly_lists (week_start, route, computed_at, "
         "threshold, size, comments_min, videos_scored, channels_above) "
-        "VALUES ('2026-10-26', 'en', $1, 2, 10, 10, 1, 1) RETURNING id",
+        "VALUES ('2026-10-26', 'en', $1, 2, 10, 10, 2, 2) RETURNING id",
         NOW,
     )
     await connection.execute(
         "INSERT INTO yt_weekly_entries (list_id, rank, channel_id, video_id, "
-        "scored_at, metric, value, expected, others) "
-        f"VALUES ($1, 1, '{FAKE_YT}', '{FAKE_VIDEO}', $2, 'views', 4, 1, 0)",
+        "scored_at, metric, value, expected, others, delivered_at) "
+        f"VALUES ($1, 1, '{FAKE_YT}', '{FAKE_VIDEO}', $2, 'views', 5, 1, 0, $2), "
+        f"($1, 2, '{FAKE_YT_OTHER}', '{FAKE_VIDEO}', $2, 'views', 4, 1, 0, NULL)",
         list_id,
         NOW,
     )
@@ -313,13 +320,20 @@ async def test_neutralising_passes_the_read_back_and_keeps_what_it_should(
             )
             == 0
         )
-        # The list and its entry are closed, and kept.
+        # The list and both its entries are closed, and kept: the part
+        # that went as it was, the rest as if it had.
         assert (
             await connection.fetchval(
                 "SELECT count(*) FROM yt_weekly_entries "
                 "WHERE delivered_at IS NOT NULL"
             )
-            == 1
+            == 2
+        )
+        assert (
+            await connection.fetchval(
+                "SELECT delivered_at FROM yt_weekly_entries WHERE rank = 1"
+            )
+            == NOW
         )
         assert (
             await connection.fetchval(

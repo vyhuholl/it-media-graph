@@ -47,6 +47,7 @@ from itgraph.bot.render import (
     message_parts,
     render_weekly_entry,
     weekly_empty,
+    weekly_gone,
     weekly_header,
 )
 from itgraph.config import settings
@@ -448,8 +449,12 @@ async def _send_list(
         )
 
     if not shown:
+        # Nothing went yet: an empty week is said, and so is a list whose
+        # every video went before it could be sent. What is left of a list
+        # whose first part went is nothing to say.
         if pending.sent == 0:
-            text = weekly_empty(header(continued=False))
+            head = header(continued=False)
+            text = weekly_gone(head) if pending.entries else weekly_empty(head)
             if not await _send_part(
                 database, pending, destination, sender, stats, text
             ):

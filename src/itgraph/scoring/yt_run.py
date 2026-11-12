@@ -53,8 +53,11 @@ __all__ = [
     "HELD_AGE",
     "HELD_MULTIPLE",
     "Outcome",
+    "Prepared",
     "YtReplay",
     "YtSpikeSummary",
+    "best_per_video",
+    "prepare_readings",
     "replay_yt_scoring",
     "run_yt_scoring",
     "sweep_yt_scoring",
@@ -78,7 +81,7 @@ class Prepared:
     unreadable: int
 
 
-def _prepare(
+def prepare_readings(
     videos: Iterable[YtVideo],
     *,
     since: datetime | None = None,
@@ -131,13 +134,20 @@ def _prepare(
     )
 
 
-def _best(
+def best_per_video(
     prepared: Prepared,
     baselines: YtBaselines,
     *,
     threshold: float,
     comments_min: int | None = None,
 ) -> dict[tuple[str, str], Best]:
+    """Each video's best score against one run, and its first crossing.
+
+    The live pass, the replay and the weekly list all score through this,
+    on the alerts' signals and with the comment minimum set aside first,
+    so the three agree on any reading scored against the same run.
+    """
+
     def baseline_for(
         reading: Reading[str, str], metric: str
     ) -> Baseline | None:
@@ -265,8 +275,8 @@ async def run_yt_scoring(
             short_max_seconds=settings.youtube_scoring_short_max_seconds,
         )
 
-    prepared = _prepare(videos.values())
-    best = _best(prepared, baselines, threshold=limit)
+    prepared = prepare_readings(videos.values())
+    best = best_per_video(prepared, baselines, threshold=limit)
     spikes = _spikes(best)
 
     written = folded = 0
@@ -520,7 +530,7 @@ async def _period(
                 params,
                 settled_until=now if late_settled else None,
             ).baselines(kinds),
-            prepared=_prepare(
+            prepared=prepare_readings(
                 videos.values(), since=max(start, since), until=end
             ),
         )
@@ -569,7 +579,7 @@ def _replay(
     per_day: dict[tuple[date, YtLang], list[Spike[str, str]]] = {}
     for day in period.days:
         formats.update(day.prepared.formats)
-        best = _best(
+        best = best_per_video(
             day.prepared,
             day.baselines,
             threshold=threshold,

@@ -377,3 +377,53 @@ async def test_no_youtube_chat_sends_no_list(
 
     assert sender.messages == []
     assert await undelivered(database) == (1, 0)
+
+
+async def test_a_list_does_not_move_once_computed(database: Database) -> None:
+    """Computed as Russian, relabelled English before it went: it stays
+    the Russian list, unlike an alert, which is routed when sent."""
+    (channel,) = await channels(database, 1, YtLang.RU)
+    await a_video(database, channel=channel, number=1)
+    await a_list(database, YtAlertRoute.RU, [(channel, 1)])
+    async with database.session() as session:
+        await session.execute(text("UPDATE yt_channels SET lang = 'en'"))
+    sender = ListRecorder()
+
+    await deliver(database, sender)
+
+    ((text_, destination),) = sender.messages
+    assert destination.topic_id == TOPIC_RU
+    assert "YouTube · RU" in text_
+    assert fake_video(1) in text_
+
+
+async def test_a_list_whose_videos_all_went_says_so(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every video gone between the claim and the read of its evidence: the
+    list was not empty, and the message does not say it was."""
+    (channel,) = await channels(database, 1, YtLang.EN)
+    await a_video(database, channel=channel, number=1)
+    await a_list(database, YtAlertRoute.EN, [(channel, 1)])
+
+    async def gone(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr("itgraph.bot.app.entry_evidence", gone)
+    sender = ListRecorder()
+
+    await deliver(database, sender)
+
+    ((text_, _),) = sender.messages
+    assert "больше не доступны на YouTube" in text_
+    assert "Выше нормы — ничего" not in text_
+    async with database.session() as session:
+        assert (
+            await session.scalar(
+                text(
+                    "SELECT count(*) FROM yt_weekly_lists "
+                    "WHERE delivered_at IS NULL"
+                )
+            )
+            == 0
+        )
