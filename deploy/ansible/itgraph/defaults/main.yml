@@ -38,10 +38,10 @@ itgraph_quiet_to_hour: 7
 # code's scoring: 3.7 gives about eight a day after folding. Here so that it can
 # be moved after `itgraph score --replay --threshold N` says what that would cost.
 itgraph_alert_spike_z: 3.7
-# YouTube's own, priced by `itgraph yt score --replay` on its own readings. 3.7
-# until then is provisional: a release carrying it goes to a test environment
-# alone.
-itgraph_youtube_alert_spike_z: 3.7
+# YouTube's own: 3.0 gives about 2.8 messages a day in English over the replay
+# of 2026-11-02 to 12 (config.py says how it was priced). Moved after
+# `itgraph yt score --replay --threshold N` says what another would cost.
+itgraph_youtube_alert_spike_z: 3.0
 
 # The history walk, on since the mention graph, its first reader. Turned off,
 # nothing walks unattended and the refresh keeps no past upload current.

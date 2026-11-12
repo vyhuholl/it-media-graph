@@ -324,6 +324,17 @@ What was decided on it (the explore of 2026-11-11, the operator's answers in `ad
 - **One threshold for both languages,** YouTube's own, priced by a replay that refits the baselines for each day it scores; 3.7 until then is provisional. The target is about 2–5 messages a day in English and 1–2 in Russian.
 - **Settled readings were made at once** by a one-off refresh of every past upload on 2026-11-11 (1,715 units), rather than waiting for the refresh cycle; the next comes 25 days later.
 
+**The threshold, priced on 2026-11-12** by a replay of 2026-11-02 to 12 with settled readings taken after each day (`--late-settled`): 221 of 669 channels scored, 193 of them on their settled videos alone. Messages a day after folding, and what became of the crossings old enough to tell — still at least twice their norm at three days or more, or not:
+
+```
+  z      2.6    2.8    3.0    3.3    3.7    4.1    4.5    5.0
+  en     4.5    3.5    2.8    2.1    1.2    0.8    0.6    0.3
+  ru     0.7    0.5    0.4    0.2    0.1    0.1    0      0
+  held   45/49  36/39  30/31  20/21  10/10  5/5    3/3    1/1
+```
+
+3.0: inside the 2–5 a day asked for in English, and almost nothing that crossed faded. Russian stays under its 1–2 at any threshold worth having: few Russian channels are scored yet, which more data mends. At 3.3 a crossing was mostly ten to thirty times its channel's norm, because most channels are measured against their settled videos and the spreads are wide; as channels move to references of their own the spreads narrow and the same video scores higher, so the threshold is re-priced at calibration, as Telegram's was. Comments crossed at no minimum tried — they are scored only on channels with a reference of their own — so their minimum stays Telegram's ten. One channel's crossings fell mostly within six hours of each other or more than two days apart, which the day-long fold window separates.
+
 ### Order of changes
 
 | # | Change | What it delivers |

@@ -248,7 +248,8 @@ async def test_a_short_is_scored_against_the_channel_s_shorts(
         ],
     )
 
-    summary = await run_yt_scoring(database, now=NOW)
+    # Past the synthetic world's background, whatever the shipped threshold.
+    summary = await run_yt_scoring(database, now=NOW, threshold=CLEAR)
 
     assert [video for _, video, _ in await alerts(database)] == [video_id(900)]
     assert summary.raised == 1

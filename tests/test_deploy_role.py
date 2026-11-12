@@ -451,7 +451,7 @@ def test_the_environment_points_where_it_must(
     assert config["BACKUP_DIR"] == "/backups"
     assert config["TELEGRAM_SESSION"].startswith("/session/")
     assert config["YOUTUBE_BACKFILL_ENABLED"] == "true"
-    assert config["YOUTUBE_ALERT_SPIKE_Z"] == "3.7"
+    assert config["YOUTUBE_ALERT_SPIKE_Z"] == "3.0"
     assert "TELEGRAM_BOT_API_URL" not in config
     telegram = named(objects, "Secret", "itgraph-telegram")["stringData"]
     assert telegram["PROXY_HOST"] == "itgraph-proxy"

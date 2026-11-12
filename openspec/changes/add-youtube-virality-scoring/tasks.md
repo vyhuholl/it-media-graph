@@ -43,7 +43,7 @@ Tasks marked **(operator)** reach a server, YouTube, a chat or the test environm
 ## 8. Settings
 
 - [x] 8.1 `config.py`: the settings of design.md, Decision 13, validated like Telegram's counterparts — the settled window's ends ordered, the recent minimum not above the newest count, the fold window and threshold positive, the metrics not empty. Verify: a test per refusal.
-- [ ] 8.2 **(operator)** The default threshold and comment minimum from 12.2's replay, written into `config.py` and `defaults/main.yml`, with the replay's table of volume against threshold per language into `docs/PLAN.md`. Verify: the schedule and configuration tests hold the new values.
+- [x] 8.2 **(operator)** The default threshold and comment minimum from 12.2's replay, written into `config.py` and `defaults/main.yml`, with the replay's table of volume against threshold per language into `docs/PLAN.md`. Verify: the schedule and configuration tests hold the new values.
 
 ## 9. Series
 
@@ -61,7 +61,7 @@ Tasks marked **(operator)** reach a server, YouTube, a chat or the test environm
 
 ## 12. Rollout
 
-- [ ] 12.1 **(operator)** A release; the role in the test environment; a restore from a fresh full dump. Verify: the restore's report names the YouTube baseline run; the series of both platforms served.
+- [x] 12.1 **(operator)** A release; the role in the test environment; a restore from a fresh full dump. Verify: the restore's report names the YouTube baseline run; the series of both platforms served.
 - [ ] 12.2 **(operator)** In the test environment: `itgraph yt baselines`, then `itgraph yt score --replay --late-settled --since <days from 2026-11-02> --threshold 3.3 --threshold 3.7 --threshold 4.1 --threshold 4.5 --threshold 5.0`, and the same with `--comments-min 5` and `20`; the output brought back. Verify: the agent picks the lowest threshold whose volume is inside about 2–5 a day in English and 1–2 in Russian and whose crossings mostly held, and says why; the operator's decision recorded.
 - [ ] 12.3 **(operator)** Telegram unchanged: on one restored copy, `itgraph baselines --now T` and `itgraph score --replay --now T --since 7` under the previous image and this one. Verify: the runs' rows equal but for ids and moments; the listings identical.
 - [ ] 12.4 **(operator)** A release carrying 8.2's values, through the test environment, then pinned in production; the first release, whose threshold is not yet priced, goes to the test environment alone. Verify: the first `yt baselines` completes and the series shows it; the first day's YouTube alerts per topic against 12.2's volume.

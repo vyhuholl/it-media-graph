@@ -710,16 +710,28 @@ class Settings(BaseSettings):
     # for both languages: a z is comparable across channels because each is
     # divided by its own spread, and a threshold per language would undo it.
 
-    # Provisional: Telegram's nominal tail, until a replay of YouTube's
-    # readings prices it. The release that carries this value goes to a
-    # test environment alone.
-    youtube_alert_spike_z: float = Field(default=3.7, gt=0)
+    # Priced by `yt score --replay --late-settled` over 2026-11-02 to
+    # 2026-11-12, with 221 of 669 channels scored, most on their settled
+    # videos. Messages a day after folding, English / Russian:
+    #
+    #     z 2.6  4.5 / 0.7     z 3.0  2.8 / 0.4     z 3.7  1.2 / 0.1
+    #     z 2.8  3.5 / 0.5     z 3.3  2.1 / 0.2     z 4.5  0.6 / 0
+    #
+    # 3.0 sits inside the 2-5 a day asked for in English, and 30 of the 31
+    # crossings old enough to tell still stood at twice their norm or more
+    # three days on. Russian stays under its 1-2 because few Russian
+    # channels are scored yet, which more data mends and a lower threshold
+    # would not. Re-priced once channels move to references of their own:
+    # narrower spreads raise the same video's z, as they did on Telegram.
+    youtube_alert_spike_z: float = Field(default=3.0, gt=0)
     youtube_alert_spike_metrics: tuple[YtMetric, ...] = (
         YtMetric.VIEWS,
         YtMetric.LIKES,
         YtMetric.COMMENTS,
     )
-    # Telegram's minimum, to start: the replay prices YouTube's own.
+    # Telegram's minimum. Not priced yet: over the same days no comment
+    # crossed at a minimum of 5, 10 or 20, since comments are scored only
+    # on channels with a reference of their own, and few have one so far.
     youtube_alert_spike_comments_min: int = Field(default=10, ge=0)
     # A day, not Telegram's six hours: readings are hours to days apart, so
     # one channel-wide event's videos cross at different scheduled ages.
