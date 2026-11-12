@@ -757,6 +757,16 @@ class Settings(BaseSettings):
     # Baselines older than this are named stale by the scoring pass.
     youtube_baseline_refresh_days: float = Field(default=2.0, gt=0)
 
+    # The weekly list (`add-youtube-weekly-list`): per language, the
+    # channels whose best video of the week reached this z, best first, at
+    # most this many. Below the alerts' 3.0 on purpose: in the replayed
+    # week of 2026-11-05 to 11, Russian had three or four channels a week
+    # at 3.0 and about six to ten at 2.0, where 7% of the crossings old
+    # enough to tell had faded against 3% at 3.0. The signals and the
+    # comment minimum are the alerts'.
+    youtube_weekly_list_z: float = Field(default=2.0, gt=0)
+    youtube_weekly_list_size: int = Field(default=10, ge=1)
+
     backup_dir: Path = DEFAULT_BACKUP_DIR
 
     # Where the PostgreSQL tools run. The Mac keeps Postgres in a

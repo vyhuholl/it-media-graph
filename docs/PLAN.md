@@ -335,6 +335,19 @@ What was decided on it (the explore of 2026-11-11, the operator's answers in `ad
 
 3.0: inside the 2–5 a day asked for in English, and almost nothing that crossed faded. Russian stays under its 1–2 at any threshold worth having: few Russian channels are scored yet, which more data mends. At 3.3 a crossing was mostly ten to thirty times its channel's norm, because most channels are measured against their settled videos and the spreads are wide; as channels move to references of their own the spreads narrow and the same video scores higher, so the threshold is re-priced at calibration, as Telegram's was. Comments crossed at no minimum tried — they are scored only on channels with a reference of their own — so their minimum stays Telegram's ten. One channel's crossings fell mostly within six hours of each other or more than two days apart, which the day-long fold window separates.
 
+### The weekly list
+
+Change 8 answers "what took off" a second way: once a week, per language, the channels whose videos of the week did best against their own. An alert says "now", and a topic's history cannot be read back as a week; at the alerts' threshold the Russian topic gets three or four channels a week, too few to see what the week was about. Measured on 2026-11-12 by a replay of 5–11 November in the test environment, events a week after folding, and of the crossings old enough to tell, how many had faded:
+
+```
+  z        1.5    2.0    2.5    3.0
+  en       129     81     49     27
+  ru        20     11      6      4
+  faded    10%     7%     6%     3%
+```
+
+What was decided (the explore of 2026-11-12, the operator's answer in `add-youtube-weekly-list`'s proposal): the week is a calendar week of publication, Monday to Monday in Moscow, and the list goes on the Monday after at 10:00; ten channels per language above z 2.0, one entry per channel — its best video, Shorts and long-form together — and how many more of its videos reached the floor; a shorter list rather than one padded below the floor, and a week with nothing above it said rather than left silent. Each reading is scored against the baseline run that was newest when it was taken, which is what the live pass scored it against; the runs are kept for that. The list goes to the alerts' topics, outside the cap and the digest, after quiet hours, without a link preview, and each entry shows what an alert shows — YouTube's counts with the time they were read, beside itgraph's score — because the site promises the score is always shown next to them.
+
 ### Order of changes
 
 | # | Change | What it delivers |
@@ -347,6 +360,7 @@ What was decided on it (the explore of 2026-11-11, the operator's answers in `ad
 | 5 | `add-youtube-discovery` | Three review queues of YouTube's own beside Telegram's: the seeds' references looked up and ranked by distinct seeds, their featured lists read with the refresh, and search with the operator's queries in a bucket of its own; the ledger's exhaustion per bucket; the round to 500 English seeds as a runbook |
 | 6 | `route-alerts-by-platform` | The YouTube alert queue, gone with its video's reading; a forum chat for YouTube with a topic per language, `other` excluded; each destination's own cap, quiet hours and digest; rendering; the bot role's grants; digests in parts, held alerts marked, the feedback buttons removed |
 | 7 | `add-youtube-virality-scoring` | Curves, spreads and threshold measured on YouTube data, short-form and long-form apart, broadcasts left out; a channel's own reference at a day old or its settled videos; a day's spikes of a channel one event; the replay refitting day by day; `scoring/` made platform-blind, Telegram's answers pinned by a record; two passes in every environment; a series of each platform's baseline runs |
+| 8 | `add-youtube-weekly-list` | The weekly list per language: a calendar week by publication, each reading against the run in force when taken, one entry per channel above z 2.0, ten at most; stored without what YouTube said, sent by the bot in parts to the alerts' topics; a pass in every environment, closed by the restore and tried by preview; a series per language of the newest list computed and delivered |
 
 **Left to change 5's explore by change 4, and how each closed (2026-11-01, measured at 175 seeds):**
 - **`brandPartner`: not read, and not probed.** It is a sponsorship grant, not a reference, and answers none of the three questions. A probe could not have settled whether an API key receives it: an empty answer reads the same as "this video has none", and no video is known to carry one.

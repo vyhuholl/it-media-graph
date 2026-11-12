@@ -1745,6 +1745,63 @@ def test_youtube_scoring_needs_no_key_and_asks_youtube_nothing(
     assert "replay of 2 day(s)" in replayed.output
 
 
+def test_the_weekly_list_needs_no_key_and_asks_youtube_nothing(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    from itgraph.config import settings
+    from itgraph.yt import client as yt_client
+
+    use_test_database(monkeypatch, database_url)
+    monkeypatch.setattr(settings, "youtube_api_key", None)
+
+    def refuse(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("the weekly list must make no request")
+
+    monkeypatch.setattr(yt_client, "youtube", refuse)
+    now = "2026-11-23T10:00:00+03:00"
+
+    previewed = runner.invoke(app, ["yt", "weekly", "--preview", "--now", now])
+    assert previewed.exit_code == 0, previewed.output
+    assert "week of 2026-11-16" in previewed.output
+    assert "preview, nothing written" in previewed.output
+    assert "nothing at or above the floor" in previewed.output
+
+    stored = runner.invoke(app, ["yt", "weekly", "--now", now])
+    assert stored.exit_code == 0, stored.output
+    assert "preview" not in stored.output
+
+    again = runner.invoke(
+        app, ["yt", "weekly", "--week", "2026-11-16", "--now", now]
+    )
+    assert again.exit_code == 0, again.output
+    assert "already has its lists" in again.output
+
+
+@pytest.mark.parametrize(
+    ("week", "says"),
+    [
+        ("2026-11-18", "not a Monday"),
+        ("2026-11-23", "has not ended"),
+        ("next monday", "not a date"),
+    ],
+)
+def test_the_weekly_list_refuses_a_week_it_cannot_list(
+    monkeypatch: pytest.MonkeyPatch,
+    database_url: str,
+    week: str,
+    says: str,
+) -> None:
+    use_test_database(monkeypatch, database_url)
+
+    result = runner.invoke(
+        app,
+        ["yt", "weekly", "--week", week, "--now", "2026-11-23T10:00:00+03:00"],
+    )
+
+    assert result.exit_code != 0
+    assert says in result.output
+
+
 def test_youtube_score_says_so_without_baselines(
     monkeypatch: pytest.MonkeyPatch, database_url: str
 ) -> None:

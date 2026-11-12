@@ -28,7 +28,7 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, LinkPreviewOptions, Message
 
 from itgraph.bot.app import Sender
 from itgraph.bot.destinations import Destination, Platform
@@ -67,15 +67,19 @@ class BotSender(Sender):
     def __init__(self, bot: Bot) -> None:
         self._bot = bot
 
-    async def send(self, text: str, *, destination: Destination) -> None:
+    async def send(
+        self, text: str, *, destination: Destination, preview: bool = True
+    ) -> None:
         # No buttons: feedback was asked of every alert from the first
-        # one, pressed once in three months, and removed.
+        # one, pressed once in three months, and removed. The preview
+        # through `link_preview_options`, which replaced
+        # `disable_web_page_preview` in Bot API 7.0.
         await self._bot.send_message(
             destination.chat_id,
             text,
             message_thread_id=destination.topic_id,
             parse_mode="HTML",
-            disable_web_page_preview=False,
+            link_preview_options=LinkPreviewOptions(is_disabled=not preview),
         )
 
 

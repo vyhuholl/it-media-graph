@@ -154,7 +154,7 @@
         msg: >-
           Restored {{ itgraph_restore_from | basename }}, every table's rows matching it.
           {{ __itgraph_channels_left.stdout | trim }} channels left, nothing naming anyone, no alert of the dump left to send.
-          A baseline run of each platform and a dump made on it.
+          A baseline run of each platform, the weekly list computed by preview, and a dump made on it.
           Delivered through the bot: {{ __itgraph_alert_report }}; YouTube: {{ __itgraph_youtube_report }}.
           Rows by table: {{ __itgraph_counts.stdout_lines | join(', ') }}
   rescue:

@@ -441,6 +441,21 @@ async def test_alerts_are_sent_without_buttons_to_their_topic() -> None:
     assert getattr(sent, "chat_id", None) == YOUTUBE_CHAT
     assert getattr(sent, "message_thread_id", None) == TOPIC_EN
     assert getattr(sent, "reply_markup", None) is None
+    # An alert keeps its link's preview: YouTube's own card.
+    options = getattr(sent, "link_preview_options", None)
+    assert getattr(options, "is_disabled", None) is False
+
+
+async def test_a_list_is_sent_without_a_link_preview() -> None:
+    bot = offline_bot()
+    session: OfflineSession = bot.session  # type: ignore[assignment]
+
+    await BotSender(bot).send("a list", destination=YOUTUBE_EN, preview=False)
+
+    (sent,) = session.calls
+    assert getattr(sent, "message_thread_id", None) == TOPIC_EN
+    options = getattr(sent, "link_preview_options", None)
+    assert getattr(options, "is_disabled", None) is True
 
 
 # --- the chats at start ---------------------------------------------

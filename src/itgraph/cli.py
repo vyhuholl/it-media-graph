@@ -8,7 +8,7 @@ import asyncio
 import logging
 from collections.abc import Coroutine, Mapping
 from contextlib import suppress
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
@@ -2035,6 +2035,65 @@ def yt_score(
                 )
                 if entry.into is not None:
                     line += f"  ↳ folded into {entry.into.post_key[1]}"
+                typer.echo(line)
+
+    _run(run())
+
+
+@yt_app.command("weekly")
+def yt_weekly(
+    week: Annotated[
+        str | None,
+        typer.Option(
+            "--week",
+            help=(
+                "The Monday of the week to list, YYYY-MM-DD, instead of the "
+                "last one that has ended."
+            ),
+        ),
+    ] = None,
+    preview: Annotated[
+        bool,
+        typer.Option(
+            "--preview",
+            help="Print the lists by ids and scores, and write nothing.",
+        ),
+    ] = False,
+    now: NowOption = None,
+) -> None:
+    """List, per language, the channels whose videos took off in a week.
+
+    A week is Monday to Monday, Moscow time, by publication. Each reading
+    is scored against the baseline run that was newest when it was taken,
+    as the live pass scored it; a channel is listed once, by its best video
+    at or above the weekly floor, best first. Writes the week's lists for
+    the bot to send, once: a week that has them is left as it is. Makes no
+    request to YouTube and needs no API key. Runs on Mondays on the host.
+    """
+    from itgraph.db.session import Database
+    from itgraph.scoring.yt_weekly import WeekRefused, run_weekly
+
+    moment = _moment(now)
+    start: date | None = None
+    if week is not None:
+        try:
+            start = date.fromisoformat(week)
+        except ValueError:
+            raise typer.BadParameter(f"--week is not a date: {week}") from None
+
+    async def run() -> None:
+        database = Database()
+        try:
+            summary = await run_weekly(
+                database, week=start, now=moment, preview=preview
+            )
+        except WeekRefused as exc:
+            raise typer.BadParameter(f"--week: {exc}") from None
+        finally:
+            await database.dispose()
+        typer.echo(summary.line())
+        if preview:
+            for line in summary.preview():
                 typer.echo(line)
 
     _run(run())

@@ -25,10 +25,10 @@ characters" and refused the whole digest when one ran longer.
 import html
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from itgraph.db.models import AlertKind, YtAlertKind, YtAlertRoute
+from itgraph.db.models import AlertKind, YtAlertKind, YtAlertRoute, YtMetric
 from itgraph.derive.yt_videos import Counters
 
 __all__ = [
@@ -36,12 +36,18 @@ __all__ = [
     "Carrier",
     "DigestPart",
     "RenderedAlert",
+    "WeeklyEntryView",
     "age_phrase",
     "digest_parts",
+    "message_parts",
     "render_cascade",
     "render_spike",
+    "render_weekly_entry",
     "render_youtube",
     "units",
+    "week_label",
+    "weekly_empty",
+    "weekly_header",
 ]
 
 # How much of a post to quote. Long enough to recognise it, short enough
@@ -428,8 +434,27 @@ def digest_parts(
     entry never needs more than one, since a rendered alert is bounded
     below the limit with room for a header.
     """
-    first = f"📋 За прошедший период — {held} оповещение(й)"
-    later = "📋 Продолжение"
+    return message_parts(
+        entries,
+        first=f"📋 За прошедший период — {held} оповещение(й)",
+        later="📋 Продолжение",
+        limit=limit,
+    )
+
+
+def message_parts(
+    entries: Sequence[str],
+    *,
+    first: str,
+    later: str,
+    limit: int = MESSAGE_LIMIT,
+) -> list[DigestPart]:
+    """Entries under a header, as few messages as fit, each entry whole.
+
+    ``first`` heads the first part and ``later`` the rest; when there is
+    more than one, each header's first line says which part it is. With
+    no entries, the one part is the header alone.
+    """
     # Room for " (12/34)", whatever the numbers turn out to be.
     suffix = 12
 
@@ -449,8 +474,164 @@ def digest_parts(
     for number, group in enumerate(groups, start=1):
         header = first if number == 1 else later
         if count > 1:
-            header += f" ({number}/{count})"
+            top, newline, rest = header.partition("\n")
+            header = f"{top} ({number}/{count}){newline}{rest}"
         body = SEPARATOR.join(entries[index] for index in group)
         text = f"{header}\n\n{body}" if body else header
         parts.append(DigestPart(text=text, entries=tuple(group)))
     return parts
+
+
+# The month in the genitive, as a date is read in Russian: "16 ноября".
+MONTHS = (
+    "января",
+    "февраля",
+    "марта",
+    "апреля",
+    "мая",
+    "июня",
+    "июля",
+    "августа",
+    "сентября",
+    "октября",
+    "ноября",
+    "декабря",
+)
+
+
+def week_label(week_start: date) -> str:
+    """A week as a reader names it: "16–22 ноября", "30 ноября – 6 декабря"."""
+    last = week_start + timedelta(days=6)
+    if week_start.month == last.month:
+        return f"{week_start.day}–{last.day} {MONTHS[last.month - 1]}"
+    return (
+        f"{week_start.day} {MONTHS[week_start.month - 1]} – "
+        f"{last.day} {MONTHS[last.month - 1]}"
+    )
+
+
+def _times(multiple: float) -> str:
+    """How many times the usual, in words: "в 4,1 раза", "в 12 раз"."""
+    if multiple < 10:
+        rounded = round(multiple, 1)
+        if rounded != int(rounded):
+            return f"в {rounded:.1f}".replace(".", ",") + " раза"
+        whole = int(rounded)
+    else:
+        whole = round(multiple)
+    few = whole % 10 in (2, 3, 4) and whole % 100 not in (12, 13, 14)
+    return f"в {whole} {'раза' if few else 'раз'}"
+
+
+@dataclass(frozen=True, slots=True)
+class WeeklyEntryView:
+    """What an entry of a weekly list shows, read at sending.
+
+    ``observed`` is the scored reading's count of the entry's signal, and
+    ``expected`` what that reading was scored against: the multiple is
+    honest here, unlike on an alert, because the list keeps the
+    expectation its score came from.
+    """
+
+    video_id: str
+    title: str | None
+    channel_title: str | None
+    short: bool
+    started_at: datetime | None
+    counters: Counters
+    counted_at: datetime | None
+    metric: YtMetric
+    z: float
+    observed: int | None
+    expected: float
+    others: int
+
+
+def weekly_header(
+    *,
+    route: YtAlertRoute,
+    week_start: date,
+    computed_at: datetime,
+    videos_scored: int,
+    continued: bool,
+    now: datetime,
+    zone: str,
+) -> str:
+    """The head of a weekly list: whose, which week, whose score.
+
+    A list resumed after a failed part says it continues, so the reader
+    does not take the second half for a list of its own.
+    """
+    week = week_label(week_start)
+    if continued:
+        return f"📋 YouTube · {route.value.upper()} — продолжение списка за неделю {week}"
+    clock = _clock(computed_at, now=now, zone=zone)
+    return "\n".join(
+        [
+            f"📋 YouTube · {route.value.upper()} — выше нормы за неделю {week}",
+            (
+                "Лучшее видео каждого канала относительно его обычного "
+                f"уровня; оценено {videos_scored} видео."
+            ),
+            (
+                f"Оценка itgraph на {clock} — рассчитана itgraph, "
+                "не метрика YouTube."
+            ),
+        ]
+    )
+
+
+def weekly_empty(header: str) -> str:
+    """A list with nothing above the floor: its header, and that."""
+    return f"{header}\n\nВыше нормы — ничего."
+
+
+def render_weekly_entry(
+    number: int, view: WeeklyEntryView, *, now: datetime, zone: str
+) -> str:
+    """One channel of a weekly list: its best video, as an alert shows one.
+
+    What the site promises an alert holds, the entry holds on its own:
+    YouTube named and the video linked, the counts with the time they were
+    read — a counter YouTube did not report left out — and the score said
+    to be itgraph's.
+    """
+    about = f"{number}. <b>{_escape(view.title or 'видео без названия')}</b>"
+    if view.channel_title:
+        about += f" — {_escape(view.channel_title)}"
+    if view.short:
+        about += " · Shorts"
+    if view.started_at is not None:
+        about += f" · опубликовано {age_phrase(now - view.started_at)}"
+    lines = [about, f"https://www.youtube.com/watch?v={view.video_id}"]
+
+    counts = [
+        f"{name} {_count(value)}"
+        for name, value in (
+            ("просмотры", view.counters.views),
+            ("лайки", view.counters.likes),
+            ("комментарии", view.counters.comments),
+        )
+        if value is not None
+    ]
+    if counts and view.counted_at is not None:
+        lines.append(
+            f"YouTube на {_clock(view.counted_at, now=now, zone=zone)}: "
+            + " · ".join(counts)
+        )
+
+    label = YT_LABEL[view.metric.alert_kind()]
+    if view.metric is YtMetric.COMMENTS and view.observed is not None:
+        what = f"{label} — {view.observed}, {_usual(view.expected)}"
+    elif view.observed is not None and view.expected > 0:
+        what = (
+            f"{label} — {_times(view.observed / view.expected)} выше "
+            "обычного для канала"
+        )
+    else:
+        what = f"{label} — {_magnitude(view.z)} для канала"
+    score = f"📈 Оценка itgraph: {what} (z {view.z:.1f})"
+    if view.others:
+        score += f"; ещё {view.others} видео канала выше нормы"
+    lines.append(score)
+    return _fit("\n".join(lines))

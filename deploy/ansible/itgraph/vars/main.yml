@@ -335,6 +335,20 @@ __itgraph_cronjobs_always:
         resources: "{{ __itgraph_job_resources }}"
     mounts: []
     volumes: []
+  - name: itgraph-yt-weekly
+    schedule: "{{ itgraph_yt_weekly_schedule }}"
+    # Six days: a host down over Monday still sends that week's list when it
+    # is back, since the pass lists the last week that has ended.
+    starting_deadline: 518400
+    active_deadline: 1800
+    labels: "{{ __itgraph_may_reach_database }}"
+    containers:
+      - name: itgraph
+        args: [yt, weekly]
+        env_from: ["{{ __itgraph_from_config }}", "{{ __itgraph_from_database }}"]
+        resources: "{{ __itgraph_job_resources }}"
+    mounts: []
+    volumes: []
   - name: itgraph-backup
     schedule: "{{ itgraph_backup_schedule }}"
     starting_deadline: 10800

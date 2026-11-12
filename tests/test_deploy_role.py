@@ -276,6 +276,8 @@ SCHEDULES = {
     "itgraph-yt-score": ("6-59/15 * * * *", 600, 600),
     # Half an hour after the refresh, which brings the settled readings.
     "itgraph-yt-baselines": ("30 5 * * *", 82800, 10800),
+    # Monday morning; six days to catch up a missed Monday.
+    "itgraph-yt-weekly": ("0 10 * * 1", 518400, 1800),
     # After the Pacific reset in either season.
     "itgraph-yt-backfill": ("30 11 * * *", 82800, 3000),
 }
@@ -405,6 +407,7 @@ SECRET_KEYS = {
         ("CronJob", "itgraph-baselines", set()),
         ("CronJob", "itgraph-yt-score", set()),
         ("CronJob", "itgraph-yt-baselines", set()),
+        ("CronJob", "itgraph-yt-weekly", set()),
         ("CronJob", "itgraph-backup", {"B2_APPLICATION_KEY"}),
         ("CronJob", "itgraph-yt-watch", {"YOUTUBE_API_KEY"}),
         ("CronJob", "itgraph-yt-refresh", {"YOUTUBE_API_KEY"}),
@@ -472,6 +475,7 @@ def test_a_key_absent_means_no_youtube_job_and_no_key(
         "itgraph-backup",
         "itgraph-yt-score",
         "itgraph-yt-baselines",
+        "itgraph-yt-weekly",
     }
     assert not [
         s
@@ -504,6 +508,7 @@ REACH = {
     "itgraph-baselines": {"itgraph/database"},
     "itgraph-yt-score": {"itgraph/database"},
     "itgraph-yt-baselines": {"itgraph/database"},
+    "itgraph-yt-weekly": {"itgraph/database"},
     "itgraph-backup": {"itgraph/database", "itgraph/internet"},
     "itgraph-yt-watch": {"itgraph/database", "itgraph/internet"},
     "itgraph-yt-refresh": {"itgraph/database", "itgraph/internet"},

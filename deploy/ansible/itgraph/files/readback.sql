@@ -23,7 +23,11 @@ DECLARE
     ['undelivered alerts',
      $q$SELECT count(*) FROM alerts WHERE delivered_at IS NULL$q$],
     ['undelivered YouTube alerts',
-     $q$SELECT count(*) FROM yt_alerts WHERE delivered_at IS NULL$q$]
+     $q$SELECT count(*) FROM yt_alerts WHERE delivered_at IS NULL$q$],
+    ['undelivered weekly lists',
+     $q$SELECT count(*) FROM yt_weekly_lists WHERE delivered_at IS NULL$q$],
+    ['undelivered weekly list entries',
+     $q$SELECT count(*) FROM yt_weekly_entries WHERE delivered_at IS NULL$q$]
   ];
   -- What names a person, by type, in either kind of payload.
   people constant text[][] := ARRAY[

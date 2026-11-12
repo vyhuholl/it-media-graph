@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -22,6 +22,7 @@ from itgraph.db.models import (
     FloodEvent,
     PollState,
     RawMessage,
+    YtAlertRoute,
     YtBaselineRun,
     YtChannel,
     YtCommand,
@@ -36,6 +37,7 @@ from itgraph.db.models import (
     YtRawVideo,
     YtRawVideoStat,
     YtWatchPass,
+    YtWeeklyList,
 )
 from itgraph.db.session import Database
 from itgraph.metrics.series import Family, read_families, render
@@ -64,6 +66,8 @@ EXPECTED = {
     "itgraph_alerts_failing",
     "itgraph_baselines_completed_timestamp_seconds",
     "itgraph_baselines_channels",
+    "itgraph_youtube_weekly_list_computed_timestamp_seconds",
+    "itgraph_youtube_weekly_list_delivered_timestamp_seconds",
 }
 
 
@@ -419,17 +423,21 @@ async def test_no_series_reads_the_big_tables_and_no_label_comes_from_data(
         assert "message_metrics" not in statement
         assert "payload" not in statement
 
-    allowed = {"watch", "general", "search", "main"} | {
-        "channel",
-        "video",
-        "reading",
-        "lookup",
-        "featured",
-        "telegram",
-        "youtube",
-        "in_scope",
-        "with_baseline",
-    }
+    allowed = (
+        {"watch", "general", "search", "main"}
+        | {
+            "channel",
+            "video",
+            "reading",
+            "lookup",
+            "featured",
+            "telegram",
+            "youtube",
+            "in_scope",
+            "with_baseline",
+        }
+        | {route.value for route in YtAlertRoute}
+    )
     body = render(read)
     for family in read:
         for labels, _ in family.samples:
@@ -640,3 +648,67 @@ async def test_no_baseline_run_reads_as_zero(database: Database) -> None:
             )
             == 0
         )
+
+
+def _weekly_list(
+    week: date,
+    route: YtAlertRoute,
+    *,
+    computed: datetime,
+    delivered: datetime | None,
+) -> YtWeeklyList:
+    return YtWeeklyList(
+        week_start=week,
+        route=route,
+        computed_at=computed,
+        threshold=2.0,
+        size=10,
+        comments_min=10,
+        videos_scored=0,
+        channels_above=0,
+        delivered_at=delivered,
+    )
+
+
+async def test_a_list_computed_and_not_sent(database: Database) -> None:
+    last_week = NOW - timedelta(days=7)
+    async with database.session() as session:
+        session.add(
+            _weekly_list(
+                date(2026, 10, 26),
+                YtAlertRoute.RU,
+                computed=last_week,
+                delivered=last_week + timedelta(minutes=1),
+            )
+        )
+        session.add(
+            _weekly_list(
+                date(2026, 11, 2),
+                YtAlertRoute.RU,
+                computed=NOW,
+                delivered=None,
+            )
+        )
+
+    read = await families(database)
+
+    computed = "itgraph_youtube_weekly_list_computed_timestamp_seconds"
+    delivered = "itgraph_youtube_weekly_list_delivered_timestamp_seconds"
+    assert value(read, computed, route="ru") == NOW.timestamp()
+    assert (
+        value(read, delivered, route="ru")
+        == (last_week + timedelta(minutes=1)).timestamp()
+    )
+    assert value(read, computed, route="en") == 0
+    assert value(read, delivered, route="en") == 0
+
+
+async def test_no_list_reads_as_zero(database: Database) -> None:
+    read = await families(database)
+
+    for name in (
+        "itgraph_youtube_weekly_list_computed_timestamp_seconds",
+        "itgraph_youtube_weekly_list_delivered_timestamp_seconds",
+    ):
+        for route in ("en", "ru"):
+            assert value(read, name, route=route) == 0

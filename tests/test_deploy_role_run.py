@@ -1666,6 +1666,7 @@ def restore_rules() -> list[dict[str, Any]]:
         *pod_answers("itgraph-migrate"),
         *pod_answers("itgraph-trial-baselines"),
         *pod_answers("itgraph-trial-yt-baselines"),
+        *pod_answers("itgraph-trial-yt-weekly"),
         *pod_answers(
             "itgraph-trial-backup",
             logs="/backups/weekly/full-20261106T090000Z.dump",
@@ -1674,6 +1675,7 @@ def restore_rules() -> list[dict[str, Any]]:
         rule("count\\(\\*\\) FROM baseline_runs", "2\n"),
         rule("count\\(\\*\\) FROM yt_baseline_runs", "0\n", times=1),
         rule("count\\(\\*\\) FROM yt_baseline_runs", "1\n"),
+        rule("count\\(\\*\\) FROM yt_weekly_lists", "3\n"),
         rule("yt_alerts WHERE band = 2147483647", "2|0|en,ru\n"),
         rule("band = 2147483647", "1\n"),
         rule("pg_restore", "public.channels 12\n"),
@@ -1750,7 +1752,12 @@ def test_a_restore_in_order(tmp_path: Path) -> None:
     assert first("get pod itgraph-trial-baselines") < first(
         "get pod itgraph-trial-yt-baselines"
     )
+    # And the weekly list, by preview, after it.
+    assert first("get pod itgraph-trial-yt-baselines") < first(
+        "get pod itgraph-trial-yt-weekly"
+    )
     assert "A baseline run of each platform" in run.output
+    assert "the weekly list computed by preview" in run.output
     # The alert is raised on a restored post, and read back as delivered.
     assert first("get pod itgraph-trial-backup") < first("INSERT INTO alerts")
     [raised] = [call for call in joined if "INSERT INTO alerts" in call]
@@ -1883,6 +1890,30 @@ def test_a_youtube_refresh_that_writes_nothing_fails_the_restore(
 
     assert run.failed
     assert "YouTube baseline refresh wrote no run" in run.output
+
+
+def test_a_weekly_list_written_by_the_trial_fails_the_restore(
+    tmp_path: Path,
+) -> None:
+    """The trial is a preview: a list written would pre-empt the copy's own
+    scheduled pass for that week."""
+    dump = tmp_path / "real.dump"
+    dump.write_bytes(b"fake dump bytes\n")
+    run = run_role(
+        tmp_path,
+        "restore",
+        inputs="b",
+        rules=[
+            rule("count\\(\\*\\) FROM yt_weekly_lists", "0\n", times=1),
+            *restore_rules(),
+        ],
+        extra={**RESTORE, "itgraph_restore_from": str(dump)},
+    )
+
+    assert run.failed
+    assert (
+        "The weekly list failed on the restored data, or wrote" in run.output
+    )
 
 
 def test_a_trial_that_writes_nothing_fails_the_restore(tmp_path: Path) -> None:

@@ -15,7 +15,7 @@ is stored, at the moment of sending.
 """
 
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -36,8 +36,9 @@ from itgraph.db.models import (
     YtRawChannel,
     YtRawVideo,
     YtRawVideoStat,
+    YtVideoFormat,
 )
-from itgraph.derive.yt_videos import Counters, facts_of
+from itgraph.derive.yt_videos import Counters, facts_of, format_of
 from itgraph.scoring.fold import Head, Placed
 from itgraph.scoring.score import Spike
 
@@ -59,6 +60,7 @@ __all__ = [
     "raised_yt_spikes",
     "route_counts",
     "settle_folds",
+    "video_evidence",
     "yt_alert_evidence",
 ]
 
@@ -379,7 +381,7 @@ async def route_counts(
 
 @dataclass(frozen=True, slots=True)
 class YtEvidence:
-    """What a message about a YouTube alert needs, read when it is sent.
+    """What a message about a scored video needs, read when it is sent.
 
     Never stored: each field is read from where it is kept, and goes when
     that does. ``started_at`` is the broadcast's actual start where there
@@ -393,6 +395,10 @@ class YtEvidence:
     counted_at: datetime | None
     # A comment spike's count, from the reading it was scored on.
     scored_comments: int | None
+    # Every counter of the reading it was scored on, absent ones absent.
+    scored: Counters = field(default_factory=Counters)
+    # Worked out from the payload when the caller asks, never stored.
+    format: YtVideoFormat | None = None
 
 
 def _title(payload: dict[str, Any] | None) -> str | None:
@@ -404,16 +410,30 @@ def _title(payload: dict[str, Any] | None) -> str | None:
 async def yt_alert_evidence(
     session: AsyncSession, alert: YtPendingAlert
 ) -> YtEvidence | None:
-    """The video an alert is about, its channel and its newest counts.
+    """The video an alert is about, its channel and its newest counts."""
+    return await video_evidence(
+        session, video_id=alert.video_id, scored_at=alert.scored_at
+    )
+
+
+async def video_evidence(
+    session: AsyncSession,
+    *,
+    video_id: str,
+    scored_at: datetime,
+    short_max_seconds: int | None = None,
+) -> YtEvidence | None:
+    """A scored video, its channel, its newest counts and its scored ones.
 
     ``None`` when the video is no longer stored — YouTube stopped
     returning it. A channel without a stored payload is left out, and the
-    message goes without the channel's name.
+    message goes without the channel's name. The format is worked out
+    only when ``short_max_seconds`` is given.
     """
     video = (
         await session.execute(
             select(YtRawVideo.payload, YtRawVideo.channel_id).where(
-                YtRawVideo.video_id == alert.video_id
+                YtRawVideo.video_id == video_id
             )
         )
     ).first()
@@ -434,16 +454,29 @@ async def yt_alert_evidence(
                 YtRawVideoStat.likes,
                 YtRawVideoStat.comments,
             )
-            .where(YtRawVideoStat.video_id == alert.video_id)
+            .where(YtRawVideoStat.video_id == video_id)
             .order_by(YtRawVideoStat.observed_at.desc())
             .limit(1)
         )
     ).first()
-    scored_comments = await session.scalar(
-        select(YtRawVideoStat.comments).where(
-            YtRawVideoStat.video_id == alert.video_id,
-            YtRawVideoStat.observed_at == alert.scored_at,
+    scored_row = (
+        await session.execute(
+            select(
+                YtRawVideoStat.views,
+                YtRawVideoStat.likes,
+                YtRawVideoStat.comments,
+            ).where(
+                YtRawVideoStat.video_id == video_id,
+                YtRawVideoStat.observed_at == scored_at,
+            )
         )
+    ).first()
+    scored = (
+        Counters(
+            views=scored_row[0], likes=scored_row[1], comments=scored_row[2]
+        )
+        if scored_row is not None
+        else Counters()
     )
 
     facts = facts_of(payload)
@@ -457,7 +490,13 @@ async def yt_alert_evidence(
             else Counters()
         ),
         counted_at=newest[0] if newest is not None else None,
-        scored_comments=scored_comments,
+        scored_comments=scored.comments,
+        scored=scored,
+        format=(
+            format_of(payload, short_max_seconds=short_max_seconds)
+            if short_max_seconds is not None
+            else None
+        ),
     )
 
 

@@ -107,7 +107,7 @@ def test_the_series_read_through_the_role(migrated: URL) -> None:
         finally:
             await engine.dispose()
 
-    assert len(asyncio.run(read())) == 14
+    assert len(asyncio.run(read())) == 16
 
 
 def test_the_role_reads_when_and_nothing_else_of_api_data(
@@ -178,6 +178,22 @@ def test_the_role_reads_when_a_run_completed_and_what_it_counted(
     ],
 )
 def test_the_role_cannot_read_a_baseline(
+    migrated: URL, statement: str
+) -> None:
+    with pytest.raises(DBAPIError, match="permission denied"):
+        asyncio.run(as_role(migrated, statement))
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "SELECT video_id FROM yt_weekly_entries",
+        "SELECT value FROM yt_weekly_entries",
+        "SELECT videos_scored FROM yt_weekly_lists",
+        "SELECT week_start FROM yt_weekly_lists",
+    ],
+)
+def test_the_role_cannot_read_what_a_list_holds(
     migrated: URL, statement: str
 ) -> None:
     with pytest.raises(DBAPIError, match="permission denied"):

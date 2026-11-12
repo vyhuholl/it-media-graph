@@ -98,6 +98,55 @@
     fail_msg: "The YouTube baseline refresh wrote no run on the restored data: {{ __itgraph_yt_baseline_trial.logs | truncate(800) }}"
     quiet: true
 
+- name: Count the weekly lists
+  ansible.builtin.command:
+    argv: "{{ __itgraph_psql_query + ['SELECT count(*) FROM yt_weekly_lists'] }}"
+  register: __itgraph_lists_before
+  changed_when: false
+
+# The weekly list's pass on the restored data, as a preview: it writes nothing, so
+# the scheduled pass on this copy is not pre-empted for the week it computes.
+- name: Compute the weekly list
+  ansible.builtin.include_tasks: one_shot.yml
+  vars:
+    __itgraph_shot:
+      name: itgraph-trial-yt-weekly
+      labels: "{{ __itgraph_may_reach_database }}"
+      spec:
+        restartPolicy: Never
+        activeDeadlineSeconds: 1800
+        automountServiceAccountToken: false
+        securityContext: "{{ __itgraph_pod_security }}"
+        containers:
+          - name: itgraph
+            image: "{{ itgraph_image }}"
+            args: [yt, weekly, --preview]
+            envFrom:
+              - "{{ __itgraph_from_config }}"
+              - "{{ __itgraph_from_database }}"
+            securityContext: "{{ __itgraph_container_security }}"
+            resources: "{{ __itgraph_job_resources }}"
+            volumeMounts: ["{{ __itgraph_tmp_mount }}"]
+        volumes: ["{{ __itgraph_tmp_volume }}"]
+
+- name: Keep how the weekly list ended
+  ansible.builtin.set_fact:
+    __itgraph_weekly_trial: "{{ __itgraph_shot_result }}"
+
+- name: Count the weekly lists again
+  ansible.builtin.command:
+    argv: "{{ __itgraph_psql_query + ['SELECT count(*) FROM yt_weekly_lists'] }}"
+  register: __itgraph_lists_after
+  changed_when: false
+
+- name: Assert the weekly list was computed and nothing written
+  ansible.builtin.assert:
+    that:
+      - __itgraph_weekly_trial.phase == 'Succeeded'
+      - __itgraph_lists_after.stdout | trim | int == __itgraph_lists_before.stdout | trim | int
+    fail_msg: "The weekly list failed on the restored data, or wrote: {{ __itgraph_weekly_trial.logs | truncate(800) }}"
+    quiet: true
+
 - name: Run a full dump
   ansible.builtin.include_tasks: one_shot.yml
   vars:

@@ -674,3 +674,25 @@ def test_a_youtube_threshold_or_window_must_be_positive(
     env.setenv(name, "0")
     with pytest.raises(ValidationError):
         build()
+
+
+def test_the_weekly_list_s_defaults(env: pytest.MonkeyPatch) -> None:
+    settings = build()
+    assert settings.youtube_weekly_list_z == 2.0
+    assert settings.youtube_weekly_list_size == 10
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("YOUTUBE_WEEKLY_LIST_Z", "0"),
+        ("YOUTUBE_WEEKLY_LIST_Z", "-1"),
+        ("YOUTUBE_WEEKLY_LIST_SIZE", "0"),
+    ],
+)
+def test_a_weekly_list_without_a_floor_or_room_is_refused(
+    env: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    env.setenv(name, value)
+    with pytest.raises(ValidationError, match=name.lower()):
+        build()

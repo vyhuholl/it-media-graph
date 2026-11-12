@@ -89,7 +89,7 @@ YouTube на 23.11 09:47: просмотры 12 345 · лайки 678 · ком�
 📈 Оценка itgraph: просмотры — в 4 раза выше обычного для канала (z 4.2); ещё 2 видео канала выше нормы
 ```
 
-What the site promises an alert holds, every entry holds: YouTube named and the video linked in the entry itself; the counts of the newest stored reading with its time, a counter YouTube did not report left out; the score labelled as itgraph's. The signal's wording is the alert's — a comment entry states its count and the usual count. "One line per channel" is read as one entry per channel; an entry with counts and a link does not fit one line of a message.
+What the site promises an alert holds, every entry holds: YouTube named and the video linked in the entry itself; the counts of the newest stored reading with its time, a counter YouTube did not report left out; the score labelled as itgraph's. A comment entry states its count and the usual count, as an alert does; views and likes say how many times the usual — the scored reading's count over the stored expectation, which an alert cannot say because it keeps no expectation for them. "One line per channel" is read as one entry per channel; an entry with counts and a link does not fit one line of a message.
 
 ### 7. An empty week
 

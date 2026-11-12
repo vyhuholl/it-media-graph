@@ -20,6 +20,11 @@ to tell you when something happened.
 Two queues — Telegram's posts, YouTube's videos — and a destination per
 chat or topic, each keeping its own account. Everything here is the same
 for all of them; what differs is in ``bot/queues.py``.
+
+**And the weekly lists,** one per YouTube topic and week: not alerts, so
+neither capped nor held for the digest, but sent only outside quiet
+hours, in parts, each part marked as it goes — so a failed part is sent
+again and the parts before it are not.
 """
 
 import asyncio
@@ -36,10 +41,26 @@ from itgraph.bot.destinations import (
     youtube_destinations,
 )
 from itgraph.bot.queues import Queue, TelegramQueue, YoutubeQueue
-from itgraph.bot.render import digest_parts
+from itgraph.bot.render import (
+    WeeklyEntryView,
+    digest_parts,
+    message_parts,
+    render_weekly_entry,
+    weekly_empty,
+    weekly_header,
+)
 from itgraph.config import settings
 from itgraph.db.alerts import digest_is_due
+from itgraph.db.models import YtVideoFormat
 from itgraph.db.session import Database
+from itgraph.db.yt_weekly import (
+    PendingList,
+    claim_lists,
+    entry_evidence,
+    mark_entries_delivered,
+    mark_list_delivered,
+    mark_list_failed,
+)
 
 __all__ = [
     "BotStats",
@@ -68,7 +89,11 @@ class Sender:
     that touches the Bot API is small enough to read in full.
     """
 
-    async def send(self, text: str, *, destination: Destination) -> None:
+    async def send(
+        self, text: str, *, destination: Destination, preview: bool = True
+    ) -> None:
+        """Send ``text`` to the destination; ``preview=False`` shows no
+        link preview, for a message of many links."""
         raise NotImplementedError
 
 
@@ -80,6 +105,7 @@ class BotStats:
     digested: int = 0
     excluded: int = 0
     failed: int = 0
+    lists: int = 0
     cycles: int = 0
     # When each destination's digest last went out, by its key. In memory:
     # a bot that restarts sends its next digest at the next hour, not at
@@ -90,6 +116,8 @@ class BotStats:
         line = f"sent {self.sent}, digested {self.digested}"
         if self.excluded:
             line += f", {self.excluded} excluded"
+        if self.lists:
+            line += f", {self.lists} weekly list(s)"
         if self.failed:
             line += f", {self.failed} failed"
         return line
@@ -146,6 +174,9 @@ async def deliver_once(
             )
             await _maybe_digest(
                 database, queue, destination, sender, stats, now=moment
+            )
+            await _deliver_weekly(
+                database, destination, sender, stats, now=moment
             )
         async with database.session() as session:
             await queue.settle(session, at=datetime.now(UTC))
@@ -327,6 +358,158 @@ async def _maybe_digest(
 
     if complete:
         stats.last_digest_at[destination.key] = now
+
+
+async def _deliver_weekly(
+    database: Database,
+    destination: Destination,
+    sender: Sender,
+    stats: BotStats,
+    *,
+    now: datetime,
+) -> None:
+    """Send this topic's undelivered weekly lists, oldest week first.
+
+    Only YouTube's topics have them, and only outside quiet hours: a list
+    computed at night by a run catching up waits for the morning. It is no
+    alert, so the cap does not count it and the digest does not take it.
+    """
+    if destination.route is None or destination.is_quiet(now):
+        return
+    async with database.session() as session:
+        claimed = await claim_lists(session, destination.route)
+    for pending in claimed:
+        await _send_list(
+            database, pending, destination, sender, stats, now=now
+        )
+
+
+async def _send_list(
+    database: Database,
+    pending: PendingList,
+    destination: Destination,
+    sender: Sender,
+    stats: BotStats,
+    *,
+    now: datetime,
+) -> None:
+    """One list, in parts; each part's entries marked as it goes.
+
+    A part that fails counts an attempt on the list and ends this pass's
+    try, so that what follows is not sent ahead of it; the next pass
+    resumes with it, under a header that says the list continues. An entry
+    whose video went before it was sent is left out, and the numbering
+    closes up.
+    """
+
+    def header(*, continued: bool) -> str:
+        return weekly_header(
+            route=pending.route,
+            week_start=pending.week_start,
+            computed_at=pending.computed_at,
+            videos_scored=pending.videos_scored,
+            continued=continued,
+            now=now,
+            zone=destination.zone,
+        )
+
+    shown: list[tuple[int, str]] = []
+    for entry in pending.entries:
+        async with database.session() as session:
+            evidence = await entry_evidence(
+                session,
+                entry,
+                short_max_seconds=settings.youtube_scoring_short_max_seconds,
+            )
+        if evidence is None:
+            continue
+        view = WeeklyEntryView(
+            video_id=entry.video_id,
+            title=evidence.title,
+            channel_title=evidence.channel_title,
+            short=evidence.format is YtVideoFormat.SHORT,
+            started_at=evidence.started_at,
+            counters=evidence.counters,
+            counted_at=evidence.counted_at,
+            metric=entry.metric,
+            z=entry.value,
+            observed=getattr(evidence.scored, entry.metric.value),
+            expected=entry.expected,
+            others=entry.others,
+        )
+        number = pending.sent + len(shown) + 1
+        shown.append(
+            (
+                entry.rank,
+                render_weekly_entry(
+                    number, view, now=now, zone=destination.zone
+                ),
+            )
+        )
+
+    if not shown:
+        if pending.sent == 0:
+            text = weekly_empty(header(continued=False))
+            if not await _send_part(
+                database, pending, destination, sender, stats, text
+            ):
+                return
+        async with database.session() as session:
+            await mark_list_delivered(
+                session, pending.id, at=datetime.now(UTC)
+            )
+        stats.lists += 1
+        return
+
+    parts = message_parts(
+        [text for _, text in shown],
+        first=header(continued=pending.sent > 0),
+        later=header(continued=True),
+    )
+    for part in parts:
+        if not await _send_part(
+            database, pending, destination, sender, stats, part.text
+        ):
+            return
+        async with database.session() as session:
+            await mark_entries_delivered(
+                session,
+                pending.id,
+                [shown[index][0] for index in part.entries],
+                at=datetime.now(UTC),
+            )
+    async with database.session() as session:
+        await mark_list_delivered(session, pending.id, at=datetime.now(UTC))
+    stats.lists += 1
+
+
+async def _send_part(
+    database: Database,
+    pending: PendingList,
+    destination: Destination,
+    sender: Sender,
+    stats: BotStats,
+    text: str,
+) -> bool:
+    """Send one message of a list; a failure counted on the list."""
+    try:
+        await sender.send(text, destination=destination, preview=False)
+    except Exception as exc:
+        # Everything, as for an alert: a list that cannot be sent waits,
+        # and the bot goes on.
+        logger.warning(
+            "could not deliver weekly list %d to %s",
+            pending.id,
+            destination.key,
+            exc_info=True,
+        )
+        async with database.session() as session:
+            await mark_list_failed(
+                session, pending.id, error=f"{type(exc).__name__}: {exc}"
+            )
+        stats.failed += 1
+        return False
+    return True
 
 
 async def run_bot(

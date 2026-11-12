@@ -28,6 +28,7 @@ from itgraph.db.models import (
     FloodEvent,
     Platform,
     PollState,
+    YtAlertRoute,
     YtBaselineRun,
     YtPassOutcome,
     YtQuotaBucket,
@@ -36,6 +37,7 @@ from itgraph.db.models import (
     YtQuotaPool,
     YtRawChannel,
     YtWatchPass,
+    YtWeeklyList,
 )
 from itgraph.db.poll import queue_lag
 from itgraph.db.yt_quota import pool_cap
@@ -278,6 +280,66 @@ async def _baselines(session: AsyncSession) -> list[Family]:
     ]
 
 
+async def _weekly_lists(session: AsyncSession) -> list[Family]:
+    """Per language, when the newest weekly list was computed, and when the
+    newest delivered one went out.
+
+    A list that was computed and not sent, or never computed, shows as
+    the gap between the two or as their age; a failed pass is already the
+    shared monitoring's, as a failed job. From the list rows' language and
+    moments alone — the exporter's role reads nothing else of them.
+    """
+    # Comprehensions, not `dict()`: a result has `keys()`, and `dict()`
+    # would take it for a mapping.
+    computed = {
+        route: moment
+        for route, moment in await session.execute(
+            select(
+                YtWeeklyList.route, func.max(YtWeeklyList.computed_at)
+            ).group_by(YtWeeklyList.route)
+        )
+    }
+    delivered = {
+        route: moment
+        for route, moment in await session.execute(
+            select(YtWeeklyList.route, func.max(YtWeeklyList.delivered_at))
+            .where(YtWeeklyList.delivered_at.is_not(None))
+            .group_by(YtWeeklyList.route)
+        )
+    }
+    return [
+        Family(
+            name,
+            help_text,
+            [
+                (
+                    {"route": route.value},
+                    _timestamp(found[route]) if route in found else 0.0,
+                )
+                for route in YtAlertRoute
+            ],
+        )
+        for name, help_text, found in (
+            (
+                "itgraph_youtube_weekly_list_computed_timestamp_seconds",
+                (
+                    "When the newest weekly list of a language was "
+                    "computed; 0 when none."
+                ),
+                computed,
+            ),
+            (
+                "itgraph_youtube_weekly_list_delivered_timestamp_seconds",
+                (
+                    "When the newest delivered weekly list of a language "
+                    "went out; 0 when none."
+                ),
+                delivered,
+            ),
+        )
+    ]
+
+
 async def read_families(
     session: AsyncSession, *, now: datetime
 ) -> list[Family]:
@@ -287,6 +349,7 @@ async def read_families(
         *await _youtube(session, now),
         *await _alerts(session, now),
         *await _baselines(session),
+        *await _weekly_lists(session),
     ]
 
 

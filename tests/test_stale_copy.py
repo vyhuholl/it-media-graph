@@ -98,3 +98,26 @@ async def test_youtube_s_passes_end_normally_on_a_copy_60_days_old(
         assert (
             await session.scalar(text("SELECT count(*) FROM yt_alerts")) == 0
         )
+
+
+async def test_the_weekly_list_ends_normally_on_a_copy_60_days_old(
+    database: Database,
+) -> None:
+    from ytscoring import a_channel
+
+    from itgraph.scoring.yt_refresh import refresh_yt_baselines
+    from itgraph.scoring.yt_weekly import run_weekly
+
+    await a_channel(database, 1, now=OLD)
+    await refresh_yt_baselines(database, now=OLD)
+
+    summary = await run_weekly(database, now=NOW)
+
+    assert summary.stored
+    assert [route.videos_scored for route in summary.routes] == [0, 0]
+    assert all(route.entries == [] for route in summary.routes)
+    async with database.session() as session:
+        assert (
+            await session.scalar(text("SELECT count(*) FROM yt_weekly_lists"))
+            == 2
+        )

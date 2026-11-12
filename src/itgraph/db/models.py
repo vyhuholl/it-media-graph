@@ -2497,6 +2497,117 @@ class YtCurvePoint(Base):
         )
 
 
+class YtWeeklyList(Base):
+    """One language's list of what took off in one week, and its delivery.
+
+    The week is that of the videos' publication, Monday to Monday in the
+    readers' zone, and ``week_start`` its Monday. The language is the one
+    the channels were labelled with when the list was computed: a list
+    does not move between topics once it exists, unlike an alert, which
+    is routed when sent.
+
+    **It holds nothing YouTube said, and no video.** Its moments, the
+    parameters it was computed with, itgraph's own counts, and how its
+    delivery went; what it lists is in ``yt_weekly_entries``, which go
+    with their readings while the list stays.
+    """
+
+    __tablename__ = "yt_weekly_lists"
+    __table_args__ = (
+        UniqueConstraint(
+            "week_start", "route", name="uq_yt_weekly_lists_week"
+        ),
+        # What the bot asks on every tick: what is still to send.
+        Index(
+            "ix_yt_weekly_lists_undelivered",
+            "week_start",
+            postgresql_where=text("delivered_at IS NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    week_start: Mapped[date] = mapped_column(Date)
+    route: Mapped[YtAlertRoute] = mapped_column(
+        _pg_enum(YtAlertRoute, "yt_alert_route")
+    )
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    # What it was computed with: the floor a video's best score had to
+    # reach, how many channels it could hold, the comment minimum.
+    threshold: Mapped[float] = mapped_column(Float)
+    size: Mapped[int] = mapped_column(Integer)
+    comments_min: Mapped[int] = mapped_column(Integer)
+    # itgraph's counts of that language's week: the videos scored, and the
+    # channels with a video at or above the floor, listed or not.
+    videos_scored: Mapped[int] = mapped_column(Integer)
+    channels_above: Mapped[int] = mapped_column(Integer)
+
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    attempts: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+    def __repr__(self) -> str:
+        return (
+            f"YtWeeklyList(week_start={self.week_start!r}, "
+            f"route={self.route.value!r})"
+        )
+
+
+class YtWeeklyEntry(Base):
+    """One channel on a weekly list: its best video of the week.
+
+    **It lives as long as the reading its score came from**, as an alert
+    does: a video YouTube stops returning takes its entries with it, and
+    the list is sent without them.
+
+    **It copies nothing YouTube said.** ``value`` is the score, ``expected``
+    what the reading was scored against, ``others`` how many more of the
+    channel's videos of that week reached the floor — itgraph's numbers.
+    The title, the channel's name, the counts and the format are read from
+    the stored payloads and readings when the list is sent.
+    """
+
+    __tablename__ = "yt_weekly_entries"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["video_id", "scored_at"],
+            ["yt_raw_video_stats.video_id", "yt_raw_video_stats.observed_at"],
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "list_id", "channel_id", name="uq_yt_weekly_entries_channel"
+        ),
+    )
+
+    list_id: Mapped[int] = mapped_column(
+        ForeignKey("yt_weekly_lists.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    rank: Mapped[int] = mapped_column(Integer, primary_key=True)
+    channel_id: Mapped[str] = mapped_column(
+        ForeignKey("yt_channels.channel_id", ondelete="CASCADE")
+    )
+    video_id: Mapped[str] = mapped_column(Text)
+    # The moment of the reading its score came from: a pointer into
+    # `yt_raw_video_stats`, never a copy of what that reading says.
+    scored_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    metric: Mapped[YtMetric] = mapped_column(_pg_enum(YtMetric, "yt_metric"))
+    value: Mapped[float] = mapped_column(Float)
+    expected: Mapped[float] = mapped_column(Float)
+    others: Mapped[int] = mapped_column(Integer)
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"YtWeeklyEntry(list_id={self.list_id}, rank={self.rank}, "
+            f"video_id={self.video_id!r})"
+        )
+
+
 class YtBackfillWalk(Base):
     """Where the history walk stands with one channel, and what it saw.
 

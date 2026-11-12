@@ -12,7 +12,9 @@ reads the database once rather than once a day.
 
 **A refresh replaces rather than accumulates**, by a run, as Telegram's
 does: readers take the newest *completed* run, and one that dies half way
-is never read.
+is never read. Older runs stay: the weekly list scores each reading
+against the run that was newest when it was taken, which ``runs_in_force``
+names and ``load_yt_baselines`` reads by id.
 """
 
 from collections.abc import Mapping
@@ -42,12 +44,14 @@ from itgraph.scoring.score import Baseline
 __all__ = [
     "SCORED_LANGS",
     "MetricFit",
+    "RunInForce",
     "YtBaselines",
     "YtVideo",
     "load_languages",
     "load_scope",
     "load_videos",
     "load_yt_baselines",
+    "runs_in_force",
     "store_run",
 ]
 
@@ -346,19 +350,72 @@ async def store_run(
     return run
 
 
-async def load_yt_baselines(
-    session: AsyncSession, *, kinds: Mapping[str, YtChannelKind]
-) -> YtBaselines | None:
-    """The newest completed run, or ``None`` if there is none.
+@dataclass(frozen=True, slots=True)
+class RunInForce:
+    """A completed run, and the moment from which scoring read it."""
 
+    run_id: int
+    completed_at: datetime
+
+
+async def runs_in_force(
+    session: AsyncSession, *, since: datetime, until: datetime
+) -> list[RunInForce]:
+    """The runs a reading between two moments was scored against, oldest first.
+
+    The newest run completed at or before ``since``, if any, and every run
+    completed after it and before ``until``: a reading taken at a moment
+    was scored against the newest of them completed by then. A run in
+    progress is none of them.
+    """
+    completed = YtBaselineRun.completed_at.is_not(None)
+    order = (YtBaselineRun.completed_at, YtBaselineRun.id)
+    before = (
+        await session.execute(
+            select(YtBaselineRun.id, YtBaselineRun.completed_at)
+            .where(completed, YtBaselineRun.completed_at <= since)
+            .order_by(*(column.desc() for column in order))
+            .limit(1)
+        )
+    ).all()
+    within = (
+        await session.execute(
+            select(YtBaselineRun.id, YtBaselineRun.completed_at)
+            .where(
+                completed,
+                YtBaselineRun.completed_at > since,
+                YtBaselineRun.completed_at < until,
+            )
+            .order_by(*order)
+        )
+    ).all()
+    return [
+        RunInForce(run_id=run_id, completed_at=completed_at)
+        for run_id, completed_at in [*before, *within]
+    ]
+
+
+async def load_yt_baselines(
+    session: AsyncSession,
+    *,
+    kinds: Mapping[str, YtChannelKind],
+    run_id: int | None = None,
+) -> YtBaselines | None:
+    """The newest completed run, or the completed run ``run_id``.
+
+    ``None`` if there is none, or ``run_id`` names a run not completed.
     ``kinds`` is the scope as it is now, read by the caller: a channel
     relabelled since the run is scored, or not, by its current label.
     """
+    query = select(YtBaselineRun).where(
+        YtBaselineRun.completed_at.is_not(None)
+    )
+    if run_id is not None:
+        query = query.where(YtBaselineRun.id == run_id)
     run = await session.scalar(
-        select(YtBaselineRun)
-        .where(YtBaselineRun.completed_at.is_not(None))
-        .order_by(YtBaselineRun.completed_at.desc(), YtBaselineRun.id.desc())
-        .limit(1)
+        query.order_by(
+            YtBaselineRun.completed_at.desc(), YtBaselineRun.id.desc()
+        ).limit(1)
     )
     if run is None or run.completed_at is None:
         return None

@@ -185,6 +185,20 @@ async def seed(connection: Any) -> None:
         f"VALUES ('views_spike', '{FAKE_VIDEO}', $1, 1, 4)",
         NOW,
     )
+    # A weekly list computed and not yet sent, with its one entry.
+    list_id = await connection.fetchval(
+        "INSERT INTO yt_weekly_lists (week_start, route, computed_at, "
+        "threshold, size, comments_min, videos_scored, channels_above) "
+        "VALUES ('2026-10-26', 'en', $1, 2, 10, 10, 1, 1) RETURNING id",
+        NOW,
+    )
+    await connection.execute(
+        "INSERT INTO yt_weekly_entries (list_id, rank, channel_id, video_id, "
+        "scored_at, metric, value, expected, others) "
+        f"VALUES ($1, 1, '{FAKE_YT}', '{FAKE_VIDEO}', $2, 'views', 4, 1, 0)",
+        list_id,
+        NOW,
+    )
 
 
 async def clear_people(connection: Any) -> None:
@@ -226,6 +240,8 @@ async def test_a_seeded_database_fails_the_read_back(
         "pending mentions",
         "undelivered alerts",
         "undelivered YouTube alerts",
+        "undelivered weekly lists",
+        "undelivered weekly list entries",
         "users in posts: 2",
         "mentions by id in posts: 2",
         "names in posts: 1",
@@ -294,6 +310,20 @@ async def test_neutralising_passes_the_read_back_and_keeps_what_it_should(
         assert (
             await connection.fetchval(
                 "SELECT count(*) FROM yt_alerts WHERE delivered_at IS NULL"
+            )
+            == 0
+        )
+        # The list and its entry are closed, and kept.
+        assert (
+            await connection.fetchval(
+                "SELECT count(*) FROM yt_weekly_entries "
+                "WHERE delivered_at IS NOT NULL"
+            )
+            == 1
+        )
+        assert (
+            await connection.fetchval(
+                "SELECT count(*) FROM yt_weekly_lists WHERE delivered_at IS NULL"
             )
             == 0
         )
@@ -487,6 +517,6 @@ def test_every_table_is_vacuumed() -> None:
 
 
 def test_this_file_is_really_read(tmp_path: Path) -> None:
-    assert len(statements()) >= 9
+    assert len(statements()) >= 11
     # And it no longer touches a payload: the schema's revision does.
     assert "raw_messages" not in NEUTRALISE.split("BEGIN;", 1)[1]

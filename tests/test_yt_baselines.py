@@ -25,7 +25,13 @@ from itgraph.db.models import (
     YtVideoFormat,
 )
 from itgraph.db.session import Database
-from itgraph.db.yt_baselines import load_scope, load_videos, load_yt_baselines
+from itgraph.db.yt_baselines import (
+    RunInForce,
+    load_scope,
+    load_videos,
+    load_yt_baselines,
+    runs_in_force,
+)
 from itgraph.scoring.yt_refresh import refresh_yt_baselines
 
 NOW = datetime(2026, 12, 10, 12, 0, tzinfo=UTC)
@@ -501,3 +507,95 @@ async def test_a_refresh_with_nothing_to_read_completes(
             )
             == 1
         )
+
+
+# --- runs read by the weekly list ------------------------------------
+
+
+def _unfinished() -> YtBaselineRun:
+    return YtBaselineRun(
+        window_days=28,
+        mature_days=29,
+        mature_max_days=120,
+        min_channel_videos=3,
+        recent_videos=5,
+        recent_min_videos=3,
+        recent_max_days=180,
+        min_band_samples=3,
+        min_band_spread_posts=3,
+        channels_in_scope=0,
+        channels_with_baseline=0,
+        channels_on_fallback=0,
+    )
+
+
+async def test_an_older_run_is_read_by_its_id(database: Database) -> None:
+    for channel in (1, 2, 3):
+        await a_channel(database, channel)
+    first = await refresh_yt_baselines(database, now=NOW - timedelta(days=1))
+    second = await refresh_yt_baselines(database, now=NOW)
+
+    async with database.session() as session:
+        kinds = await load_scope(session)
+        newest = await load_yt_baselines(session, kinds=kinds)
+        older = await load_yt_baselines(
+            session, kinds=kinds, run_id=first.run_id
+        )
+
+    assert newest is not None and newest.run_id == second.run_id
+    assert older is not None and older.run_id == first.run_id
+    assert older.computed_at == NOW - timedelta(days=1)
+    assert older.for_video(channel_id(1), LONG, YtMetric.VIEWS) is not None
+
+
+async def test_a_run_in_progress_is_not_read_by_its_id(
+    database: Database,
+) -> None:
+    async with database.session() as session:
+        run = _unfinished()
+        session.add(run)
+        await session.flush()
+        unfinished = run.id
+
+    async with database.session() as session:
+        assert (
+            await load_yt_baselines(session, kinds={}, run_id=unfinished)
+            is None
+        )
+        assert await runs_in_force(session, since=NOW, until=NOW) == []
+
+
+async def test_the_runs_in_force_over_a_period(database: Database) -> None:
+    moments = [NOW - timedelta(days=days) for days in (10, 8, 3, 1)]
+    for moment in moments:
+        await refresh_yt_baselines(database, now=moment)
+    async with database.session() as session:
+        session.add(_unfinished())
+
+    since = NOW - timedelta(days=7)
+    async with database.session() as session:
+        found = await runs_in_force(session, since=since, until=NOW)
+
+    # The run of eight days ago was in force when the period began; the one
+    # of ten was replaced before it.
+    assert [run.completed_at for run in found] == moments[1:]
+    assert all(isinstance(run, RunInForce) for run in found)
+
+
+async def test_a_period_before_any_run_has_none_in_force_at_its_start(
+    database: Database,
+) -> None:
+    await refresh_yt_baselines(database, now=NOW - timedelta(days=2))
+
+    async with database.session() as session:
+        found = await runs_in_force(
+            session, since=NOW - timedelta(days=7), until=NOW
+        )
+        none = await runs_in_force(
+            session,
+            since=NOW - timedelta(days=14),
+            until=NOW - timedelta(days=7),
+        )
+
+    assert [run.completed_at for run in found] == [NOW - timedelta(days=2)]
+    assert none == []
