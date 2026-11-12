@@ -367,7 +367,7 @@ Each workload's pods SHALL receive only the configuration that workload reads. A
 
 #### Scenario: The analysis jobs
 
-- **WHEN** the detection and baseline jobs are rendered
+- **WHEN** the detection and baseline jobs, and the YouTube scoring and baseline jobs, are rendered
 - **THEN** they hold the database's URL and no other secret
 
 #### Scenario: The collector
@@ -415,7 +415,7 @@ Each workload's pods SHALL receive only the configuration that workload reads. A
 
 ### Requirement: Egress Is Denied Unless Named
 
-Every pod's outbound traffic SHALL be denied except what its workload needs. The collector SHALL reach DNS, the database and the proxy, and nothing else. Passes that make no request outside the cluster SHALL reach DNS and the database alone. Of the workloads, only the proxy, the bot, the YouTube jobs and the backup SHALL reach the internet.
+Every pod's outbound traffic SHALL be denied except what its workload needs. The collector SHALL reach DNS, the database and the proxy, and nothing else. Passes that make no request outside the cluster SHALL reach DNS and the database alone. Of the workloads, only the proxy, the bot, the YouTube collection jobs and the backup SHALL reach the internet; the YouTube scoring and baseline jobs SHALL NOT.
 
 #### Scenario: The collector going direct
 
@@ -430,7 +430,7 @@ Every pod's outbound traffic SHALL be denied except what its workload needs. The
 
 #### Scenario: An analysis job
 
-- **WHEN** a detection or baseline pod opens a connection to an address on the internet
+- **WHEN** a detection or baseline pod, or a YouTube scoring or baseline pod, opens a connection to an address on the internet
 - **THEN** the connection does not leave the namespace
 
 #### Scenario: Short-lived pods that may leave
@@ -678,3 +678,19 @@ Every workload that runs itgraph's code SHALL run one image, built by CI from a 
 - **GIVEN** a database image whose major version is not the one the application image's client is built for
 - **WHEN** the role runs
 - **THEN** it fails before changing anything, naming both
+
+### Requirement: YouTube Scoring Runs In Every Environment
+
+The YouTube baseline refresh and scoring pass SHALL be scheduled wherever the role runs, whether or not the environment has a YouTube key, the scoring every fifteen minutes after the poll loop's pass and the refresh daily after the refresh of YouTube data.
+
+#### Scenario: A test environment
+
+- **GIVEN** an environment that does not collect and has no YouTube key
+- **WHEN** the role has run
+- **THEN** the YouTube scoring and refresh CronJobs exist there, and the YouTube collection CronJobs do not
+
+#### Scenario: Production
+
+- **GIVEN** an environment with a YouTube key
+- **WHEN** the role has run
+- **THEN** the YouTube scoring pass is scheduled at minutes 6, 21, 36 and 51 of every hour and the YouTube baseline refresh at 05:30, Moscow time

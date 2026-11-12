@@ -63,6 +63,8 @@ Every series SHALL be worked out at scrape time from durable state in the databa
 | `itgraph_youtube_oldest_payload_age_seconds{kind}` | gauge | how long ago the oldest stored channel payload was read, `kind="channel"` only; absent when there is none |
 | `itgraph_alerts_oldest_undelivered_seconds{platform}` | gauge | the oldest alert of that platform's queue not delivered, held ones included, 0 when none |
 | `itgraph_alerts_failing{platform}` | gauge | undelivered alerts of that platform's queue past the failure-report attempts |
+| `itgraph_baselines_completed_timestamp_seconds{platform}` | gauge | that platform's newest completed baseline run, 0 when none |
+| `itgraph_baselines_channels{platform,state}` | gauge | that run's channels in scope (`state="in_scope"`) and with a baseline (`state="with_baseline"`), 0 when there is no run |
 
 #### Scenario: Quiet hours
 
@@ -82,9 +84,21 @@ Every series SHALL be worked out at scrape time from durable state in the databa
 - **WHEN** a client scrapes
 - **THEN** it counts in neither alert series
 
+#### Scenario: Baselines that stopped being refreshed
+
+- **GIVEN** a newest completed YouTube baseline run three days old, and a Telegram one from this morning
+- **WHEN** a client scrapes
+- **THEN** `itgraph_baselines_completed_timestamp_seconds{platform="youtube"}` is the moment of the three-day-old run, and `{platform="telegram"}` this morning's
+
+#### Scenario: A run in progress
+
+- **GIVEN** a YouTube baseline run started and not completed, after a completed one
+- **WHEN** a client scrapes
+- **THEN** both baseline series of YouTube describe the completed run
+
 ### Requirement: Metrics Carry Nothing YouTube Said
 
-No series SHALL carry a title, handle, description, channel id, video id or statistic read from YouTube. What the exporter reads of YouTube's tables SHALL be limited to when each row was fetched, enforced by the database role it connects as. Of a YouTube alert it SHALL read only its moments and delivery state.
+No series SHALL carry a title, handle, description, channel id, video id or statistic read from YouTube. What the exporter reads of YouTube's tables SHALL be limited to when each row was fetched, enforced by the database role it connects as. Of a YouTube alert it SHALL read only its moments and delivery state; of a baseline run of either platform, only when it completed and how many channels it counted.
 
 #### Scenario: The role cannot read a title
 
@@ -96,6 +110,12 @@ No series SHALL carry a title, handle, description, channel id, video id or stat
 
 - **GIVEN** the exporter's database role
 - **WHEN** it selects the video, the reading or the score of a YouTube alert
+- **THEN** the database refuses with a permission error
+
+#### Scenario: The role cannot read a baseline
+
+- **GIVEN** the exporter's database role
+- **WHEN** it selects a channel's reference, a curve point or a factor of either platform
 - **THEN** the database refuses with a permission error
 
 #### Scenario: The role can write nothing

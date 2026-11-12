@@ -285,12 +285,18 @@ After a restore, the copy SHALL hold nothing that names a person anywhere in a m
 
 ### Requirement: The Service Is Tried On The Restored Data
 
-A restore SHALL end with real writes through the running service, under its read-only root: a baseline refresh, a full dump, and an alert delivered through the environment's own bot to each destination the environment configures. Each SHALL be read back, by rows, and a restore that cannot prove one SHALL say which.
+A restore SHALL end with real writes through the running service, under its read-only root: a baseline refresh of each platform, a full dump, and an alert delivered through the environment's own bot to each destination the environment configures. Each SHALL be read back, by rows, and a restore that cannot prove one SHALL say which.
 
 #### Scenario: The baseline refresh
 
 - **WHEN** the restore runs a baseline refresh on the restored data
 - **THEN** a new completed baseline run is in the database
+
+#### Scenario: The YouTube baseline refresh
+
+- **WHEN** the restore runs a YouTube baseline refresh on the restored data
+- **THEN** a new completed YouTube baseline run is in the database
+- **AND** no request has left the cluster
 
 #### Scenario: A dump of the copy
 
@@ -331,3 +337,9 @@ Scheduled passes on a copy that receives no new data SHALL exit zero, however ol
 - **GIVEN** a restored copy whose newest message is 60 days old
 - **WHEN** detection, baselines and the backup run
 - **THEN** each exits zero
+
+#### Scenario: A copy with no recent YouTube reading
+
+- **GIVEN** a restored copy whose newest YouTube reading is 60 days old
+- **WHEN** the YouTube baseline refresh and scoring pass run
+- **THEN** each exits zero, and the scoring pass raises nothing
