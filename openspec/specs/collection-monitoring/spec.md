@@ -68,6 +68,8 @@ Every series SHALL be worked out at scrape time from durable state in the databa
 | `itgraph_baselines_channels{platform,state}` | gauge | that run's channels in scope (`state="in_scope"`) and with a baseline (`state="with_baseline"`), 0 when there is no run |
 | `itgraph_youtube_weekly_list_computed_timestamp_seconds{route}` | gauge | when the newest weekly list of that language was computed, 0 when none |
 | `itgraph_youtube_weekly_list_delivered_timestamp_seconds{route}` | gauge | when the newest delivered weekly list of that language went out, 0 when none |
+| `itgraph_telegram_weekly_list_computed_timestamp_seconds` | gauge | when Telegram's newest weekly list was computed, 0 when none |
+| `itgraph_telegram_weekly_list_delivered_timestamp_seconds` | gauge | when Telegram's newest delivered weekly list went out, 0 when none |
 
 #### Scenario: Quiet hours
 
@@ -111,6 +113,18 @@ Every series SHALL be worked out at scrape time from durable state in the databa
 - **WHEN** a client scrapes
 - **THEN** both weekly list series are 0 for `route="en"` and `route="ru"`
 
+#### Scenario: Telegram's list computed and not sent
+
+- **GIVEN** this week's Telegram list computed and undelivered, and last week's delivered
+- **WHEN** a client scrapes
+- **THEN** `itgraph_telegram_weekly_list_computed_timestamp_seconds` is this week's moment and `itgraph_telegram_weekly_list_delivered_timestamp_seconds` last week's
+
+#### Scenario: No Telegram list yet
+
+- **GIVEN** no Telegram weekly list
+- **WHEN** a client scrapes
+- **THEN** both Telegram weekly list series are 0
+
 #### Scenario: A refresh that stopped for quota
 
 - **GIVEN** a refresh that completed yesterday and one today that stopped for quota
@@ -125,7 +139,7 @@ Every series SHALL be worked out at scrape time from durable state in the databa
 
 ### Requirement: Metrics Carry Nothing YouTube Said
 
-No series SHALL carry a title, handle, description, channel id, video id or statistic read from YouTube. What the exporter reads of YouTube's tables SHALL be limited to when each row was fetched, enforced by the database role it connects as. Of a YouTube alert it SHALL read only its moments and delivery state; of a baseline run of either platform, only when it completed and how many channels it counted; of a weekly list, only its language and its moments, and nothing of its entries; of a refresh's record, only when it ended and how.
+No series SHALL carry a title, handle, description, channel id, video id or statistic read from YouTube. What the exporter reads of YouTube's tables SHALL be limited to when each row was fetched, enforced by the database role it connects as. Of a YouTube alert it SHALL read only its moments and delivery state; of a baseline run of either platform, only when it completed and how many channels it counted; of a YouTube weekly list, only its language and its moments, and of a Telegram weekly list only its moments, and nothing of either's entries; of a refresh's record, only when it ended and how.
 
 #### Scenario: The role cannot read a title
 
@@ -148,7 +162,7 @@ No series SHALL carry a title, handle, description, channel id, video id or stat
 #### Scenario: The role cannot read what a list holds
 
 - **GIVEN** the exporter's database role
-- **WHEN** it selects any column of a weekly list's entries, or a list's counts or parameters
+- **WHEN** it selects any column of a weekly list's entries of either platform, or a list's week, counts or parameters
 - **THEN** the database refuses with a permission error
 
 #### Scenario: The role cannot read a refresh's counts

@@ -82,9 +82,9 @@ Rules for every task:
 
 ## 8. Rollout
 
-- [ ] 8.1 **(operator)** Cut a release, deploy the role to the test environment, and restore from a fresh full dump. Verify: the restore's report names Telegram's weekly trial, and both series are served.
-- [ ] 8.2 **(operator)** In the test environment, run `itgraph weekly --preview` for the last two ended weeks, then make a Job from `itgraph-weekly` and read the list in the test chat. Verify: the agent reads the previews against the five weeks measured (29–41 channels at the threshold, ten listed) and the message against design.md, Decision 6.
-- [ ] 8.3 **(operator)** Pin the release in production, and ask the infrastructure repository for the alert and panel of design.md, Decision 9. Verify: the first Monday's list is delivered to the alert chat, and the series show it.
+- [x] 8.1 **(operator)** Cut a release, deploy the role to the test environment, and restore from a fresh full dump. Verify: the restore's report names Telegram's weekly trial, and both series are served.
+- [x] 8.2 **(operator)** In the test environment, run `itgraph weekly --preview` for the last two ended weeks, then make a Job from `itgraph-weekly` and read the list in the test chat. Verify: the agent reads the previews against the five weeks measured (29–41 channels at the threshold, ten listed) and the message against design.md, Decision 6.
+- [x] 8.3 **(operator)** Pin the release in production, and ask the infrastructure repository for the alert and panel of design.md, Decision 9. Verify: the first Monday's list is delivered to the alert chat, and the series show it.
 
 ## Workflow follow-up
 

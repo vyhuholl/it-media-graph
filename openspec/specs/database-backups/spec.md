@@ -213,7 +213,7 @@ After loading, the restore SHALL compare every table's row count with the rows t
 
 ### Requirement: A Restored Copy Acts On Nobody
 
-After a restore, nothing in the copy SHALL cause a message to anyone but the environment's own chat, or a request to Telegram, YouTube or B2. Every alert and every weekly list not yet delivered in the dump SHALL be marked delivered before the bot starts, and the restore's read-back SHALL fail if one remains.
+After a restore, nothing in the copy SHALL cause a message to anyone but the environment's own chat, or a request to Telegram, YouTube or B2. Every alert and every weekly list of either platform not yet delivered in the dump SHALL be marked delivered before the bot starts, and the restore's read-back SHALL fail if one remains.
 
 #### Scenario: An undelivered alert in the dump
 
@@ -227,9 +227,15 @@ After a restore, nothing in the copy SHALL cause a message to anyone but the env
 - **WHEN** the restore finishes and the bot starts
 - **THEN** no message of that list is sent, and the list and every entry are marked delivered
 
+#### Scenario: An undelivered Telegram list in the dump
+
+- **GIVEN** a dump holding a Telegram weekly list computed and not delivered
+- **WHEN** the restore finishes and the bot starts
+- **THEN** no message of that list is sent, and the list and every entry are marked delivered
+
 #### Scenario: A weekly list left undelivered fails the read-back
 
-- **GIVEN** a restored copy still holding an undelivered weekly list or entry
+- **GIVEN** a restored copy still holding an undelivered weekly list or entry of either platform
 - **WHEN** the read-back runs
 - **THEN** it fails, naming undelivered weekly lists
 
@@ -297,7 +303,7 @@ After a restore, the copy SHALL hold nothing that names a person anywhere in a m
 
 ### Requirement: The Service Is Tried On The Restored Data
 
-A restore SHALL end with real writes through the running service, under its read-only root: a baseline refresh of each platform, a full dump, and an alert delivered through the environment's own bot to each destination the environment configures; and with the weekly list computed on the copy without writing. Each SHALL be read back, by rows or by the pass's exit, and a restore that cannot prove one SHALL say which.
+A restore SHALL end with real writes through the running service, under its read-only root: a baseline refresh of each platform, a full dump, and an alert delivered through the environment's own bot to each destination the environment configures; and with each platform's weekly list computed on the copy without writing. Each SHALL be read back, by rows or by the pass's exit, and a restore that cannot prove one SHALL say which.
 
 #### Scenario: The baseline refresh
 
@@ -314,6 +320,11 @@ A restore SHALL end with real writes through the running service, under its read
 
 - **WHEN** the restore runs the weekly list's pass with `--preview` on the restored data
 - **THEN** it exits zero, no weekly list is written, and the report says the weekly list was computed
+
+#### Scenario: Telegram's weekly list on the copy
+
+- **WHEN** the restore runs Telegram's weekly pass with `--preview` on the restored data
+- **THEN** it exits zero, no Telegram weekly list is written, and the report says Telegram's weekly list was computed
 
 #### Scenario: A dump of the copy
 
@@ -366,3 +377,9 @@ Scheduled passes on a copy that receives no new data SHALL exit zero, however ol
 - **GIVEN** a restored copy whose newest YouTube reading is 60 days old
 - **WHEN** the weekly list's pass runs
 - **THEN** it exits zero, and each language's list is empty, with no video scored
+
+#### Scenario: Telegram's weekly list on a stale copy
+
+- **GIVEN** a restored copy whose newest Telegram reading is 60 days old
+- **WHEN** Telegram's weekly pass runs
+- **THEN** it exits zero, and its list is empty, with no post scored
