@@ -59,11 +59,11 @@ Because the bands end at 9.5 hours, the list is the best of the week's crossings
 
 ### 4. Scored against the run in force
 
-- **`db/baselines.py`** gains `runs_in_force(session, since, until)`, Telegram's twin of YouTube's: the newest run completed at or before `since`, and every run completed after it and before `until`, oldest first. It also gains `load_baselines(session, run=None)`: the given run, or the newest completed as today. `current_run` and every caller of `load_baselines` stay as they are.
+- **`db/baselines.py`** gains `runs_in_force(session, since, until)`, Telegram's twin of YouTube's: the newest run completed at or before `since`, and every run completed after it and before `until`, oldest first. It also gains `load_baselines(session, run_id=None)`: the given run, or the newest completed as today. `current_run` and every caller of `load_baselines` stay as they are.
 - **`scoring/run.py`'s `_load`** becomes `load_readings(session, since, now)`, unchanged. The weekly pass takes the readings of posts published in the week and taken up to the moment of the run.
 - **Each run's cut**, the readings taken from its completion to the next's, goes through `best_per_post` against that run, with the alerts' metrics, the threshold and the comment minimum. A post's best across cuts is `merge_best`. Readings before the first run are counted, not scored.
 
-The summary names the runs used, the posts published and scored, and the readings with no run before them.
+The summary names the runs used — how many, and their ids — the posts published and scored, and the readings with no run before them.
 
 ### 5. Storage
 
@@ -99,15 +99,19 @@ One list a week, in Russian as the alerts are, every moment in Moscow time. Each
 ```
 📋 Telegram — выше нормы за неделю 16–22 ноября
 Лучший пост каждого канала относительно его обычного уровня; оценено 3 912 постов.
-Оценка itgraph на 23.11 10:00 — рассчитана itgraph.
+Оценка itgraph на 23.11 10:00 MSK — рассчитана itgraph.
 
-1. Канал (@channel) · опубликовано 3 дн. назад
+1. <b>Канал</b> (@channel) · опубликовано 3 дн назад
 https://t.me/channel/1234
 Первая строка поста, не длиннее ста двадцати символов…
-📈 Просмотры — в 4 раза выше обычного для канала (z 4.2); ещё 2 поста канала выше порога
+👁 Просмотры — в 4 раза выше обычного для канала (z 4.2); ещё 2 поста канала выше порога
 ```
 
+- **The moment** reads as YouTube's list's does: the time with the zone, and the date when it is not today's.
+- **The channel** is its title in bold, as YouTube's entry has it, then its `@username`; a channel without a title is named by its `@username` alone.
+- **The age** is written as an alert writes it.
 - **The first line** is the post's text up to its first line break, with spaces collapsed, cut at 120 characters with «…», and escaped. A post with no text has no line.
+- **The signal** is named as the alerts name it: «👁 Просмотры», «❤️ Реакции», «🔁 Пересылки», «💬 Комментарии».
 - **The multiple** is `observed / expected`, written as YouTube's entry writes it.
 - **A comment entry** says «💬 Комментарии — 37, обычно около 3 (z 5.1)», as a comment alert does.
 - **A channel without a username** has no link, as an alert has none.

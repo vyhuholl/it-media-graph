@@ -36,14 +36,19 @@ __all__ = [
     "Carrier",
     "DigestPart",
     "RenderedAlert",
+    "TgWeeklyEntryView",
     "WeeklyEntryView",
     "age_phrase",
     "digest_parts",
     "message_parts",
     "render_cascade",
     "render_spike",
+    "render_tg_weekly_entry",
     "render_weekly_entry",
     "render_youtube",
+    "tg_weekly_empty",
+    "tg_weekly_gone",
+    "tg_weekly_header",
     "units",
     "week_label",
     "weekly_empty",
@@ -646,5 +651,150 @@ def render_weekly_entry(
     score = f"📈 Оценка itgraph: {what} (z {view.z:.1f})"
     if view.others:
         score += f"; ещё {view.others} видео канала выше нормы"
+    lines.append(score)
+    return _fit("\n".join(lines))
+
+
+# How much of a post's first line a Telegram list entry quotes: enough to
+# recognise the post, short enough that ten entries stay a list.
+FIRST_LINE = 120
+
+
+def _posts(count: int) -> str:
+    """A count of posts, in the case Russian puts it: "1 пост", "2 поста",
+    "3 912 постов"."""
+    if count % 10 == 1 and count % 100 != 11:
+        noun = "пост"
+    elif count % 10 in (2, 3, 4) and count % 100 not in (12, 13, 14):
+        noun = "поста"
+    else:
+        noun = "постов"
+    return f"{_count(count)} {noun}"
+
+
+def _first_line(text: str | None) -> str:
+    """A post's first line, spaces collapsed, cut at ``FIRST_LINE``."""
+    lines = (text or "").strip().splitlines()
+    line = " ".join(lines[0].split()) if lines else ""
+    if len(line) <= FIRST_LINE:
+        return _escape(line)
+    return _escape(line[:FIRST_LINE].rstrip()) + "…"
+
+
+@dataclass(frozen=True, slots=True)
+class TgWeeklyEntryView:
+    """What an entry of Telegram's weekly list shows, read at sending.
+
+    ``observed`` and ``expected`` are the entry's own: the scored
+    reading's count of its signal and what it was scored against, so the
+    multiple is honest, as on YouTube's list.
+    """
+
+    channel_title: str | None
+    channel_username: str | None
+    msg_id: int
+    published_at: datetime
+    text: str | None
+    kind: AlertKind
+    z: float
+    observed: float
+    expected: float
+    others: int
+
+
+def tg_weekly_header(
+    *,
+    week_start: date,
+    computed_at: datetime,
+    posts_scored: int,
+    continued: bool,
+    now: datetime,
+    zone: str,
+) -> str:
+    """The head of Telegram's weekly list: whose, which week, whose score.
+
+    A list resumed after a failed part says it continues, as YouTube's
+    does.
+    """
+    week = week_label(week_start)
+    if continued:
+        return f"📋 Telegram — продолжение списка за неделю {week}"
+    clock = _clock(computed_at, now=now, zone=zone)
+    return "\n".join(
+        [
+            f"📋 Telegram — выше нормы за неделю {week}",
+            (
+                "Лучший пост каждого канала относительно его обычного "
+                f"уровня; оценено {_posts(posts_scored)}."
+            ),
+            f"Оценка itgraph на {clock} — рассчитана itgraph.",
+        ]
+    )
+
+
+def tg_weekly_empty(header: str) -> str:
+    """A list with no channel at the threshold: its header, and that.
+
+    The header's count of posts scored tells a quiet week from a copy
+    where nothing was scored at all.
+    """
+    return f"{header}\n\nВыше порога — ничего."
+
+
+def tg_weekly_gone(header: str) -> str:
+    """A list whose every post went, with its channel, before it was sent.
+
+    Not "nothing at the threshold": something was, and the reader is told
+    it can no longer be shown rather than told the week was quiet.
+    """
+    return (
+        f"{header}\n\nПосты этого списка удалены вместе с их каналами, "
+        "показать их нельзя."
+    )
+
+
+def render_tg_weekly_entry(
+    number: int, view: TgWeeklyEntryView, *, now: datetime
+) -> str:
+    """One channel of Telegram's list: its best post, as an alert shows one.
+
+    The channel, the post's age, a link where the channel has a username,
+    the first line of the text, and the signal — a comment entry by its
+    count and the usual, any other by how many times the usual — with its
+    z. No count of views, reactions or forwards, as no Telegram alert
+    has one. No fold note: the count of the channel's other posts at the
+    threshold says the same, once for the week.
+    """
+    if view.channel_title:
+        who = f"<b>{_escape(view.channel_title)}</b>"
+        if view.channel_username:
+            who += f" (@{view.channel_username})"
+    else:
+        who = f"@{view.channel_username}" if view.channel_username else "канал"
+    lines = [
+        f"{number}. {who} · опубликовано {age_phrase(now - view.published_at)}"
+    ]
+
+    link = post_link(view.channel_username, view.msg_id)
+    if link:
+        lines.append(link)
+
+    first = _first_line(view.text)
+    if first:
+        lines.append(first)
+
+    label = SPIKE_LABEL.get(view.kind, "📈 Активность")
+    if view.kind is AlertKind.COMMENT_SPIKE:
+        what = f"{label} — {round(view.observed)}, {_usual(view.expected)}"
+    elif view.expected > 0:
+        what = (
+            f"{label} — {_times(view.observed / view.expected)} выше "
+            "обычного для канала"
+        )
+    else:
+        what = f"{label} — {_magnitude(view.z)} для канала"
+    score = f"{what} (z {view.z:.1f})"
+    if view.others:
+        score += f"; ещё {_posts(view.others)} канала выше порога"
     lines.append(score)
     return _fit("\n".join(lines))

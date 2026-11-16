@@ -44,12 +44,14 @@ from itgraph.scoring.score import COUNTED, Baseline
 
 __all__ = [
     "Baselines",
+    "RunInForce",
     "count_in_scope",
     "current_run",
     "load_baselines",
     "mature_medians",
     "observations",
     "recent_values",
+    "runs_in_force",
     "start_run",
     "store_channel_medians",
     "store_curves",
@@ -601,9 +603,65 @@ async def current_run(session: AsyncSession) -> BaselineRun | None:
     return run
 
 
-async def load_baselines(session: AsyncSession) -> Baselines | None:
-    """Everything the scoring pass needs, from the newest completed run."""
-    run = await current_run(session)
+@dataclass(frozen=True, slots=True)
+class RunInForce:
+    """A completed run, and the moment from which scoring read it."""
+
+    run_id: int
+    completed_at: datetime
+
+
+async def runs_in_force(
+    session: AsyncSession, *, since: datetime, until: datetime
+) -> list[RunInForce]:
+    """The runs a reading between two moments was scored against, oldest first.
+
+    The newest run completed at or before ``since``, if any, and every run
+    completed after it and before ``until``: a reading taken at a moment
+    was scored against the newest of them completed by then. A run in
+    progress is none of them. Telegram's twin of YouTube's.
+    """
+    completed = BaselineRun.completed_at.is_not(None)
+    order = (BaselineRun.completed_at, BaselineRun.id)
+    before = (
+        await session.execute(
+            select(BaselineRun.id, BaselineRun.completed_at)
+            .where(completed, BaselineRun.completed_at <= since)
+            .order_by(*(column.desc() for column in order))
+            .limit(1)
+        )
+    ).all()
+    within = (
+        await session.execute(
+            select(BaselineRun.id, BaselineRun.completed_at)
+            .where(
+                completed,
+                BaselineRun.completed_at > since,
+                BaselineRun.completed_at < until,
+            )
+            .order_by(*order)
+        )
+    ).all()
+    return [
+        RunInForce(run_id=run_id, completed_at=completed_at)
+        for run_id, completed_at in [*before, *within]
+    ]
+
+
+async def load_baselines(
+    session: AsyncSession, *, run_id: int | None = None
+) -> Baselines | None:
+    """Everything the scoring pass needs, from one completed run.
+
+    The newest completed run, or the one named — which is how the weekly
+    list scores a reading against the run in force when it was taken. A
+    run named that never completed is none.
+    """
+    run = (
+        await current_run(session)
+        if run_id is None
+        else await session.get(BaselineRun, run_id)
+    )
     if run is None or run.completed_at is None:
         return None
 

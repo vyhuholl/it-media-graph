@@ -1802,6 +1802,69 @@ def test_the_weekly_list_refuses_a_week_it_cannot_list(
     assert says in result.output
 
 
+def test_telegram_s_weekly_list_builds_no_client_and_takes_no_lease(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    """It runs beside the poll loop, and in a test environment that holds
+    no session at all."""
+    from itgraph.db import session_lease as lease_module
+
+    use_test_database(monkeypatch, database_url)
+
+    def no_client(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("the weekly list must build no Telegram client")
+
+    @asynccontextmanager
+    async def no_lease(command: str, **kwargs: Any) -> AsyncIterator[None]:
+        raise AssertionError("the weekly list must not take the session lease")
+        yield  # pragma: no cover - unreachable by design
+
+    monkeypatch.setattr(tg_client, "build_client", no_client)
+    monkeypatch.setattr(lease_module, "session_lease", no_lease)
+    now = "2026-11-23T10:00:00+03:00"
+
+    previewed = runner.invoke(app, ["weekly", "--preview", "--now", now])
+    assert previewed.exit_code == 0, previewed.output
+    assert "week of 2026-11-16" in previewed.output
+    assert "preview, nothing written" in previewed.output
+    assert "nothing at or above the threshold" in previewed.output
+
+    stored = runner.invoke(app, ["weekly", "--now", now])
+    assert stored.exit_code == 0, stored.output
+    assert "preview" not in stored.output
+
+    again = runner.invoke(
+        app, ["weekly", "--week", "2026-11-16", "--now", now]
+    )
+    assert again.exit_code == 0, again.output
+    assert "already has its list" in again.output
+
+
+@pytest.mark.parametrize(
+    ("week", "says"),
+    [
+        ("2026-11-18", "not a Monday"),
+        ("2026-11-23", "has not ended"),
+        ("next monday", "not a date"),
+    ],
+)
+def test_telegram_s_weekly_list_refuses_a_week_it_cannot_list(
+    monkeypatch: pytest.MonkeyPatch,
+    database_url: str,
+    week: str,
+    says: str,
+) -> None:
+    use_test_database(monkeypatch, database_url)
+
+    result = runner.invoke(
+        app,
+        ["weekly", "--week", week, "--now", "2026-11-23T10:00:00+03:00"],
+    )
+
+    assert result.exit_code != 0
+    assert says in result.output
+
+
 def test_youtube_score_says_so_without_baselines(
     monkeypatch: pytest.MonkeyPatch, database_url: str
 ) -> None:

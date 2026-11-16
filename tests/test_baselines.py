@@ -20,6 +20,7 @@ from itgraph.db.baselines import (
     load_baselines,
     mature_medians,
     observations,
+    runs_in_force,
     start_run,
     store_channel_medians,
     store_curves,
@@ -317,6 +318,86 @@ async def test_an_unfinished_refresh_is_invisible(
     async with database.session() as session:
         assert await current_run(session) is None
         assert await load_baselines(session) is None
+
+
+async def _completed_at(database: Database, run_id: int, at: datetime) -> None:
+    async with database.session() as session:
+        await session.execute(
+            text("UPDATE baseline_runs SET completed_at = :at WHERE id = :id"),
+            {"at": at, "id": run_id},
+        )
+
+
+async def test_the_runs_in_force_over_a_period(database: Database) -> None:
+    """The one before the period, the ones inside it, oldest first; never
+    one in progress, and none completed after the period."""
+    await seed_channel(database, mature_posts=40)
+    older = await a_run(database)
+    before = await a_run(database)
+    inside = await a_run(database)
+    after = await a_run(database)
+    unfinished = await a_run(database, complete=False)
+    await _completed_at(database, older, NOW - timedelta(days=3))
+    await _completed_at(database, before, NOW - timedelta(days=1))
+    await _completed_at(database, inside, NOW + timedelta(days=2))
+    await _completed_at(database, after, NOW + timedelta(days=9))
+
+    async with database.session() as session:
+        found = await runs_in_force(
+            session, since=NOW, until=NOW + timedelta(days=7)
+        )
+
+    assert [run.run_id for run in found] == [before, inside]
+    assert unfinished not in [run.run_id for run in found]
+    assert found[0].completed_at == NOW - timedelta(days=1)
+
+
+async def test_a_named_run_is_loaded_and_none_names_the_newest(
+    database: Database,
+) -> None:
+    await seed_channel(database, mature_posts=40)
+    first = await a_run(database)
+    async with database.session() as session:
+        run = await start_run(
+            session,
+            mature_days=28,
+            min_channel_posts=30,
+            min_band_samples=20,
+            channels_in_scope=1,
+        )
+        await store_channel_medians(
+            session, run, Metric.VIEWS, {CHANNEL: (2000.0, 50)}
+        )
+        await store_curves(
+            session,
+            run,
+            ChannelKind.PERSONAL,
+            Metric.VIEWS,
+            curve=Curve(fractions={"48m": 0.4}, samples={"48m": 600}),
+            factor=0.5,
+            spread=0.3,
+            samples=600,
+        )
+        run.completed_at = NOW + timedelta(hours=1)
+    unfinished = await a_run(database, complete=False)
+
+    async with database.session() as session:
+        named = await load_baselines(session, run_id=first)
+        newest = await load_baselines(session)
+        assert await load_baselines(session, run_id=unfinished) is None
+        assert await load_baselines(session, run_id=999_999) is None
+
+    assert named is not None and newest is not None
+    old = named.for_channel(CHANNEL, Metric.VIEWS)
+    new = newest.for_channel(CHANNEL, Metric.VIEWS)
+    assert old is not None and new is not None
+    assert (old.reference, old.spread, old.curve.fractions["48m"]) == (
+        1000.0,
+        0.38,
+        0.33,
+    )
+    assert (new.reference, new.spread) == (2000.0, 0.3)
+    assert named.run_id == first
 
 
 async def test_the_parameters_travel_with_the_run(

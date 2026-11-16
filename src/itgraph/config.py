@@ -453,6 +453,13 @@ class Settings(BaseSettings):
     # hide the stale-median noise that is a separate fix's to remove.
     alert_spike_fold_hours: float = Field(default=6.0, gt=0)
 
+    # Telegram's weekly list (`add-telegram-weekly-list`): at most this many
+    # channels, each by its best post of the week at or above the alerts'
+    # threshold — which is the list's floor too, with no setting of its
+    # own, so the two cannot drift apart. Measured over five weeks from
+    # 2026-10-12, 29 to 41 channels a week reached it: ten is full.
+    weekly_list_size: int = Field(default=10, ge=1)
+
     # Consecutive messages of one channel closer than this are one post,
     # scored under the first — the "text, then each video" way of
     # publishing, which the album collapse does not see because nothing

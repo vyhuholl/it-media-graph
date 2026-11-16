@@ -67,6 +67,8 @@ __all__ = [
     "RawChannel",
     "RawMessage",
     "RejectReason",
+    "WeeklyEntry",
+    "WeeklyList",
     "YtAlert",
     "YtAlertDelivery",
     "YtAlertKind",
@@ -2637,6 +2639,112 @@ class YtWeeklyEntry(Base):
         return (
             f"YtWeeklyEntry(list_id={self.list_id}, rank={self.rank}, "
             f"video_id={self.video_id!r})"
+        )
+
+
+class WeeklyList(Base):
+    """Telegram's list of what took off in one week, and its delivery.
+
+    The week is that of the posts' publication, Monday to Monday in the
+    readers' zone, and ``week_start`` its Monday. One list a week: the
+    channels carry no language, and the list goes to the one alert chat.
+
+    **It holds no text and no channel name.** Its moments, the parameters
+    it was computed with, itgraph's own counts, and how its delivery went;
+    what it lists is in ``weekly_entries``, which go with their readings
+    while the list stays.
+    """
+
+    __tablename__ = "weekly_lists"
+    __table_args__ = (
+        UniqueConstraint("week_start", name="uq_weekly_lists_week"),
+        # What the bot asks on every tick: what is still to send.
+        Index(
+            "ix_weekly_lists_undelivered",
+            "week_start",
+            postgresql_where=text("delivered_at IS NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    week_start: Mapped[date] = mapped_column(Date)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    # What it was computed with: the alerts' threshold a post's best score
+    # had to reach, how many channels it could hold, the comment minimum.
+    threshold: Mapped[float] = mapped_column(Float)
+    size: Mapped[int] = mapped_column(Integer)
+    comments_min: Mapped[int] = mapped_column(Integer)
+    # itgraph's counts of the week: the posts scored, and the channels
+    # with a post at or above the threshold, listed or not.
+    posts_scored: Mapped[int] = mapped_column(Integer)
+    channels_above: Mapped[int] = mapped_column(Integer)
+
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    attempts: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+    def __repr__(self) -> str:
+        return f"WeeklyList(week_start={self.week_start!r})"
+
+
+class WeeklyEntry(Base):
+    """One channel on Telegram's weekly list: its best post of the week.
+
+    **It lives as long as the reading its score came from**, a row of
+    ``message_metrics``, which goes only with its channel.
+
+    ``value`` is the score, ``observed`` the count of the reading scored
+    on the entry's signal and ``expected`` what it was scored against —
+    kept beside each other, as a Telegram comment alert keeps them, so the
+    bot reads no snapshot. ``others`` is how many more of the channel's
+    posts that week reached the threshold. The post's text and the
+    channel's name are read from the raw layer when the list is sent.
+    """
+
+    __tablename__ = "weekly_entries"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["channel_id", "msg_id", "scored_at"],
+            [
+                "message_metrics.channel_id",
+                "message_metrics.msg_id",
+                "message_metrics.observed_at",
+            ],
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "list_id", "channel_id", name="uq_weekly_entries_channel"
+        ),
+    )
+
+    list_id: Mapped[int] = mapped_column(
+        ForeignKey("weekly_lists.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    rank: Mapped[int] = mapped_column(Integer, primary_key=True)
+    channel_id: Mapped[int] = mapped_column(
+        ForeignKey("channels.tg_id", ondelete="CASCADE")
+    )
+    msg_id: Mapped[int] = mapped_column(BigInteger)
+    # The moment of the reading its score came from: a pointer into
+    # `message_metrics`.
+    scored_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    metric: Mapped[Metric] = mapped_column(_pg_enum(Metric, "metric"))
+    value: Mapped[float] = mapped_column(Float)
+    observed: Mapped[float] = mapped_column(Float)
+    expected: Mapped[float] = mapped_column(Float)
+    others: Mapped[int] = mapped_column(Integer)
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"WeeklyEntry(list_id={self.list_id}, rank={self.rank}, "
+            f"msg_id={self.msg_id})"
         )
 
 

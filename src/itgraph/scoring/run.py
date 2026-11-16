@@ -40,7 +40,7 @@ from itgraph.scoring.score import (
     best_per_post,
 )
 
-__all__ = ["Reading", "SpikeSummary", "run_scoring"]
+__all__ = ["Reading", "SpikeSummary", "load_readings", "run_scoring"]
 
 logger = logging.getLogger(__name__)
 
@@ -154,10 +154,13 @@ class SpikeSummary:
         return line
 
 
-async def _load(
+async def load_readings(
     session: AsyncSession, *, since: datetime, now: datetime
 ) -> list[Reading[int, int]]:
     """Snapshots of posts published in the window, one per reading.
+
+    The scoring pass's own reading of posts, and the weekly list's: what
+    one scores, the other ranks.
 
     Bounded by ``now`` on both sides, which is what makes a replay a
     replay: a pass reasoning from a past moment must not see a reading
@@ -276,7 +279,7 @@ async def run_scoring(
             )
             logger.warning("%s", summary.line())
             return summary
-        readings = await _load(session, since=window, now=moment)
+        readings = await load_readings(session, since=window, now=moment)
 
     def baseline_for(
         reading: Reading[int, int], metric: str

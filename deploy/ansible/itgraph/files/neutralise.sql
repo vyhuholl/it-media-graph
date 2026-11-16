@@ -27,5 +27,7 @@ UPDATE alerts SET delivered_at = now(), delivery = 'digest' WHERE delivered_at I
 UPDATE yt_alerts SET delivered_at = now(), delivery = 'digest' WHERE delivered_at IS NULL;
 UPDATE yt_weekly_lists SET delivered_at = now() WHERE delivered_at IS NULL;
 UPDATE yt_weekly_entries SET delivered_at = now() WHERE delivered_at IS NULL;
+UPDATE weekly_lists SET delivered_at = now() WHERE delivered_at IS NULL;
+UPDATE weekly_entries SET delivered_at = now() WHERE delivered_at IS NULL;
 
 COMMIT;

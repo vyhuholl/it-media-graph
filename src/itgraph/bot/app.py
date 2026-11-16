@@ -21,37 +21,50 @@ Two queues — Telegram's posts, YouTube's videos — and a destination per
 chat or topic, each keeping its own account. Everything here is the same
 for all of them; what differs is in ``bot/queues.py``.
 
-**And the weekly lists,** one per YouTube topic and week: not alerts, so
-neither capped nor held for the digest, but sent only outside quiet
-hours, in parts, each part marked as it goes — so a failed part is sent
-again and the parts before it are not.
+**And the weekly lists** of both platforms — one per YouTube topic and
+week, and Telegram's one a week to its chat: not alerts, so neither
+capped nor held for the digest, but sent only outside quiet hours, in
+parts, each part marked as it goes — so a failed part is sent again and
+the parts before it are not. That loop is one; what differs per platform
+— which lists a destination takes, how a header and an entry read, how
+a list is marked — is its ``WeeklySource``.
 """
 
 import asyncio
 import logging
+from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Protocol
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from itgraph.bot.destinations import (
     Destination,
+    Platform,
     telegram_destination,
     youtube_destinations,
 )
 from itgraph.bot.queues import Queue, TelegramQueue, YoutubeQueue
 from itgraph.bot.render import (
+    TgWeeklyEntryView,
     WeeklyEntryView,
     digest_parts,
     message_parts,
+    render_tg_weekly_entry,
     render_weekly_entry,
+    tg_weekly_empty,
+    tg_weekly_gone,
+    tg_weekly_header,
     weekly_empty,
     weekly_gone,
     weekly_header,
 )
 from itgraph.config import settings
-from itgraph.db.alerts import digest_is_due
+from itgraph.db import weekly as tg_weekly
+from itgraph.db.alerts import alert_evidence, digest_is_due
 from itgraph.db.models import YtVideoFormat
 from itgraph.db.session import Database
 from itgraph.db.yt_weekly import (
@@ -66,6 +79,9 @@ from itgraph.db.yt_weekly import (
 __all__ = [
     "BotStats",
     "Sender",
+    "TelegramLists",
+    "WeeklySource",
+    "YoutubeLists",
     "configured_queues",
     "deliver_once",
     "run_bot",
@@ -177,7 +193,12 @@ async def deliver_once(
                 database, queue, destination, sender, stats, now=moment
             )
             await _deliver_weekly(
-                database, destination, sender, stats, now=moment
+                database,
+                WEEKLY[queue.platform],
+                destination,
+                sender,
+                stats,
+                now=moment,
             )
         async with database.session() as session:
             await queue.settle(session, at=datetime.now(UTC))
@@ -361,33 +382,320 @@ async def _maybe_digest(
         stats.last_digest_at[destination.key] = now
 
 
-async def _deliver_weekly(
+class WeeklyPending(Protocol):
+    """What delivery needs to know of a claimed list, whichever platform.
+
+    ``sent`` is how many of its entries went in an earlier part, and
+    ``entries`` those still to send.
+    """
+
+    @property
+    def id(self) -> int: ...
+
+    @property
+    def sent(self) -> int: ...
+
+    @property
+    def entries(self) -> Sequence[object]: ...
+
+
+class WeeklySource[L: WeeklyPending](ABC):
+    """One platform's weekly lists, as delivery sees them."""
+
+    @abstractmethod
+    def takes(self, destination: Destination) -> bool:
+        """Whether this destination receives this platform's lists."""
+
+    @abstractmethod
+    async def claim(
+        self, session: AsyncSession, destination: Destination
+    ) -> Sequence[L]:
+        """The destination's undelivered lists, oldest week first."""
+
+    @abstractmethod
+    def header(
+        self,
+        pending: L,
+        destination: Destination,
+        *,
+        continued: bool,
+        now: datetime,
+    ) -> str: ...
+
+    @abstractmethod
+    def empty(self, header: str) -> str:
+        """A list with nothing on it."""
+
+    @abstractmethod
+    def gone(self, header: str) -> str:
+        """A list whose every entry went before it could be sent."""
+
+    @abstractmethod
+    async def show(
+        self,
+        database: Database,
+        pending: L,
+        destination: Destination,
+        *,
+        now: datetime,
+    ) -> list[tuple[int, str]]:
+        """Each entry whose post or video is still there, as its rank and
+        text, numbered on from the entries already sent."""
+
+    @abstractmethod
+    async def entries_delivered(
+        self,
+        session: AsyncSession,
+        list_id: int,
+        ranks: Sequence[int],
+        *,
+        at: datetime,
+    ) -> None: ...
+
+    @abstractmethod
+    async def delivered(
+        self, session: AsyncSession, list_id: int, *, at: datetime
+    ) -> None: ...
+
+    @abstractmethod
+    async def failed(
+        self, session: AsyncSession, list_id: int, *, error: str
+    ) -> None: ...
+
+
+class YoutubeLists(WeeklySource[PendingList]):
+    """``yt_weekly_lists``: each language's list to its topic."""
+
+    def takes(self, destination: Destination) -> bool:
+        return destination.route is not None
+
+    async def claim(
+        self, session: AsyncSession, destination: Destination
+    ) -> Sequence[PendingList]:
+        if destination.route is None:  # pragma: no cover - takes() said so
+            return []
+        return await claim_lists(session, destination.route)
+
+    def header(
+        self,
+        pending: PendingList,
+        destination: Destination,
+        *,
+        continued: bool,
+        now: datetime,
+    ) -> str:
+        return weekly_header(
+            route=pending.route,
+            week_start=pending.week_start,
+            computed_at=pending.computed_at,
+            videos_scored=pending.videos_scored,
+            continued=continued,
+            now=now,
+            zone=destination.zone,
+        )
+
+    def empty(self, header: str) -> str:
+        return weekly_empty(header)
+
+    def gone(self, header: str) -> str:
+        return weekly_gone(header)
+
+    async def show(
+        self,
+        database: Database,
+        pending: PendingList,
+        destination: Destination,
+        *,
+        now: datetime,
+    ) -> list[tuple[int, str]]:
+        shown: list[tuple[int, str]] = []
+        for entry in pending.entries:
+            async with database.session() as session:
+                evidence = await entry_evidence(
+                    session,
+                    entry,
+                    short_max_seconds=settings.youtube_scoring_short_max_seconds,
+                )
+            if evidence is None:
+                continue
+            view = WeeklyEntryView(
+                video_id=entry.video_id,
+                title=evidence.title,
+                channel_title=evidence.channel_title,
+                short=evidence.format is YtVideoFormat.SHORT,
+                started_at=evidence.started_at,
+                counters=evidence.counters,
+                counted_at=evidence.counted_at,
+                metric=entry.metric,
+                z=entry.value,
+                observed=getattr(evidence.scored, entry.metric.value),
+                expected=entry.expected,
+                others=entry.others,
+            )
+            number = pending.sent + len(shown) + 1
+            shown.append(
+                (
+                    entry.rank,
+                    render_weekly_entry(
+                        number, view, now=now, zone=destination.zone
+                    ),
+                )
+            )
+        return shown
+
+    async def entries_delivered(
+        self,
+        session: AsyncSession,
+        list_id: int,
+        ranks: Sequence[int],
+        *,
+        at: datetime,
+    ) -> None:
+        await mark_entries_delivered(session, list_id, ranks, at=at)
+
+    async def delivered(
+        self, session: AsyncSession, list_id: int, *, at: datetime
+    ) -> None:
+        await mark_list_delivered(session, list_id, at=at)
+
+    async def failed(
+        self, session: AsyncSession, list_id: int, *, error: str
+    ) -> None:
+        await mark_list_failed(session, list_id, error=error)
+
+
+class TelegramLists(WeeklySource[tg_weekly.PendingList]):
+    """``weekly_lists``: one list a week, to Telegram's chat.
+
+    An entry's post is read at sending as an alert's is, by
+    ``alert_evidence``; who carried it is not this message's subject.
+    """
+
+    def takes(self, destination: Destination) -> bool:
+        return destination.platform is Platform.TELEGRAM
+
+    async def claim(
+        self, session: AsyncSession, destination: Destination
+    ) -> Sequence[tg_weekly.PendingList]:
+        return await tg_weekly.claim_lists(session)
+
+    def header(
+        self,
+        pending: tg_weekly.PendingList,
+        destination: Destination,
+        *,
+        continued: bool,
+        now: datetime,
+    ) -> str:
+        return tg_weekly_header(
+            week_start=pending.week_start,
+            computed_at=pending.computed_at,
+            posts_scored=pending.posts_scored,
+            continued=continued,
+            now=now,
+            zone=destination.zone,
+        )
+
+    def empty(self, header: str) -> str:
+        return tg_weekly_empty(header)
+
+    def gone(self, header: str) -> str:
+        return tg_weekly_gone(header)
+
+    async def show(
+        self,
+        database: Database,
+        pending: tg_weekly.PendingList,
+        destination: Destination,
+        *,
+        now: datetime,
+    ) -> list[tuple[int, str]]:
+        shown: list[tuple[int, str]] = []
+        for entry in pending.entries:
+            async with database.session() as session:
+                evidence = await alert_evidence(
+                    session,
+                    channel_id=entry.channel_id,
+                    msg_id=entry.msg_id,
+                    window=timedelta(0),
+                )
+            if evidence is None:
+                continue
+            view = TgWeeklyEntryView(
+                channel_title=evidence.channel_title,
+                channel_username=evidence.channel_username,
+                msg_id=entry.msg_id,
+                published_at=evidence.published_at,
+                text=evidence.text,
+                kind=entry.metric.alert_kind(),
+                z=entry.value,
+                observed=entry.observed,
+                expected=entry.expected,
+                others=entry.others,
+            )
+            number = pending.sent + len(shown) + 1
+            shown.append(
+                (entry.rank, render_tg_weekly_entry(number, view, now=now))
+            )
+        return shown
+
+    async def entries_delivered(
+        self,
+        session: AsyncSession,
+        list_id: int,
+        ranks: Sequence[int],
+        *,
+        at: datetime,
+    ) -> None:
+        await tg_weekly.mark_entries_delivered(session, list_id, ranks, at=at)
+
+    async def delivered(
+        self, session: AsyncSession, list_id: int, *, at: datetime
+    ) -> None:
+        await tg_weekly.mark_list_delivered(session, list_id, at=at)
+
+    async def failed(
+        self, session: AsyncSession, list_id: int, *, error: str
+    ) -> None:
+        await tg_weekly.mark_list_failed(session, list_id, error=error)
+
+
+# Each queue's platform, and its lists.
+WEEKLY: dict[Platform, WeeklySource[Any]] = {
+    Platform.TELEGRAM: TelegramLists(),
+    Platform.YOUTUBE: YoutubeLists(),
+}
+
+
+async def _deliver_weekly[L: WeeklyPending](
     database: Database,
+    source: WeeklySource[L],
     destination: Destination,
     sender: Sender,
     stats: BotStats,
     *,
     now: datetime,
 ) -> None:
-    """Send this topic's undelivered weekly lists, oldest week first.
+    """Send this destination's undelivered weekly lists, oldest week first.
 
-    Only YouTube's topics have them, and only outside quiet hours: a list
-    computed at night by a run catching up waits for the morning. It is no
-    alert, so the cap does not count it and the digest does not take it.
+    Only outside quiet hours: a list computed at night by a run catching
+    up waits for the morning. It is no alert, so the cap does not count it
+    and the digest does not take it.
     """
-    if destination.route is None or destination.is_quiet(now):
+    if not source.takes(destination) or destination.is_quiet(now):
         return
     async with database.session() as session:
-        claimed = await claim_lists(session, destination.route)
+        claimed = await source.claim(session, destination)
     for pending in claimed:
         await _send_list(
-            database, pending, destination, sender, stats, now=now
+            database, source, pending, destination, sender, stats, now=now
         )
 
 
-async def _send_list(
+async def _send_list[L: WeeklyPending](
     database: Database,
-    pending: PendingList,
+    source: WeeklySource[L],
+    pending: L,
     destination: Destination,
     sender: Sender,
     stats: BotStats,
@@ -399,70 +707,30 @@ async def _send_list(
     A part that fails counts an attempt on the list and ends this pass's
     try, so that what follows is not sent ahead of it; the next pass
     resumes with it, under a header that says the list continues. An entry
-    whose video went before it was sent is left out, and the numbering
-    closes up.
+    whose post or video went before it was sent is left out, and the
+    numbering closes up.
     """
 
     def header(*, continued: bool) -> str:
-        return weekly_header(
-            route=pending.route,
-            week_start=pending.week_start,
-            computed_at=pending.computed_at,
-            videos_scored=pending.videos_scored,
-            continued=continued,
-            now=now,
-            zone=destination.zone,
+        return source.header(
+            pending, destination, continued=continued, now=now
         )
 
-    shown: list[tuple[int, str]] = []
-    for entry in pending.entries:
-        async with database.session() as session:
-            evidence = await entry_evidence(
-                session,
-                entry,
-                short_max_seconds=settings.youtube_scoring_short_max_seconds,
-            )
-        if evidence is None:
-            continue
-        view = WeeklyEntryView(
-            video_id=entry.video_id,
-            title=evidence.title,
-            channel_title=evidence.channel_title,
-            short=evidence.format is YtVideoFormat.SHORT,
-            started_at=evidence.started_at,
-            counters=evidence.counters,
-            counted_at=evidence.counted_at,
-            metric=entry.metric,
-            z=entry.value,
-            observed=getattr(evidence.scored, entry.metric.value),
-            expected=entry.expected,
-            others=entry.others,
-        )
-        number = pending.sent + len(shown) + 1
-        shown.append(
-            (
-                entry.rank,
-                render_weekly_entry(
-                    number, view, now=now, zone=destination.zone
-                ),
-            )
-        )
+    shown = await source.show(database, pending, destination, now=now)
 
     if not shown:
         # Nothing went yet: an empty week is said, and so is a list whose
-        # every video went before it could be sent. What is left of a list
+        # every entry went before it could be sent. What is left of a list
         # whose first part went is nothing to say.
         if pending.sent == 0:
             head = header(continued=False)
-            text = weekly_gone(head) if pending.entries else weekly_empty(head)
+            text = source.gone(head) if pending.entries else source.empty(head)
             if not await _send_part(
-                database, pending, destination, sender, stats, text
+                database, source, pending, destination, sender, stats, text
             ):
                 return
         async with database.session() as session:
-            await mark_list_delivered(
-                session, pending.id, at=datetime.now(UTC)
-            )
+            await source.delivered(session, pending.id, at=datetime.now(UTC))
         stats.lists += 1
         return
 
@@ -473,24 +741,25 @@ async def _send_list(
     )
     for part in parts:
         if not await _send_part(
-            database, pending, destination, sender, stats, part.text
+            database, source, pending, destination, sender, stats, part.text
         ):
             return
         async with database.session() as session:
-            await mark_entries_delivered(
+            await source.entries_delivered(
                 session,
                 pending.id,
                 [shown[index][0] for index in part.entries],
                 at=datetime.now(UTC),
             )
     async with database.session() as session:
-        await mark_list_delivered(session, pending.id, at=datetime.now(UTC))
+        await source.delivered(session, pending.id, at=datetime.now(UTC))
     stats.lists += 1
 
 
-async def _send_part(
+async def _send_part[L: WeeklyPending](
     database: Database,
-    pending: PendingList,
+    source: WeeklySource[L],
+    pending: L,
     destination: Destination,
     sender: Sender,
     stats: BotStats,
@@ -503,13 +772,14 @@ async def _send_part(
         # Everything, as for an alert: a list that cannot be sent waits,
         # and the bot goes on.
         logger.warning(
-            "could not deliver weekly list %d to %s",
+            "could not deliver %s weekly list %d to %s",
+            destination.platform.value,
             pending.id,
             destination.key,
             exc_info=True,
         )
         async with database.session() as session:
-            await mark_list_failed(
+            await source.failed(
                 session, pending.id, error=f"{type(exc).__name__}: {exc}"
             )
         stats.failed += 1

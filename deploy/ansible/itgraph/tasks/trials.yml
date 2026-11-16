@@ -147,6 +147,55 @@
     fail_msg: "The weekly list failed on the restored data, or wrote: {{ __itgraph_weekly_trial.logs | truncate(800) }}"
     quiet: true
 
+- name: Count Telegram's weekly lists
+  ansible.builtin.command:
+    argv: "{{ __itgraph_psql_query + ['SELECT count(*) FROM weekly_lists'] }}"
+  register: __itgraph_tg_lists_before
+  changed_when: false
+
+# Telegram's weekly pass, the same way: a preview, so the scheduled pass on this
+# copy still lists the week it computes.
+- name: Compute Telegram's weekly list
+  ansible.builtin.include_tasks: one_shot.yml
+  vars:
+    __itgraph_shot:
+      name: itgraph-trial-weekly
+      labels: "{{ __itgraph_may_reach_database }}"
+      spec:
+        restartPolicy: Never
+        activeDeadlineSeconds: 1800
+        automountServiceAccountToken: false
+        securityContext: "{{ __itgraph_pod_security }}"
+        containers:
+          - name: itgraph
+            image: "{{ itgraph_image }}"
+            args: [weekly, --preview]
+            envFrom:
+              - "{{ __itgraph_from_config }}"
+              - "{{ __itgraph_from_database }}"
+            securityContext: "{{ __itgraph_container_security }}"
+            resources: "{{ __itgraph_job_resources }}"
+            volumeMounts: ["{{ __itgraph_tmp_mount }}"]
+        volumes: ["{{ __itgraph_tmp_volume }}"]
+
+- name: Keep how Telegram's weekly list ended
+  ansible.builtin.set_fact:
+    __itgraph_tg_weekly_trial: "{{ __itgraph_shot_result }}"
+
+- name: Count Telegram's weekly lists again
+  ansible.builtin.command:
+    argv: "{{ __itgraph_psql_query + ['SELECT count(*) FROM weekly_lists'] }}"
+  register: __itgraph_tg_lists_after
+  changed_when: false
+
+- name: Assert Telegram's weekly list was computed and nothing written
+  ansible.builtin.assert:
+    that:
+      - __itgraph_tg_weekly_trial.phase == 'Succeeded'
+      - __itgraph_tg_lists_after.stdout | trim | int == __itgraph_tg_lists_before.stdout | trim | int
+    fail_msg: "Telegram's weekly list failed on the restored data, or wrote: {{ __itgraph_tg_weekly_trial.logs | truncate(800) }}"
+    quiet: true
+
 - name: Run a full dump
   ansible.builtin.include_tasks: one_shot.yml
   vars:

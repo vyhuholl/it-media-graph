@@ -759,3 +759,16 @@ def test_a_weekly_list_without_a_floor_or_room_is_refused(
     env.setenv(name, value)
     with pytest.raises(ValidationError, match=name.lower()):
         build()
+
+
+def test_telegram_s_weekly_list_holds_ten(env: pytest.MonkeyPatch) -> None:
+    assert build().weekly_list_size == 10
+
+
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_telegram_s_weekly_list_without_room_is_refused(
+    env: pytest.MonkeyPatch, value: str
+) -> None:
+    env.setenv("WEEKLY_LIST_SIZE", value)
+    with pytest.raises(ValidationError, match="weekly_list_size"):
+        build()

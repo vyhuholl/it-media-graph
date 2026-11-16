@@ -278,6 +278,8 @@ SCHEDULES = {
     "itgraph-yt-baselines": ("30 5 * * *", 82800, 10800),
     # Monday morning; six days to catch up a missed Monday.
     "itgraph-yt-weekly": ("0 10 * * 1", 518400, 1800),
+    # Telegram's list, the same Monday morning and the same six days.
+    "itgraph-weekly": ("0 10 * * 1", 518400, 1800),
     # After the Pacific reset in either season.
     "itgraph-yt-backfill": ("30 11 * * *", 82800, 3000),
 }
@@ -408,6 +410,7 @@ SECRET_KEYS = {
         ("CronJob", "itgraph-yt-score", set()),
         ("CronJob", "itgraph-yt-baselines", set()),
         ("CronJob", "itgraph-yt-weekly", set()),
+        ("CronJob", "itgraph-weekly", set()),
         ("CronJob", "itgraph-backup", {"B2_APPLICATION_KEY"}),
         ("CronJob", "itgraph-yt-watch", {"YOUTUBE_API_KEY"}),
         ("CronJob", "itgraph-yt-refresh", {"YOUTUBE_API_KEY"}),
@@ -476,6 +479,7 @@ def test_a_key_absent_means_no_youtube_job_and_no_key(
         "itgraph-yt-score",
         "itgraph-yt-baselines",
         "itgraph-yt-weekly",
+        "itgraph-weekly",
     }
     assert not [
         s
@@ -485,6 +489,31 @@ def test_a_key_absent_means_no_youtube_job_and_no_key(
     for _, _, spec in pods(objects):
         for container in containers(spec):
             assert "YOUTUBE_API_KEY" not in keys_read(objects, container)
+
+
+@pytest.mark.parametrize("environment", SETS)
+def test_telegram_s_weekly_list_runs_in_every_environment(
+    rendered: dict[str, dict[str, Objects]], environment: str
+) -> None:
+    """Collecting or not: it reads collected data alone, so a test
+    environment lists its restored copy into its own chat."""
+    objects = everything(rendered[environment])
+    job = named(objects, "CronJob", "itgraph-weekly")
+    spec = job["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+    [container] = spec["containers"]
+    assert container["args"] == ["weekly"]
+    assert job["spec"]["schedule"] == "0 10 * * 1"
+    assert job["spec"]["timeZone"] == "Europe/Moscow"
+    keys = keys_of(objects, "CronJob", "itgraph-weekly")
+    assert keys & SECRET_KEYS == set()
+    assert "DATABASE_URL" in keys
+    assert not [m for m in spec.get("volumes", []) if "session" in m["name"]]
+    labels = job["spec"]["jobTemplate"]["spec"]["template"]["metadata"][
+        "labels"
+    ]
+    assert {k for k in labels if k.startswith("itgraph/")} == {
+        "itgraph/database"
+    }
 
 
 def test_no_offsite_means_no_key_and_no_way_out(
@@ -509,6 +538,7 @@ REACH = {
     "itgraph-yt-score": {"itgraph/database"},
     "itgraph-yt-baselines": {"itgraph/database"},
     "itgraph-yt-weekly": {"itgraph/database"},
+    "itgraph-weekly": {"itgraph/database"},
     "itgraph-backup": {"itgraph/database", "itgraph/internet"},
     "itgraph-yt-watch": {"itgraph/database", "itgraph/internet"},
     "itgraph-yt-refresh": {"itgraph/database", "itgraph/internet"},

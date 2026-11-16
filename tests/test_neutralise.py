@@ -206,6 +206,31 @@ async def seed(connection: Any) -> None:
         list_id,
         NOW,
     )
+    # Telegram's list, half sent too: a second post of another channel, read.
+    await connection.execute(
+        "INSERT INTO raw_messages (channel_id, msg_id, payload) "
+        "VALUES (5, 12, $1::jsonb)",
+        json.dumps({"id": 12, "_": "Message", "message": "another post"}),
+    )
+    await connection.execute(
+        "INSERT INTO message_metrics (channel_id, msg_id, observed_at, views) "
+        "VALUES (5, 12, $1, 45)",
+        NOW,
+    )
+    tg_list = await connection.fetchval(
+        "INSERT INTO weekly_lists (week_start, computed_at, threshold, size, "
+        "comments_min, posts_scored, channels_above) "
+        "VALUES ('2026-10-26', $1, 3.7, 10, 10, 2, 2) RETURNING id",
+        NOW,
+    )
+    await connection.execute(
+        "INSERT INTO weekly_entries (list_id, rank, channel_id, msg_id, "
+        "scored_at, metric, value, observed, expected, others, delivered_at) "
+        "VALUES ($1, 1, 4, 10, $2, 'views', 5, 123, 20, 0, $2), "
+        "($1, 2, 5, 12, $2, 'views', 4, 45, 10, 0, NULL)",
+        tg_list,
+        NOW,
+    )
 
 
 async def clear_people(connection: Any) -> None:
@@ -249,6 +274,8 @@ async def test_a_seeded_database_fails_the_read_back(
         "undelivered YouTube alerts",
         "undelivered weekly lists",
         "undelivered weekly list entries",
+        "undelivered Telegram weekly lists: 1",
+        "undelivered Telegram weekly list entries: 1",
         "users in posts: 2",
         "mentions by id in posts: 2",
         "names in posts: 1",
@@ -306,7 +333,7 @@ async def test_neutralising_passes_the_read_back_and_keeps_what_it_should(
 
         assert (
             await connection.fetchval("SELECT count(*) FROM message_metrics")
-            == 1
+            == 2
         )
         assert (
             await connection.fetchval(
@@ -338,6 +365,26 @@ async def test_neutralising_passes_the_read_back_and_keeps_what_it_should(
         assert (
             await connection.fetchval(
                 "SELECT count(*) FROM yt_weekly_lists WHERE delivered_at IS NULL"
+            )
+            == 0
+        )
+        # Telegram's list too, its entries kept with their readings.
+        assert (
+            await connection.fetchval(
+                "SELECT count(*) FROM weekly_entries "
+                "WHERE delivered_at IS NOT NULL"
+            )
+            == 2
+        )
+        assert (
+            await connection.fetchval(
+                "SELECT delivered_at FROM weekly_entries WHERE rank = 1"
+            )
+            == NOW
+        )
+        assert (
+            await connection.fetchval(
+                "SELECT count(*) FROM weekly_lists WHERE delivered_at IS NULL"
             )
             == 0
         )
@@ -531,6 +578,6 @@ def test_every_table_is_vacuumed() -> None:
 
 
 def test_this_file_is_really_read(tmp_path: Path) -> None:
-    assert len(statements()) >= 11
+    assert len(statements()) >= 13
     # And it no longer touches a payload: the schema's revision does.
     assert "raw_messages" not in NEUTRALISE.split("BEGIN;", 1)[1]

@@ -877,6 +877,67 @@ def score(
     _run(run())
 
 
+@app.command()
+def weekly(
+    week: Annotated[
+        str | None,
+        typer.Option(
+            "--week",
+            help=(
+                "The Monday of the week to list, YYYY-MM-DD, instead of the "
+                "last one that has ended."
+            ),
+        ),
+    ] = None,
+    preview: Annotated[
+        bool,
+        typer.Option(
+            "--preview",
+            help="Print the list by ids and scores, and write nothing.",
+        ),
+    ] = False,
+    now: NowOption = None,
+) -> None:
+    """List the Telegram channels whose posts took off in a week.
+
+    A week is Monday to Monday, Moscow time, by publication. Each reading
+    is scored against the baseline run that was newest when it was taken,
+    as the live pass scored it; a channel is listed once, by its best post
+    at or above the alerts' threshold, best first. Writes the week's list
+    for the bot to send, once: a week that has one is left as it is. Makes
+    no Telegram request and takes no session lease. Runs on Mondays on the
+    host.
+    """
+    from itgraph.db.session import Database
+    from itgraph.scoring.weekly import run_weekly
+    from itgraph.scoring.weeks import WeekRefused
+
+    moment = _moment(now)
+    start: date | None = None
+    if week is not None:
+        try:
+            start = date.fromisoformat(week)
+        except ValueError:
+            raise typer.BadParameter(f"--week is not a date: {week}") from None
+
+    async def run() -> None:
+        database = Database()
+        try:
+            summary = await run_weekly(
+                database, week=start, now=moment, preview=preview
+            )
+        except WeekRefused as exc:
+            raise typer.BadParameter(f"--week: {exc}") from None
+        finally:
+            await database.dispose()
+        typer.echo(summary.line())
+        if preview:
+            for line in summary.preview():
+                typer.echo(line)
+
+    _run(run())
+
+
 def _hours(age: timedelta) -> str:
     """A post's age, as the replay listing prints it."""
     minutes = max(int(age.total_seconds()) // 60, 0)

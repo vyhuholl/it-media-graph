@@ -22,6 +22,7 @@ from itgraph.db.models import (
     FloodEvent,
     PollState,
     RawMessage,
+    WeeklyList,
     YtAlertRoute,
     YtBaselineRun,
     YtChannel,
@@ -70,6 +71,8 @@ EXPECTED = {
     "itgraph_baselines_channels",
     "itgraph_youtube_weekly_list_computed_timestamp_seconds",
     "itgraph_youtube_weekly_list_delivered_timestamp_seconds",
+    "itgraph_telegram_weekly_list_computed_timestamp_seconds",
+    "itgraph_telegram_weekly_list_delivered_timestamp_seconds",
 }
 
 
@@ -758,3 +761,56 @@ async def test_no_list_reads_as_zero(database: Database) -> None:
     ):
         for route in ("en", "ru"):
             assert value(read, name, route=route) == 0
+
+
+def _telegram_list(
+    week: date, *, computed: datetime, delivered: datetime | None
+) -> WeeklyList:
+    return WeeklyList(
+        week_start=week,
+        computed_at=computed,
+        threshold=3.7,
+        size=10,
+        comments_min=10,
+        posts_scored=0,
+        channels_above=0,
+        delivered_at=delivered,
+    )
+
+
+async def test_telegram_s_list_computed_and_not_sent(
+    database: Database,
+) -> None:
+    last_week = NOW - timedelta(days=7)
+    async with database.session() as session:
+        session.add(
+            _telegram_list(
+                date(2026, 10, 26),
+                computed=last_week,
+                delivered=last_week + timedelta(minutes=1),
+            )
+        )
+        session.add(
+            _telegram_list(date(2026, 11, 2), computed=NOW, delivered=None)
+        )
+
+    read = await families(database)
+
+    assert (
+        value(read, "itgraph_telegram_weekly_list_computed_timestamp_seconds")
+        == NOW.timestamp()
+    )
+    assert (
+        value(read, "itgraph_telegram_weekly_list_delivered_timestamp_seconds")
+        == (last_week + timedelta(minutes=1)).timestamp()
+    )
+
+
+async def test_no_telegram_list_reads_as_zero(database: Database) -> None:
+    read = await families(database)
+
+    for name in (
+        "itgraph_telegram_weekly_list_computed_timestamp_seconds",
+        "itgraph_telegram_weekly_list_delivered_timestamp_seconds",
+    ):
+        assert value(read, name) == 0

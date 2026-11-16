@@ -28,6 +28,7 @@ from itgraph.db.models import (
     FloodEvent,
     Platform,
     PollState,
+    WeeklyList,
     YtAlertRoute,
     YtBaselineRun,
     YtPassOutcome,
@@ -354,6 +355,30 @@ async def _weekly_lists(session: AsyncSession) -> list[Family]:
     ]
 
 
+async def _telegram_weekly_list(session: AsyncSession) -> list[Family]:
+    """When Telegram's newest weekly list was computed, and when the newest
+    delivered one went out; YouTube's pair, with no language. From the
+    list rows' moments alone, which is all the exporter's role reads of
+    them."""
+    computed = await session.scalar(select(func.max(WeeklyList.computed_at)))
+    delivered = await session.scalar(select(func.max(WeeklyList.delivered_at)))
+    return [
+        _gauge(
+            "itgraph_telegram_weekly_list_computed_timestamp_seconds",
+            "When Telegram's newest weekly list was computed; 0 when none.",
+            _timestamp(computed),
+        ),
+        _gauge(
+            "itgraph_telegram_weekly_list_delivered_timestamp_seconds",
+            (
+                "When Telegram's newest delivered weekly list went out; 0 "
+                "when none."
+            ),
+            _timestamp(delivered),
+        ),
+    ]
+
+
 async def read_families(
     session: AsyncSession, *, now: datetime
 ) -> list[Family]:
@@ -364,6 +389,7 @@ async def read_families(
         *await _alerts(session, now),
         *await _baselines(session),
         *await _weekly_lists(session),
+        *await _telegram_weekly_list(session),
     ]
 
 

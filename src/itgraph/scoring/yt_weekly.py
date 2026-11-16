@@ -25,13 +25,15 @@ language's, and does not move between topics once it exists.
 
 It makes no request and books no quota; it writes nothing but the list
 tables, and with a preview nothing at all.
+
+The week's arithmetic and the ranking are Telegram's list's too, and live
+in ``scoring.weeks``; this module names their items as videos.
 """
 
 import logging
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, time, timedelta
-from zoneinfo import ZoneInfo
+from datetime import UTC, date, datetime
 
 from itgraph.config import settings
 from itgraph.db.models import YtAlertRoute, YtLang, YtMetric, YtVideoFormat
@@ -48,6 +50,14 @@ from itgraph.db.yt_baselines import (
 )
 from itgraph.db.yt_weekly import NewEntry, NewList, store_week, week_has_lists
 from itgraph.scoring.score import Best
+from itgraph.scoring.weeks import (
+    WeekRefused,
+    check_week,
+    last_ended_week,
+    merge_best,
+    week_bounds,
+)
+from itgraph.scoring.weeks import rank_week as rank_items
 from itgraph.scoring.yt_run import best_per_video, prepare_readings
 
 __all__ = [
@@ -64,38 +74,8 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-WEEK = timedelta(days=7)
-
 # The routes a list is computed for, and the label each stands for.
 ROUTES = {YtLang.EN: YtAlertRoute.EN, YtLang.RU: YtAlertRoute.RU}
-
-
-class WeekRefused(ValueError):
-    """A week that cannot be listed: not a Monday, or not yet ended."""
-
-
-def week_bounds(week_start: date, *, zone: str) -> tuple[datetime, datetime]:
-    """The week's first moment and the next week's, in UTC."""
-    tz = ZoneInfo(zone)
-    start = datetime.combine(week_start, time(), tzinfo=tz)
-    end = datetime.combine(week_start + WEEK, time(), tzinfo=tz)
-    return start.astimezone(UTC), end.astimezone(UTC)
-
-
-def last_ended_week(moment: datetime, *, zone: str) -> date:
-    """The Monday of the last week that had ended by ``moment``."""
-    local = moment.astimezone(ZoneInfo(zone)).date()
-    this_monday = local - timedelta(days=local.weekday())
-    return this_monday - WEEK
-
-
-def check_week(week_start: date, *, moment: datetime, zone: str) -> None:
-    """Refuse a week that is not a Monday's, or has not ended by ``moment``."""
-    if week_start.weekday() != 0:
-        raise WeekRefused(f"{week_start} is not a Monday")
-    _, end = week_bounds(week_start, zone=zone)
-    if end > moment:
-        raise WeekRefused(f"the week of {week_start} has not ended")
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,23 +88,6 @@ class Scored:
     broadcasts: int
     unreadable: int
     unscored_readings: int
-
-
-def _merge(found: Best, current: Best | None) -> Best:
-    """The better of two bests of one video, crossing at the earlier."""
-    if current is None:
-        return found
-    crossings = [
-        moment
-        for moment in (found.crossed_at, current.crossed_at)
-        if moment is not None
-    ]
-    better = found if found.score.z > current.score.z else current
-    return Best(
-        score=better.score,
-        crossed_at=min(crossings) if crossings else None,
-        scored_at=better.scored_at,
-    )
 
 
 def score_week(
@@ -159,7 +122,7 @@ def score_week(
         for key, found in best_per_video(
             cut, baselines, threshold=floor, comments_min=comments_min
         ).items():
-            best[key] = _merge(found, best.get(key))
+            best[key] = merge_best(found, best.get(key))
 
     return Scored(
         best=best,
@@ -181,34 +144,23 @@ class Standing:
     others: int
 
 
-def _order(video_id: str, best: Best) -> tuple[float, datetime, str]:
-    crossed = best.crossed_at or datetime.max.replace(tzinfo=UTC)
-    return (-best.score.z, crossed, video_id)
-
-
 def rank_week(
     best: Mapping[tuple[str, str], Best], *, floor: float
 ) -> list[Standing]:
-    """Every channel with a video at or above the floor, best first."""
-    above: dict[str, list[tuple[str, Best]]] = {}
-    for (channel, video), found in best.items():
-        if found.score.z >= floor:
-            above.setdefault(channel, []).append((video, found))
-    standings = []
-    for channel, videos in above.items():
-        video, top = min(videos, key=lambda pair: _order(*pair))
-        standings.append(
-            Standing(
-                channel_id=channel,
-                video_id=video,
-                best=top,
-                others=len(videos) - 1,
-            )
+    """Every channel with a video at or above the floor, best first.
+
+    The ranking is the platforms' shared one (``scoring.weeks``); this
+    names its items as videos.
+    """
+    return [
+        Standing(
+            channel_id=ranked.channel,
+            video_id=ranked.item,
+            best=ranked.best,
+            others=ranked.others,
         )
-    standings.sort(
-        key=lambda standing: _order(standing.video_id, standing.best)
-    )
-    return standings
+        for ranked in rank_items(best, floor=floor)
+    ]
 
 
 @dataclass(frozen=True, slots=True)

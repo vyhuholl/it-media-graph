@@ -349,6 +349,22 @@ __itgraph_cronjobs_always:
         resources: "{{ __itgraph_job_resources }}"
     mounts: []
     volumes: []
+  # Telegram's weekly list reads collected data alone: no session, no key, so it
+  # runs in every environment, into that environment's own chat.
+  - name: itgraph-weekly
+    schedule: "{{ itgraph_weekly_schedule }}"
+    # Six days, as YouTube's list: a run missed over Monday still lists the
+    # week that ended then.
+    starting_deadline: 518400
+    active_deadline: 1800
+    labels: "{{ __itgraph_may_reach_database }}"
+    containers:
+      - name: itgraph
+        args: [weekly]
+        env_from: ["{{ __itgraph_from_config }}", "{{ __itgraph_from_database }}"]
+        resources: "{{ __itgraph_job_resources }}"
+    mounts: []
+    volumes: []
   - name: itgraph-backup
     schedule: "{{ itgraph_backup_schedule }}"
     starting_deadline: 10800
