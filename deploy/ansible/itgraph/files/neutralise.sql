@@ -29,5 +29,7 @@ UPDATE yt_weekly_lists SET delivered_at = now() WHERE delivered_at IS NULL;
 UPDATE yt_weekly_entries SET delivered_at = now() WHERE delivered_at IS NULL;
 UPDATE weekly_lists SET delivered_at = now() WHERE delivered_at IS NULL;
 UPDATE weekly_entries SET delivered_at = now() WHERE delivered_at IS NULL;
+UPDATE weekly_revivals SET delivered_at = now() WHERE delivered_at IS NULL;
+UPDATE yt_weekly_revivals SET delivered_at = now() WHERE delivered_at IS NULL;
 
 COMMIT;

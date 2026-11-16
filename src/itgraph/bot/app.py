@@ -28,6 +28,11 @@ parts, each part marked as it goes — so a failed part is sent again and
 the parts before it are not. That loop is one; what differs per platform
 — which lists a destination takes, how a header and an entry read, how
 a list is marked — is its ``WeeklySource``.
+
+**A list's second wind** (`add-second-wind`) follows its entries in the
+same parts, and only for a list computed while its platform's section was
+switched on: entries and second wind entries are one run of items, each
+part marking what it carried, so a resumed list sends neither twice.
 """
 
 import asyncio
@@ -49,12 +54,17 @@ from itgraph.bot.destinations import (
 )
 from itgraph.bot.queues import Queue, TelegramQueue, YoutubeQueue
 from itgraph.bot.render import (
+    SECOND_WIND_NONE,
+    TgRevivalView,
     TgWeeklyEntryView,
     WeeklyEntryView,
+    YtRevivalView,
     digest_parts,
     message_parts,
+    render_tg_revival,
     render_tg_weekly_entry,
     render_weekly_entry,
+    render_yt_revival,
     tg_weekly_empty,
     tg_weekly_gone,
     tg_weekly_header,
@@ -74,7 +84,10 @@ from itgraph.db.yt_weekly import (
     mark_entries_delivered,
     mark_list_delivered,
     mark_list_failed,
+    mark_revivals_delivered,
+    revival_evidence,
 )
+from itgraph.scoring.weeks import WEEK
 
 __all__ = [
     "BotStats",
@@ -398,6 +411,12 @@ class WeeklyPending(Protocol):
     @property
     def entries(self) -> Sequence[object]: ...
 
+    @property
+    def second_wind_shown(self) -> bool: ...
+
+    @property
+    def revivals_sent(self) -> int: ...
+
 
 class WeeklySource[L: WeeklyPending](ABC):
     """One platform's weekly lists, as delivery sees them."""
@@ -443,7 +462,30 @@ class WeeklySource[L: WeeklyPending](ABC):
         text, numbered on from the entries already sent."""
 
     @abstractmethod
+    async def show_revivals(
+        self,
+        database: Database,
+        pending: L,
+        destination: Destination,
+        *,
+        now: datetime,
+    ) -> list[tuple[int, str]]:
+        """Each second wind entry whose post or video is still there, as
+        its rank and text, numbered on from those already sent; the
+        section's heading in the first, when none went before."""
+
+    @abstractmethod
     async def entries_delivered(
+        self,
+        session: AsyncSession,
+        list_id: int,
+        ranks: Sequence[int],
+        *,
+        at: datetime,
+    ) -> None: ...
+
+    @abstractmethod
+    async def revivals_delivered(
         self,
         session: AsyncSession,
         list_id: int,
@@ -543,6 +585,48 @@ class YoutubeLists(WeeklySource[PendingList]):
             )
         return shown
 
+    async def show_revivals(
+        self,
+        database: Database,
+        pending: PendingList,
+        destination: Destination,
+        *,
+        now: datetime,
+    ) -> list[tuple[int, str]]:
+        shown: list[tuple[int, str]] = []
+        for revival in pending.revivals:
+            async with database.session() as session:
+                found = await revival_evidence(session, revival)
+            if found is None:
+                continue
+            view = YtRevivalView(
+                video_id=revival.video_id,
+                title=found.evidence.title,
+                channel_title=found.evidence.channel_title,
+                started_at=found.evidence.started_at,
+                start_views=found.start_views,
+                start_at=revival.start_at,
+                end_views=found.end_views,
+                end_at=revival.end_at,
+                acceleration=revival.acceleration,
+                share=revival.share,
+                others=revival.others,
+            )
+            number = pending.revivals_sent + len(shown) + 1
+            shown.append(
+                (
+                    revival.rank,
+                    render_yt_revival(
+                        number,
+                        view,
+                        now=now,
+                        zone=destination.zone,
+                        heading=number == 1,
+                    ),
+                )
+            )
+        return shown
+
     async def entries_delivered(
         self,
         session: AsyncSession,
@@ -552,6 +636,16 @@ class YoutubeLists(WeeklySource[PendingList]):
         at: datetime,
     ) -> None:
         await mark_entries_delivered(session, list_id, ranks, at=at)
+
+    async def revivals_delivered(
+        self,
+        session: AsyncSession,
+        list_id: int,
+        ranks: Sequence[int],
+        *,
+        at: datetime,
+    ) -> None:
+        await mark_revivals_delivered(session, list_id, ranks, at=at)
 
     async def delivered(
         self, session: AsyncSession, list_id: int, *, at: datetime
@@ -639,6 +733,50 @@ class TelegramLists(WeeklySource[tg_weekly.PendingList]):
             )
         return shown
 
+    async def show_revivals(
+        self,
+        database: Database,
+        pending: tg_weekly.PendingList,
+        destination: Destination,
+        *,
+        now: datetime,
+    ) -> list[tuple[int, str]]:
+        shown: list[tuple[int, str]] = []
+        for revival in pending.revivals:
+            async with database.session() as session:
+                evidence = await alert_evidence(
+                    session,
+                    channel_id=revival.channel_id,
+                    msg_id=revival.msg_id,
+                    window=timedelta(0),
+                )
+            if evidence is None:
+                continue
+            view = TgRevivalView(
+                channel_title=evidence.channel_title,
+                channel_username=evidence.channel_username,
+                msg_id=revival.msg_id,
+                published_at=evidence.published_at,
+                text=evidence.text,
+                acceleration=(
+                    None
+                    if revival.previous_pace is None
+                    else revival.pace / revival.previous_pace
+                ),
+                share=WEEK.days * revival.pace / revival.norm,
+                others=revival.others,
+            )
+            number = pending.revivals_sent + len(shown) + 1
+            shown.append(
+                (
+                    revival.rank,
+                    render_tg_revival(
+                        number, view, now=now, heading=number == 1
+                    ),
+                )
+            )
+        return shown
+
     async def entries_delivered(
         self,
         session: AsyncSession,
@@ -648,6 +786,16 @@ class TelegramLists(WeeklySource[tg_weekly.PendingList]):
         at: datetime,
     ) -> None:
         await tg_weekly.mark_entries_delivered(session, list_id, ranks, at=at)
+
+    async def revivals_delivered(
+        self,
+        session: AsyncSession,
+        list_id: int,
+        ranks: Sequence[int],
+        *,
+        at: datetime,
+    ) -> None:
+        await tg_weekly.mark_revivals_delivered(session, list_id, ranks, at=at)
 
     async def delivered(
         self, session: AsyncSession, list_id: int, *, at: datetime
@@ -692,6 +840,11 @@ async def _deliver_weekly[L: WeeklyPending](
         )
 
 
+# What one item of a list's parts is: an entry, a second wind entry, or the
+# one line that says nothing sped up.
+ENTRY, REVIVAL, NONE = "entry", "revival", "none"
+
+
 async def _send_list[L: WeeklyPending](
     database: Database,
     source: WeeklySource[L],
@@ -702,13 +855,18 @@ async def _send_list[L: WeeklyPending](
     *,
     now: datetime,
 ) -> None:
-    """One list, in parts; each part's entries marked as it goes.
+    """One list, in parts; each part's items marked as it goes.
 
     A part that fails counts an attempt on the list and ends this pass's
     try, so that what follows is not sent ahead of it; the next pass
     resumes with it, under a header that says the list continues. An entry
     whose post or video went before it was sent is left out, and the
     numbering closes up.
+
+    The second wind follows the entries, for a list computed while it was
+    switched on; with nothing in it, one line says so. A list whose own
+    entries are none, or gone, says that under its header, and its second
+    wind follows.
     """
 
     def header(*, continued: bool) -> str:
@@ -717,26 +875,40 @@ async def _send_list[L: WeeklyPending](
         )
 
     shown = await source.show(database, pending, destination, now=now)
+    items: list[tuple[str, int, str]] = [
+        (ENTRY, rank, text) for rank, text in shown
+    ]
+    if pending.second_wind_shown:
+        revived = await source.show_revivals(
+            database, pending, destination, now=now
+        )
+        items += [(REVIVAL, rank, text) for rank, text in revived]
+        if not revived and pending.revivals_sent == 0:
+            items.append((NONE, 0, SECOND_WIND_NONE))
 
-    if not shown:
-        # Nothing went yet: an empty week is said, and so is a list whose
-        # every entry went before it could be sent. What is left of a list
-        # whose first part went is nothing to say.
-        if pending.sent == 0:
-            head = header(continued=False)
-            text = source.gone(head) if pending.entries else source.empty(head)
-            if not await _send_part(
-                database, source, pending, destination, sender, stats, text
-            ):
-                return
+    started = pending.sent > 0 or pending.revivals_sent > 0
+    first = header(continued=started)
+    if not shown and not started:
+        # Nothing of the list went yet and none of its entries is left: an
+        # empty week is said, and so is a list whose every entry went
+        # before it could be sent — with its second wind after, if any.
+        head = header(continued=False)
+        first = source.gone(head) if pending.entries else source.empty(head)
+
+    if not items:
+        # What is left of a list whose first part went is nothing to say.
+        if not started and not await _send_part(
+            database, source, pending, destination, sender, stats, first
+        ):
+            return
         async with database.session() as session:
             await source.delivered(session, pending.id, at=datetime.now(UTC))
         stats.lists += 1
         return
 
     parts = message_parts(
-        [text for _, text in shown],
-        first=header(continued=pending.sent > 0),
+        [text for _, _, text in items],
+        first=first,
         later=header(continued=True),
     )
     for part in parts:
@@ -744,11 +916,18 @@ async def _send_list[L: WeeklyPending](
             database, source, pending, destination, sender, stats, part.text
         ):
             return
+        carried = [items[index] for index in part.entries]
         async with database.session() as session:
             await source.entries_delivered(
                 session,
                 pending.id,
-                [shown[index][0] for index in part.entries],
+                [rank for kind, rank, _ in carried if kind == ENTRY],
+                at=datetime.now(UTC),
+            )
+            await source.revivals_delivered(
+                session,
+                pending.id,
+                [rank for kind, rank, _ in carried if kind == REVIVAL],
                 at=datetime.now(UTC),
             )
     async with database.session() as session:

@@ -545,6 +545,8 @@ async def test_a_preview_writes_nothing(database: Database) -> None:
 
     assert not summary.stored
     assert await lists(database) == 0
-    [line] = summary.preview()
+    # The list's entry, then its second wind section, in the shadow.
+    line, *section = summary.preview()
     assert f"{CHANNEL} 100" in line
+    assert section == ["  second wind (in the shadow):", "    nothing sped up"]
     assert "preview, nothing written" in summary.line()

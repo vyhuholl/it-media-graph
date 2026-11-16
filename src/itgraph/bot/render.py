@@ -798,3 +798,159 @@ def render_tg_weekly_entry(
         score += f"; ещё {_posts(view.others)} канала выше порога"
     lines.append(score)
     return _fit("\n".join(lines))
+
+
+# --- the second wind ------------------------------------------------------
+#
+# A section after a weekly list's entries (`add-second-wind`): older posts
+# and videos whose views sped up this week. Its heading travels in the
+# first entry's text, so splitting a list into parts keeps the two
+# together; the section numbers its entries from one.
+
+SECOND_WIND_POSTS = (
+    "🔁 Второе дыхание — старые посты, которые разогнались за неделю"
+)
+SECOND_WIND_VIDEOS = (
+    "🔁 Второе дыхание — старые видео, которые разогнались за неделю"
+)
+SECOND_WIND_NONE = "🔁 Второе дыхание — ничего не разогналось."
+
+
+def _faster(acceleration: float) -> str:
+    """How much faster than the week before: "в 4 раза быстрее…"."""
+    return f"{_times(acceleration)} быстрее прошлой недели"
+
+
+def _of_norm(share: float, *, new: str, age: str) -> str:
+    """A week at this pace against the channel's norm, as a reader says it."""
+    if share >= 1:
+        return f"за неделю {_times(share)} больше, чем {new} канала за {age}"
+    return f"за неделю {round(share * 100)}% того, что {new} канала за {age}"
+
+
+@dataclass(frozen=True, slots=True)
+class TgRevivalView:
+    """What a second wind entry of Telegram's list shows, read at sending."""
+
+    channel_title: str | None
+    channel_username: str | None
+    msg_id: int
+    published_at: datetime
+    text: str | None
+    acceleration: float | None
+    share: float
+    others: int
+
+
+def render_tg_revival(
+    number: int,
+    view: TgRevivalView,
+    *,
+    now: datetime,
+    heading: bool = False,
+) -> str:
+    """One channel of the second wind: its post that sped up most.
+
+    What a list entry shows of the post, and instead of a score how much
+    faster than the week before its views went, and how a week at that
+    pace compares with a new post of the channel — both itgraph's
+    numbers, and said so. No count, as the list's entries have none.
+    """
+    if view.channel_title:
+        who = f"<b>{_escape(view.channel_title)}</b>"
+        if view.channel_username:
+            who += f" (@{view.channel_username})"
+    else:
+        who = f"@{view.channel_username}" if view.channel_username else "канал"
+    lines = [SECOND_WIND_POSTS] if heading else []
+    lines.append(
+        f"{number}. {who} · опубликовано {age_phrase(now - view.published_at)}"
+    )
+    link = post_link(view.channel_username, view.msg_id)
+    if link:
+        lines.append(link)
+    first = _first_line(view.text)
+    if first:
+        lines.append(first)
+
+    sped = (
+        "Пост снова начал набирать просмотры"
+        if view.acceleration is None
+        else f"Просмотры шли {_faster(view.acceleration)}"
+    )
+    what = (
+        f"🔁 {sped} — "
+        + _of_norm(view.share, new="обычный новый пост", age="8 часов")
+        + " (оценка itgraph)"
+    )
+    if view.others:
+        what += f"; ещё {_posts(view.others)} канала разогнались"
+    lines.append(what)
+    return _fit("\n".join(lines))
+
+
+@dataclass(frozen=True, slots=True)
+class YtRevivalView:
+    """What a second wind entry of a YouTube list shows, read at sending.
+
+    The views are YouTube's, at the two readings around the week, each
+    with its moment; ``None`` where YouTube reported none.
+    """
+
+    video_id: str
+    title: str | None
+    channel_title: str | None
+    started_at: datetime | None
+    start_views: int | None
+    start_at: datetime
+    end_views: int | None
+    end_at: datetime
+    acceleration: float | None
+    share: float
+    others: int
+
+
+def render_yt_revival(
+    number: int,
+    view: YtRevivalView,
+    *,
+    now: datetime,
+    zone: str,
+    heading: bool = False,
+) -> str:
+    """One channel of the second wind: its video that sped up most.
+
+    As a list entry: YouTube named and the video linked, YouTube's counts
+    with the times they were read — here the views at the start and the
+    end of the week and the gain between — and itgraph's two multiples,
+    said to be itgraph's.
+    """
+    about = f"{number}. <b>{_escape(view.title or 'видео без названия')}</b>"
+    if view.channel_title:
+        about += f" — {_escape(view.channel_title)}"
+    if view.started_at is not None:
+        about += f" · опубликовано {age_phrase(now - view.started_at)}"
+    lines = [SECOND_WIND_VIDEOS] if heading else []
+    lines += [about, f"https://www.youtube.com/watch?v={view.video_id}"]
+
+    if view.start_views is not None and view.end_views is not None:
+        start = _clock(view.start_at, now=now, zone=zone)
+        end = _clock(view.end_at, now=now, zone=zone)
+        gain = view.end_views - view.start_views
+        lines.append(
+            f"YouTube: {_count(view.start_views)} просмотров на {start} → "
+            f"{_count(view.end_views)} на {end} (+{_count(gain)})"
+        )
+
+    sped = (
+        "видео снова начало набирать просмотры"
+        if view.acceleration is None
+        else _faster(view.acceleration)
+    )
+    what = f"🔁 Оценка itgraph: {sped} — " + _of_norm(
+        view.share, new="обычное новое видео", age="сутки"
+    )
+    if view.others:
+        what += f"; ещё {view.others} видео канала разогнались"
+    lines.append(what)
+    return _fit("\n".join(lines))

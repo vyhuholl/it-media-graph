@@ -139,12 +139,16 @@
   register: __itgraph_lists_after
   changed_when: false
 
-- name: Assert the weekly list was computed and nothing written
+# The preview prints each language's second wind after its list, shown or not.
+- name: Assert the weekly list was computed with its second wind and nothing written
   ansible.builtin.assert:
     that:
       - __itgraph_weekly_trial.phase == 'Succeeded'
+      - __itgraph_weekly_trial.logs is search('^  second wind', multiline=True)
       - __itgraph_lists_after.stdout | trim | int == __itgraph_lists_before.stdout | trim | int
-    fail_msg: "The weekly list failed on the restored data, or wrote: {{ __itgraph_weekly_trial.logs | truncate(800) }}"
+    fail_msg: >-
+      The weekly list failed on the restored data, printed no second wind, or wrote:
+      {{ __itgraph_weekly_trial.logs | truncate(800) }}
     quiet: true
 
 - name: Count Telegram's weekly lists
@@ -188,12 +192,15 @@
   register: __itgraph_tg_lists_after
   changed_when: false
 
-- name: Assert Telegram's weekly list was computed and nothing written
+- name: Assert Telegram's weekly list was computed with its second wind and nothing written
   ansible.builtin.assert:
     that:
       - __itgraph_tg_weekly_trial.phase == 'Succeeded'
+      - __itgraph_tg_weekly_trial.logs is search('^  second wind', multiline=True)
       - __itgraph_tg_lists_after.stdout | trim | int == __itgraph_tg_lists_before.stdout | trim | int
-    fail_msg: "Telegram's weekly list failed on the restored data, or wrote: {{ __itgraph_tg_weekly_trial.logs | truncate(800) }}"
+    fail_msg: >-
+      Telegram's weekly list failed on the restored data, printed no second wind, or wrote:
+      {{ __itgraph_tg_weekly_trial.logs | truncate(800) }}
     quiet: true
 
 - name: Run a full dump

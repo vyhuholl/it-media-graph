@@ -460,6 +460,20 @@ class Settings(BaseSettings):
     # 2026-10-12, 29 to 41 channels a week reached it: ten is full.
     weekly_list_size: int = Field(default=10, ge=1)
 
+    # The second wind section (`add-second-wind`): older posts whose views
+    # sped up this week. In the shadow until calibrated: computed, stored
+    # and previewed with every list, and sent only with a list computed
+    # while this is on. A post qualifies when this week's views a day are
+    # at least `acceleration` times the last week's — or it did not grow
+    # then — and a week at that pace is at least `norm_share` times its
+    # channel's eight-hour views. Provisional, YouTube's numbers: nothing
+    # of Telegram's late growth could be measured yet. Replaced, with the
+    # switch, by a release after calibration from the list of 2026-11-30.
+    weekly_second_wind_enabled: bool = False
+    weekly_second_wind_acceleration: float = Field(default=3.0, gt=0)
+    weekly_second_wind_norm_share: float = Field(default=0.5, gt=0)
+    weekly_second_wind_size: int = Field(default=5, ge=1)
+
     # Consecutive messages of one channel closer than this are one post,
     # scored under the first — the "text, then each video" way of
     # publishing, which the album collapse does not see because nothing
@@ -797,6 +811,18 @@ class Settings(BaseSettings):
     # comment minimum are the alerts'.
     youtube_weekly_list_z: float = Field(default=2.0, gt=0)
     youtube_weekly_list_size: int = Field(default=10, ge=1)
+
+    # The second wind section (`add-second-wind`): older long-form videos
+    # whose views sped up this week, in the shadow as Telegram's is. Long-
+    # form videos of 7 to 28 days that sped up three times or more were 6
+    # of 505 in the week of 2026-11-09, and half a day of a new video is a
+    # floor of size that leaves the slow-burn channels out. Provisional;
+    # replaced, with the switch, by a release after calibration from the
+    # list of 2026-11-30.
+    youtube_weekly_second_wind_enabled: bool = False
+    youtube_weekly_second_wind_acceleration: float = Field(default=3.0, gt=0)
+    youtube_weekly_second_wind_norm_share: float = Field(default=0.5, gt=0)
+    youtube_weekly_second_wind_size: int = Field(default=5, ge=1)
 
     backup_dir: Path = DEFAULT_BACKUP_DIR
 

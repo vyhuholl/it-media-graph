@@ -1653,6 +1653,21 @@ RESTORE = {
     "__itgraph_trial_delay": 0,
 }
 
+# What the two previews print on a copy: each list, then its second wind.
+YT_PREVIEW = (
+    "week of 2026-11-09: en: 0 listed; preview, nothing written\n"
+    "en:\n"
+    "  nothing at or above the floor\n"
+    "  second wind (in the shadow):\n"
+    "    nothing sped up\n"
+)
+TG_PREVIEW = (
+    "week of 2026-11-09: 0 listed; preview, nothing written\n"
+    "  nothing at or above the threshold\n"
+    "  second wind (in the shadow):\n"
+    "    nothing sped up\n"
+)
+
 
 def restore_rules() -> list[dict[str, Any]]:
     return [
@@ -1666,8 +1681,8 @@ def restore_rules() -> list[dict[str, Any]]:
         *pod_answers("itgraph-migrate"),
         *pod_answers("itgraph-trial-baselines"),
         *pod_answers("itgraph-trial-yt-baselines"),
-        *pod_answers("itgraph-trial-yt-weekly"),
-        *pod_answers("itgraph-trial-weekly"),
+        *pod_answers("itgraph-trial-yt-weekly", logs=YT_PREVIEW),
+        *pod_answers("itgraph-trial-weekly", logs=TG_PREVIEW),
         *pod_answers(
             "itgraph-trial-backup",
             logs="/backups/weekly/full-20261106T090000Z.dump",
@@ -1922,7 +1937,8 @@ def test_a_weekly_list_written_by_the_trial_fails_the_restore(
 
     assert run.failed
     assert (
-        "The weekly list failed on the restored data, or wrote" in run.output
+        "The weekly list failed on the restored data, printed no second "
+        "wind, or wrote" in run.output
     )
 
 
@@ -1944,8 +1960,38 @@ def test_a_telegram_list_written_by_the_trial_fails_the_restore(
 
     assert run.failed
     assert (
-        "Telegram's weekly list failed on the restored data, or wrote"
-        in run.output
+        "Telegram's weekly list failed on the restored data, printed no "
+        "second wind, or wrote" in run.output
+    )
+
+
+@pytest.mark.parametrize(
+    ("pod", "says"),
+    [
+        ("itgraph-trial-yt-weekly", "The weekly list failed"),
+        ("itgraph-trial-weekly", "Telegram's weekly list failed"),
+    ],
+)
+def test_a_preview_without_its_second_wind_fails_the_restore(
+    tmp_path: Path, pod: str, says: str
+) -> None:
+    """A preview that ran but printed no section is an image without it."""
+    dump = tmp_path / "real.dump"
+    dump.write_bytes(b"fake dump bytes\n")
+    run = run_role(
+        tmp_path,
+        "restore",
+        inputs="b",
+        rules=[
+            *pod_answers(pod, logs="week of 2026-11-09: 0 listed\n"),
+            *restore_rules(),
+        ],
+        extra={**RESTORE, "itgraph_restore_from": str(dump)},
+    )
+
+    assert run.failed
+    assert f"{says} on the restored data, printed no second wind" in (
+        run.output
     )
 
 

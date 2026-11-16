@@ -33,7 +33,7 @@ in ``scoring.weeks``; this module names their items as videos.
 import logging
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from itgraph.config import settings
 from itgraph.db.models import YtAlertRoute, YtLang, YtMetric, YtVideoFormat
@@ -48,13 +48,26 @@ from itgraph.db.yt_baselines import (
     load_yt_baselines,
     runs_in_force,
 )
-from itgraph.db.yt_weekly import NewEntry, NewList, store_week, week_has_lists
+from itgraph.db.yt_weekly import (
+    NewEntry,
+    NewList,
+    NewRevival,
+    VideoMarks,
+    store_week,
+    videos_with_marks,
+    week_has_lists,
+)
 from itgraph.scoring.score import Best
 from itgraph.scoring.weeks import (
+    WEEK,
+    Candidate,
+    Revival,
     WeekRefused,
     check_week,
     last_ended_week,
     merge_best,
+    pace_of,
+    rank_revivals,
     week_bounds,
 )
 from itgraph.scoring.weeks import rank_week as rank_items
@@ -69,6 +82,7 @@ __all__ = [
     "rank_week",
     "run_weekly",
     "score_week",
+    "second_wind",
     "week_bounds",
 ]
 
@@ -164,14 +178,97 @@ def rank_week(
 
 
 @dataclass(frozen=True, slots=True)
+class SecondWind:
+    """One language's second wind: videos judged, and who sped up."""
+
+    judged: int
+    revivals: list[Revival[str, str]]
+
+
+def second_wind(
+    videos: Sequence[VideoMarks],
+    baselines: YtBaselines | None,
+    languages: Mapping[str, YtLang],
+    *,
+    week_start: datetime,
+    acceleration: float,
+    share: float,
+) -> dict[YtAlertRoute, SecondWind]:
+    """The older long-form videos that sped up, per language; pure.
+
+    Short-form videos and broadcasts are not judged. Each video against
+    its channel's long-form views at a day old in ``baselines``, the
+    newest run; a channel without one has no norm. The language is the
+    channel's label now, as the list's is.
+    """
+    by_route: dict[YtAlertRoute, list[Candidate[str, str]]] = {
+        route: [] for route in ROUTES.values()
+    }
+    for video in videos:
+        lang = languages.get(video.channel_id)
+        route = ROUTES.get(lang) if lang is not None else None
+        if route is None or video.format is not YtVideoFormat.LONG:
+            continue
+        if baselines is None:
+            continue
+        paces = pace_of(
+            video.before, video.start, video.end, week_start=week_start
+        )
+        baseline = baselines.for_video(
+            video.channel_id, YtVideoFormat.LONG, YtMetric.VIEWS
+        )
+        if paces is None or baseline is None:
+            continue
+        by_route[route].append(
+            Candidate(
+                channel=video.channel_id,
+                item=video.video_id,
+                paces=paces,
+                norm=baseline.reference * baseline.factor,
+            )
+        )
+    return {
+        route: SecondWind(
+            judged=len(candidates),
+            revivals=rank_revivals(
+                candidates, acceleration=acceleration, share=share
+            ),
+        )
+        for route, candidates in by_route.items()
+    }
+
+
+def _revivals(
+    revivals: Sequence[Revival[str, str]], *, size: int
+) -> list[NewRevival]:
+    return [
+        NewRevival(
+            rank=rank,
+            channel_id=revival.candidate.channel,
+            video_id=revival.candidate.item,
+            before_at=revival.candidate.paces.before_at,
+            start_at=revival.candidate.paces.start_at,
+            end_at=revival.candidate.paces.end_at,
+            acceleration=revival.candidate.paces.acceleration,
+            share=revival.candidate.share,
+            others=revival.others,
+        )
+        for rank, revival in enumerate(revivals[:size], start=1)
+    ]
+
+
+@dataclass(frozen=True, slots=True)
 class WeeklyRoute:
-    """One language's list, as computed."""
+    """One language's list, as computed, with its second wind."""
 
     route: YtAlertRoute
     videos_scored: int
     videos_above: int
     standings: list[Standing]
     entries: list[NewEntry]
+    second_wind_judged: int = 0
+    second_wind_channels: int = 0
+    revivals: list[NewRevival] = field(default_factory=list)
 
     @property
     def channels_above(self) -> int:
@@ -193,6 +290,7 @@ class WeeklySummary:
     runs: int = 0
     routes: list[WeeklyRoute] = field(default_factory=list)
     formats: dict[str, YtVideoFormat] = field(default_factory=dict)
+    second_wind_shown: bool = False
     # Whether the lists were stored: False for a preview, and for a week
     # that already had its lists.
     stored: bool = False
@@ -226,6 +324,17 @@ class WeeklySummary:
                 f"; {self.unscored_readings} reading(s) taken before any "
                 "baseline run, not scored"
             )
+        winds = [
+            f"{route.route.value} {len(route.revivals)} listed of "
+            f"{route.second_wind_channels} channel(s), "
+            f"{route.second_wind_judged} judged"
+            for route in self.routes
+        ]
+        line += (
+            "; second wind: "
+            + ", ".join(winds)
+            + (", shown" if self.second_wind_shown else ", in the shadow")
+        )
         if not self.stored:
             line += "; preview, nothing written"
         return line
@@ -245,6 +354,25 @@ class WeeklySummary:
                     f"{kind.value if kind else '?':<5} "
                     f"{entry.video_id} {entry.channel_id}"
                     + (f" +{entry.others}" if entry.others else "")
+                )
+            lines.append(
+                "  second wind"
+                + ("" if self.second_wind_shown else " (in the shadow)")
+                + ":"
+            )
+            if not route.revivals:
+                lines.append("    nothing sped up")
+            for revival in route.revivals:
+                faster = (
+                    "new growth"
+                    if revival.acceleration is None
+                    else f"x{revival.acceleration:.1f}"
+                )
+                lines.append(
+                    f"    {revival.rank:>2}. {faster:<10} "
+                    f"share {revival.share:5.2f} "
+                    f"{revival.video_id} {revival.channel_id}"
+                    + (f" +{revival.others}" if revival.others else "")
                 )
         return lines
 
@@ -314,11 +442,35 @@ async def run_weekly(
             )
             if baselines is not None:
                 runs.append((run, baselines))
+        # The second wind: long-form videos published before the previous
+        # week and inside the walk's depth, with their three readings,
+        # judged against the newest run's norms.
+        older = await videos_with_marks(
+            session,
+            since=end - timedelta(days=settings.youtube_backfill_days),
+            until=start - WEEK,
+            before=start - WEEK,
+            start=start,
+            end=min(end, moment),
+            short_max_seconds=settings.youtube_scoring_short_max_seconds,
+        )
+        newest = await load_yt_baselines(session, kinds=kinds)
 
     videos = [video for video in loaded.values() if video.published < end]
     scored = score_week(
         videos, runs, until=moment, floor=floor, comments_min=comments_min
     )
+
+    shown = settings.youtube_weekly_second_wind_enabled
+    winds = second_wind(
+        older,
+        newest,
+        languages,
+        week_start=start,
+        acceleration=settings.youtube_weekly_second_wind_acceleration,
+        share=settings.youtube_weekly_second_wind_norm_share,
+    )
+    wind_size = settings.youtube_weekly_second_wind_size
 
     routes: list[WeeklyRoute] = []
     for lang, route in ROUTES.items():
@@ -337,6 +489,9 @@ async def run_weekly(
                 ),
                 standings=standings,
                 entries=_entries(standings, size=size),
+                second_wind_judged=winds[route].judged,
+                second_wind_channels=len(winds[route].revivals),
+                revivals=_revivals(winds[route].revivals, size=wind_size),
             )
         )
 
@@ -356,6 +511,15 @@ async def run_weekly(
                         videos_scored=route.videos_scored,
                         channels_above=route.channels_above,
                         entries=tuple(route.entries),
+                        revivals=tuple(route.revivals),
+                        second_wind_shown=shown,
+                        second_wind_acceleration=(
+                            settings.youtube_weekly_second_wind_acceleration
+                        ),
+                        second_wind_norm_share=(
+                            settings.youtube_weekly_second_wind_norm_share
+                        ),
+                        second_wind_size=wind_size,
                     )
                     for route in routes
                 ],
@@ -373,6 +537,7 @@ async def run_weekly(
         runs=len(runs),
         routes=routes,
         formats=scored.formats,
+        second_wind_shown=shown,
         stored=stored,
         already=not preview and not stored,
     )

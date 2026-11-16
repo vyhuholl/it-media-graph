@@ -940,56 +940,115 @@ until_true 120 'the weekly list did not reach the English topic, once and withou
 psql_in "$namespace" "DELETE FROM yt_baseline_runs WHERE id = $yt_run" >/dev/null
 ok 'the weekly list names the channel once, by its best talk, and reaches its topic without a preview'
 
+# A YouTube list computed with its second wind shown, stored as the pass stores one:
+# an older talk of the suite's channel, read three times a week apart, and no entry.
+# Its views are YouTube's, read from those readings at sending.
+psql_in "$namespace" "
+	INSERT INTO yt_raw_videos (video_id, payload, fetched_at, discovered_at, discovered_via)
+	VALUES ('e2eWindA001', jsonb_build_object('snippet', jsonb_build_object('channelId', 'UCfakeSeedScoring0000000',
+	          'title', 'A synthetic talk that sped up',
+	          'publishedAt', to_char((now() - interval '60 days') AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')),
+	          'contentDetails', jsonb_build_object('duration', 'PT42M')),
+	        now(), now(), 'count');
+	INSERT INTO yt_raw_video_stats (video_id, observed_at, views)
+	SELECT 'e2eWindA001', date_trunc('second', now() - age), views
+	FROM (VALUES (interval '15 days', 5000), (interval '8 days', 5070), (interval '1 hour', 5770)) r(age, views);
+	WITH list AS (
+	  INSERT INTO yt_weekly_lists (week_start, route, computed_at, threshold, size, comments_min, videos_scored,
+	    channels_above, second_wind_shown, second_wind_acceleration, second_wind_norm_share, second_wind_size)
+	  VALUES ('2026-01-05', 'en', now(), 2, 10, 10, 0, 0, true, 3, 0.5, 5) RETURNING id)
+	INSERT INTO yt_weekly_revivals (list_id, rank, channel_id, video_id, before_at, start_at, end_at,
+	  acceleration, share, others)
+	SELECT id, 1, 'UCfakeSeedScoring0000000', 'e2eWindA001', date_trunc('second', now() - interval '15 days'),
+	       date_trunc('second', now() - interval '8 days'), date_trunc('second', now() - interval '1 hour'), 10, 7, 0
+	FROM list" >/dev/null
+wind_sent() {
+	telegram_calls | jq -s -e '[.[] | select(.method == "sendMessage" and .fields.message_thread_id == "7301"
+		and (.fields.text | test("Второе дыхание.*\n1\\. <b>A synthetic talk that sped up</b>"))
+		and (.fields.text | test("watch\\?v=e2eWindA001")) and (.fields.text | test("\\(\\+700\\)"))
+		and (.fields.text | test("в 10 раз быстрее прошлой недели"))
+		and ((.fields.link_preview_options // "") | test("\"is_disabled\": ?true")))] | length == 1' >/dev/null
+}
+until_true 120 "the YouTube list's second wind did not reach the English topic, once and without a preview" wind_sent
+[ "$(read_rows "SELECT count(*) FROM yt_weekly_revivals WHERE delivered_at IS NULL")" = 0 ] ||
+	fail "the YouTube list's second wind went and is not marked delivered"
+psql_in "$namespace" "DELETE FROM yt_raw_videos WHERE video_id = 'e2eWindA001'" >/dev/null
+ok "a YouTube list's second wind reaches its topic, with YouTube's views at its two readings"
+
 # Telegram's weekly list, of the last week that has ended: a channel of the suite's
 # own with two posts of that week's Wednesday, three hours apart, each read once at
 # 110 minutes, against a run of its own completed before both. A median of 100 views,
 # a factor and a fraction of 1 and a spread of 0.5: 2,000 views score 6.0 and 1,000
 # score 4.6, both past the alerts' 3.7.
+#
+# And its second wind, switched on for this pass alone: a post of the channel twelve
+# days older than the week, read a day before each of the two Mondays before it and
+# six days in. Ten views a day the week before, a hundred this week: ten times faster,
+# and a week at that pace seven times the channel's eight-hour norm of 100.
 tg_week="$(read_rows "SELECT to_char(date_trunc('week', now() AT TIME ZONE 'Europe/Moscow') - interval '7 days', 'YYYY-MM-DD')")"
 tg_noon="((DATE '$tg_week' + 2)::timestamp + interval '12 hours') AT TIME ZONE 'Europe/Moscow'"
+tg_start="((DATE '$tg_week')::timestamp AT TIME ZONE 'Europe/Moscow')"
 psql_in "$namespace" "
 	INSERT INTO channels (tg_id, username, title, discovered_via, status, kind)
 	VALUES (9900000001, 'fake_e2e_weekly', 'A synthetic channel', 'manual', 'seed', 'personal');
 	INSERT INTO raw_messages (channel_id, msg_id, payload)
 	SELECT 9900000001, msg, jsonb_build_object('_', 'Message', 'id', msg, 'message', 'A synthetic post ' || msg,
-	         'date', to_char(($tg_noon + (msg - 9001) * interval '3 hours') AT TIME ZONE 'UTC',
-	                         'YYYY-MM-DD\"T\"HH24:MI:SS\"+00:00\"'))
-	FROM (VALUES (9001), (9002)) v(msg);
+	         'date', to_char(published AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"+00:00\"'))
+	FROM (VALUES (9001, $tg_noon), (9002, $tg_noon + interval '3 hours'),
+	             (9003, $tg_start - interval '12 days')) v(msg, published);
 	INSERT INTO message_metrics (channel_id, msg_id, observed_at, views)
 	VALUES (9900000001, 9001, $tg_noon + interval '110 minutes', 2000),
-	       (9900000001, 9002, $tg_noon + interval '3 hours 110 minutes', 1000)" >/dev/null
-tg_run="$(read_rows "
+	       (9900000001, 9002, $tg_noon + interval '3 hours 110 minutes', 1000),
+	       (9900000001, 9003, $tg_start - interval '8 days', 1000),
+	       (9900000001, 9003, $tg_start - interval '1 day', 1070),
+	       (9900000001, 9003, $tg_start + interval '6 days', 1770)" >/dev/null
+tg_suite_run() { # <completed at>: a run of the suite's own, for its channel alone
+	read_rows "
 	WITH run AS (
 	  INSERT INTO baseline_runs (completed_at, mature_days, min_channel_posts, min_band_samples,
 	    channels_in_scope, channels_with_baseline)
-	  VALUES ($tg_noon - interval '1 hour', 28, 30, 20, 1, 1) RETURNING id),
+	  VALUES ($1, 28, 30, 20, 1, 1) RETURNING id),
 	ref AS (INSERT INTO channel_baselines (run_id, channel_id, metric, median, samples, reference)
 	  SELECT id, 9900000001, 'views', 100, 40, 'mature' FROM run),
 	ruler AS (INSERT INTO metric_baselines (run_id, kind, metric, factor, spread, samples)
 	  SELECT id, 'personal', 'views', 1, 0.5, 500 FROM run),
 	point AS (INSERT INTO curve_points (run_id, kind, metric, band, fraction, samples)
 	  SELECT id, 'personal', 'views', band, 1, 500 FROM run, (VALUES ('105m'), ('420m')) b(band))
-	SELECT id FROM run")"
+	SELECT id FROM run"
+}
+tg_run="$(tg_suite_run "$tg_noon - interval '1 hour'")"
+# The second wind reads its norm from the newest run, which a refresh on its schedule
+# could otherwise be: the same run again, completed now.
+tg_newest="$(tg_suite_run 'now()')"
 tg_monday="$(read_rows "SELECT to_char((DATE '$tg_week' + 7)::timestamp + interval '10 hours', 'YYYY-MM-DD\"T\"HH24:MI:SS') || '+03:00'")"
 psql_in "$namespace" "DELETE FROM weekly_lists WHERE week_start = '$tg_week'" >/dev/null
 kubectl -n "$namespace" create job e2e-weekly --from=cronjob/itgraph-weekly --dry-run=client -o json |
-	jq --arg week "$tg_week" --arg now "$tg_monday" '.spec.template.spec.containers[0].args = ["weekly", "--week", $week, "--now", $now]' |
+	jq --arg week "$tg_week" --arg now "$tg_monday" '.spec.template.spec.containers[0].args = ["weekly", "--week", $week, "--now", $now]
+		| .spec.template.spec.containers[0].env = (.spec.template.spec.containers[0].env // [])
+			+ [{"name": "WEEKLY_SECOND_WIND_ENABLED", "value": "true"}]' |
 	kubectl -n "$namespace" create -f - >/dev/null
 kubectl -n "$namespace" wait --for=condition=complete job/e2e-weekly --timeout=180s >/dev/null || fail "Telegram's weekly list failed"
 kubectl -n "$namespace" delete job e2e-weekly >/dev/null
 tg_listed="$(read_rows "SELECT e.msg_id || ':' || e.others FROM weekly_entries e JOIN weekly_lists l ON l.id = e.list_id
 	WHERE l.week_start = '$tg_week' AND e.channel_id = 9900000001")"
 [ "$tg_listed" = 9001:1 ] || fail "the channel is not listed once, by its best post: $tg_listed"
+tg_revived="$(read_rows "SELECT r.msg_id || ':' || l.second_wind_shown FROM weekly_revivals r JOIN weekly_lists l ON l.id = r.list_id
+	WHERE l.week_start = '$tg_week' AND r.channel_id = 9900000001")"
+[ "$tg_revived" = 9003:true ] || fail "the older post is not the list's second wind, shown: $tg_revived"
 tg_list_sent() {
 	telegram_calls | jq -s -e '[.[] | select(.method == "sendMessage" and .fields.chat_id == "100000003"
 		and (.fields.message_thread_id // "none") == "none"
 		and (.fields.text | test("Telegram — выше нормы за неделю")) and (.fields.text | test("t.me/fake_e2e_weekly/9001"))
 		and (.fields.text | test("ещё 1 пост канала выше порога"))
+		and (.fields.text | test("Второе дыхание.*\n1\\. .*\nhttps://t\\.me/fake_e2e_weekly/9003"))
+		and (.fields.text | test("в 10 раз быстрее прошлой недели"))
 		and ((.fields.link_preview_options // "") | test("\"is_disabled\": ?true")))] | length == 1' >/dev/null
 }
-until_true 120 "Telegram's weekly list did not reach its chat, once and without a preview" tg_list_sent
-psql_in "$namespace" "DELETE FROM baseline_runs WHERE id = $tg_run; DELETE FROM channels WHERE tg_id = 9900000001" >/dev/null
-ok "Telegram's weekly list names the channel once, by its best post, and reaches its chat without a preview"
+until_true 120 "Telegram's weekly list did not reach its chat with its second wind, once and without a preview" tg_list_sent
+[ "$(read_rows "SELECT count(*) FROM weekly_revivals WHERE channel_id = 9900000001 AND delivered_at IS NULL")" = 0 ] ||
+	fail 'the second wind went and is not marked delivered'
+psql_in "$namespace" "DELETE FROM baseline_runs WHERE id IN ($tg_run, $tg_newest); DELETE FROM channels WHERE tg_id = 9900000001" >/dev/null
+ok "Telegram's weekly list names the channel once, by its best post, then its older post that sped up, in its chat without a preview"
 
 telegram_control enqueue "$(jq -n --argjson at "$(date +%s)" '{message: {message_id: 5, date: $at,
 	chat: {id: -100000000000073, type: "supergroup", is_forum: true}, message_thread_id: 7301, is_topic_message: true,

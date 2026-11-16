@@ -231,6 +231,33 @@ async def seed(connection: Any) -> None:
         tg_list,
         NOW,
     )
+    # Each list's second wind, unsent: a post and a video that sped up.
+    await connection.execute(
+        "INSERT INTO weekly_revivals (list_id, rank, channel_id, msg_id, "
+        "before_at, start_at, end_at, previous_pace, pace, norm, others, "
+        "delivered_at) "
+        "VALUES ($1, 1, 4, 10, $2, $3, $4, 1, 4, 10, 0, NULL)",
+        tg_list,
+        NOW - timedelta(days=14),
+        NOW - timedelta(days=7),
+        NOW,
+    )
+    await connection.execute(
+        f"INSERT INTO yt_raw_video_stats (video_id, observed_at, views) "
+        f"VALUES ('{FAKE_VIDEO}', $1, 1)",
+        NOW - timedelta(days=7),
+    )
+    await connection.execute(
+        "INSERT INTO yt_weekly_revivals (list_id, rank, channel_id, video_id, "
+        "before_at, start_at, end_at, acceleration, share, others, "
+        "delivered_at) "
+        f"VALUES ($1, 1, '{FAKE_YT}', '{FAKE_VIDEO}', $2, $3, $4, NULL, 1.4, "
+        "0, NULL)",
+        list_id,
+        NOW - timedelta(days=14),
+        NOW - timedelta(days=7),
+        NOW,
+    )
 
 
 async def clear_people(connection: Any) -> None:
@@ -276,6 +303,8 @@ async def test_a_seeded_database_fails_the_read_back(
         "undelivered weekly list entries",
         "undelivered Telegram weekly lists: 1",
         "undelivered Telegram weekly list entries: 1",
+        "undelivered Telegram second wind entries: 1",
+        "undelivered YouTube second wind entries: 1",
         "users in posts: 2",
         "mentions by id in posts: 2",
         "names in posts: 1",
@@ -388,12 +417,21 @@ async def test_neutralising_passes_the_read_back_and_keeps_what_it_should(
             )
             == 0
         )
+        # Both second winds are closed as if sent, and kept.
+        for table in ("weekly_revivals", "yt_weekly_revivals"):
+            assert (
+                await connection.fetchval(
+                    f"SELECT count(*) FROM {table} "
+                    "WHERE delivered_at IS NOT NULL"
+                )
+                == 1
+            ), table
         # YouTube data is what the copy is for, as posts are.
         assert (
             await connection.fetchval(
                 "SELECT count(*) FROM yt_raw_video_stats"
             )
-            == 1
+            == 2
         )
     finally:
         await connection.close()

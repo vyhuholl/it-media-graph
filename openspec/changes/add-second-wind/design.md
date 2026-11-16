@@ -112,14 +112,14 @@ weekly_lists, yt_weekly_lists  + second_wind_shown boolean NOT NULL DEFAULT fals
 
 ### 6. The shadow
 
-The pass always computes and stores the section. It records on the list the switch's state and the thresholds, at computing. The bot sends the section only for a list with `second_wind_shown` true, so a switch turned on mid-week does not reach a list computed before it. `--preview` prints the section whatever the switch, by ids: pace, acceleration, share, others.
+The pass always computes and stores the section. It records on the list the switch's state and the thresholds, at computing. The bot sends the section only for a list with `second_wind_shown` true, so a switch turned on mid-week does not reach a list computed before it. `--preview` prints the section whatever the switch, by ids: Telegram's with pace, acceleration, share and others; YouTube's with acceleration, share and others alone, as its list's preview prints no count.
 
 ### 7. Computing the section
 
 - **`scoring/weeks.py`** gains `Revival[C, P]` and the pure parts:
   - `pace_of(p, a, z)`, which gives the two paces, the acceleration and the gain, or "not judged";
   - `qualifies(…, acceleration, share)`;
-  - `rank_revivals(…, size)`, one per channel by share with others counted, ties to the larger acceleration and then the item's id.
+  - `rank_revivals(…)`, one per channel by share with others counted, ties to the larger acceleration and then the item's id. It ranks every qualifying channel; each platform's pass keeps the first `…_second_wind_size`, so its summary can say how many qualified.
 - **`db/weekly.py` and `db/yt_weekly.py`** gain the items with their three readings, and storing and claiming revivals.
 - **`scoring/weekly.py` and `scoring/yt_weekly.py`** compute the section after the list, per language for YouTube, and store it in the list's transaction.
 - **The summaries** add the items judged, the qualifying, and the listed.
@@ -164,7 +164,7 @@ YouTube's revival reads its title, channel and the views of its two readings at 
 ### 10. Backups and the restore
 
 - `neutralise.sql` marks undelivered revivals of both platforms delivered, and `readback.sql` fails while one remains. Removing either statement fails the suite's test.
-- The restore's previews already run both passes, and now print their sections.
+- The restore's previews already run both passes, and now print their sections. The restore's trials assert that each preview's output holds its section, and fail the restore where it does not: an image without the section is told, rather than left for someone to read in a log.
 - `e2e.sh` stores a list with a revival from synthetic readings, and has the bot deliver it with the switch on.
 
 ### 11. Calibration (after this change, with a release of its own)

@@ -69,6 +69,7 @@ __all__ = [
     "RejectReason",
     "WeeklyEntry",
     "WeeklyList",
+    "WeeklyRevival",
     "YtAlert",
     "YtAlertDelivery",
     "YtAlertKind",
@@ -94,6 +95,7 @@ __all__ = [
     "YtRequest",
     "YtRequestOutcome",
     "YtWatchPass",
+    "YtWeeklyRevival",
 ]
 
 # Explicit constraint names, so autogenerate emits stable identifiers
@@ -2575,6 +2577,15 @@ class YtWeeklyList(Base):
     # channels with a video at or above the floor, listed or not.
     videos_scored: Mapped[int] = mapped_column(Integer)
     channels_above: Mapped[int] = mapped_column(Integer)
+    # The second wind section (`add-second-wind`): whether it was switched
+    # on when the list was computed — the bot sends it only then — and the
+    # thresholds it was computed with, on or off.
+    second_wind_shown: Mapped[bool] = mapped_column(
+        Boolean, server_default=text("false")
+    )
+    second_wind_acceleration: Mapped[float | None] = mapped_column(Float)
+    second_wind_norm_share: Mapped[float | None] = mapped_column(Float)
+    second_wind_size: Mapped[int | None] = mapped_column(Integer)
 
     delivered_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
@@ -2679,6 +2690,15 @@ class WeeklyList(Base):
     # with a post at or above the threshold, listed or not.
     posts_scored: Mapped[int] = mapped_column(Integer)
     channels_above: Mapped[int] = mapped_column(Integer)
+    # The second wind section (`add-second-wind`): whether it was switched
+    # on when the list was computed — the bot sends it only then — and the
+    # thresholds it was computed with, on or off.
+    second_wind_shown: Mapped[bool] = mapped_column(
+        Boolean, server_default=text("false")
+    )
+    second_wind_acceleration: Mapped[float | None] = mapped_column(Float)
+    second_wind_norm_share: Mapped[float | None] = mapped_column(Float)
+    second_wind_size: Mapped[int | None] = mapped_column(Integer)
 
     delivered_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
@@ -2745,6 +2765,117 @@ class WeeklyEntry(Base):
         return (
             f"WeeklyEntry(list_id={self.list_id}, rank={self.rank}, "
             f"msg_id={self.msg_id})"
+        )
+
+
+class WeeklyRevival(Base):
+    """One channel in the second wind section of Telegram's weekly list.
+
+    An older post whose views sped up this week: ``pace`` is its views a
+    day this week, between the readings at ``start_at`` and ``end_at``;
+    ``previous_pace`` the same the week before, from ``before_at`` — NULL
+    where it did not grow then; ``norm`` its channel's eight-hour views
+    when the list was computed. ``others`` is how many more of the
+    channel's posts qualified. It goes with the reading that ends its week.
+    """
+
+    __tablename__ = "weekly_revivals"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["channel_id", "msg_id", "end_at"],
+            [
+                "message_metrics.channel_id",
+                "message_metrics.msg_id",
+                "message_metrics.observed_at",
+            ],
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "list_id", "channel_id", name="uq_weekly_revivals_channel"
+        ),
+    )
+
+    list_id: Mapped[int] = mapped_column(
+        ForeignKey("weekly_lists.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    rank: Mapped[int] = mapped_column(Integer, primary_key=True)
+    channel_id: Mapped[int] = mapped_column(
+        ForeignKey("channels.tg_id", ondelete="CASCADE")
+    )
+    msg_id: Mapped[int] = mapped_column(BigInteger)
+    before_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    previous_pace: Mapped[float | None] = mapped_column(Float)
+    pace: Mapped[float] = mapped_column(Float)
+    norm: Mapped[float] = mapped_column(Float)
+    others: Mapped[int] = mapped_column(Integer)
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"WeeklyRevival(list_id={self.list_id}, rank={self.rank}, "
+            f"msg_id={self.msg_id})"
+        )
+
+
+class YtWeeklyRevival(Base):
+    """One channel in the second wind section of a YouTube weekly list.
+
+    An older long-form video whose views sped up this week. **It copies
+    nothing YouTube said**: the moments of the three readings its paces
+    were measured between, and itgraph's two multiples — ``acceleration``,
+    this week's pace over the last's, NULL where it did not grow then, and
+    ``share``, a week at this pace over the channel's day-old norm. The
+    views are read from those readings when the list is sent. It goes with
+    the readings that start and end its week.
+    """
+
+    __tablename__ = "yt_weekly_revivals"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["video_id", "start_at"],
+            ["yt_raw_video_stats.video_id", "yt_raw_video_stats.observed_at"],
+            ondelete="CASCADE",
+            name="fk_yt_weekly_revivals_start",
+        ),
+        ForeignKeyConstraint(
+            ["video_id", "end_at"],
+            ["yt_raw_video_stats.video_id", "yt_raw_video_stats.observed_at"],
+            ondelete="CASCADE",
+            name="fk_yt_weekly_revivals_end",
+        ),
+        UniqueConstraint(
+            "list_id", "channel_id", name="uq_yt_weekly_revivals_channel"
+        ),
+    )
+
+    list_id: Mapped[int] = mapped_column(
+        ForeignKey("yt_weekly_lists.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    rank: Mapped[int] = mapped_column(Integer, primary_key=True)
+    channel_id: Mapped[str] = mapped_column(
+        ForeignKey("yt_channels.channel_id", ondelete="CASCADE")
+    )
+    video_id: Mapped[str] = mapped_column(Text)
+    before_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    acceleration: Mapped[float | None] = mapped_column(Float)
+    share: Mapped[float] = mapped_column(Float)
+    others: Mapped[int] = mapped_column(Integer)
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"YtWeeklyRevival(list_id={self.list_id}, rank={self.rank}, "
+            f"video_id={self.video_id!r})"
         )
 
 

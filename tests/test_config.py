@@ -772,3 +772,37 @@ def test_telegram_s_weekly_list_without_room_is_refused(
     env.setenv("WEEKLY_LIST_SIZE", value)
     with pytest.raises(ValidationError, match="weekly_list_size"):
         build()
+
+
+def test_the_second_wind_defaults_load_in_the_shadow(
+    env: pytest.MonkeyPatch,
+) -> None:
+    settings = build()
+    for prefix in ("", "youtube_"):
+        assert (
+            getattr(settings, f"{prefix}weekly_second_wind_enabled") is False
+        )
+        assert (
+            getattr(settings, f"{prefix}weekly_second_wind_acceleration") == 3
+        )
+        assert (
+            getattr(settings, f"{prefix}weekly_second_wind_norm_share") == 0.5
+        )
+        assert getattr(settings, f"{prefix}weekly_second_wind_size") == 5
+
+
+@pytest.mark.parametrize("prefix", ["", "YOUTUBE_"])
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("WEEKLY_SECOND_WIND_ACCELERATION", "0"),
+        ("WEEKLY_SECOND_WIND_NORM_SHARE", "-1"),
+        ("WEEKLY_SECOND_WIND_SIZE", "0"),
+    ],
+)
+def test_a_second_wind_threshold_out_of_range_is_refused(
+    env: pytest.MonkeyPatch, prefix: str, name: str, value: str
+) -> None:
+    env.setenv(prefix + name, value)
+    with pytest.raises(ValidationError, match=(prefix + name).lower()):
+        build()

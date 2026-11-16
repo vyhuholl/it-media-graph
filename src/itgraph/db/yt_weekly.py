@@ -12,35 +12,53 @@ whose reading is gone went with it, and is simply not among them.
 Nothing here copies what YouTube said: a list holds ids, moments and
 itgraph's numbers, and what a message shows of a video is read at
 sending, through ``video_evidence``.
+
+**The second wind** (`add-second-wind`) is stored with its list: its
+entries in ``yt_weekly_revivals`` — the moments of their readings and
+itgraph's multiples, no count — and whether it was switched on and the
+thresholds on the list. The videos it judges come with their three
+readings around the week, by probes on the readings' primary key.
 """
 
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
+from typing import Any
 
-from sqlalchemy import exists, select, update
+from sqlalchemy import exists, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from itgraph.db.models import (
     YtAlertRoute,
     YtMetric,
+    YtRawVideoStat,
+    YtVideoFormat,
     YtWeeklyEntry,
     YtWeeklyList,
+    YtWeeklyRevival,
 )
 from itgraph.db.yt_alerts import YtEvidence, video_evidence
+from itgraph.derive.yt_videos import format_of
 
 __all__ = [
     "NewEntry",
     "NewList",
+    "NewRevival",
     "PendingEntry",
     "PendingList",
+    "PendingRevival",
+    "RevivalEvidence",
+    "VideoMarks",
     "claim_lists",
     "entry_evidence",
     "mark_entries_delivered",
     "mark_list_delivered",
     "mark_list_failed",
+    "mark_revivals_delivered",
+    "revival_evidence",
     "store_week",
+    "videos_with_marks",
     "week_has_lists",
 ]
 
@@ -60,6 +78,25 @@ class NewEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class NewRevival:
+    """One channel in a list's second wind section, as computed.
+
+    The moments of its three readings and itgraph's two multiples; no
+    count YouTube reported.
+    """
+
+    rank: int
+    channel_id: str
+    video_id: str
+    before_at: datetime
+    start_at: datetime
+    end_at: datetime
+    acceleration: float | None
+    share: float
+    others: int
+
+
+@dataclass(frozen=True, slots=True)
 class NewList:
     """One language's list of a week, as the pass computed it."""
 
@@ -72,6 +109,11 @@ class NewList:
     videos_scored: int
     channels_above: int
     entries: tuple[NewEntry, ...]
+    revivals: tuple[NewRevival, ...] = ()
+    second_wind_shown: bool = False
+    second_wind_acceleration: float | None = None
+    second_wind_norm_share: float | None = None
+    second_wind_size: int | None = None
 
 
 async def week_has_lists(session: AsyncSession, week_start: date) -> bool:
@@ -122,6 +164,10 @@ async def _store_list(session: AsyncSession, found: NewList) -> None:
         comments_min=found.comments_min,
         videos_scored=found.videos_scored,
         channels_above=found.channels_above,
+        second_wind_shown=found.second_wind_shown,
+        second_wind_acceleration=found.second_wind_acceleration,
+        second_wind_norm_share=found.second_wind_norm_share,
+        second_wind_size=found.second_wind_size,
     )
     session.add(row)
     await session.flush()
@@ -138,6 +184,21 @@ async def _store_list(session: AsyncSession, found: NewList) -> None:
             others=entry.others,
         )
         for entry in found.entries
+    )
+    session.add_all(
+        YtWeeklyRevival(
+            list_id=row.id,
+            rank=revival.rank,
+            channel_id=revival.channel_id,
+            video_id=revival.video_id,
+            before_at=revival.before_at,
+            start_at=revival.start_at,
+            end_at=revival.end_at,
+            acceleration=revival.acceleration,
+            share=revival.share,
+            others=revival.others,
+        )
+        for revival in found.revivals
     )
     await session.flush()
 
@@ -157,12 +218,28 @@ class PendingEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class PendingRevival:
+    """A second wind entry of a claimed list, not yet sent."""
+
+    rank: int
+    channel_id: str
+    video_id: str
+    start_at: datetime
+    end_at: datetime
+    acceleration: float | None
+    share: float
+    others: int
+
+
+@dataclass(frozen=True, slots=True)
 class PendingList:
     """A list the bot has claimed, with the entries still to send.
 
     ``sent`` is how many of its entries already went, in an earlier part:
     a list whose first part was sent and whose second failed resumes with
-    the second, and says it is a continuation.
+    the second, and says it is a continuation. ``revivals_sent`` counts
+    its second wind entries alike; the second wind is sent only when
+    ``second_wind_shown``.
     """
 
     id: int
@@ -175,6 +252,9 @@ class PendingList:
     attempts: int
     entries: tuple[PendingEntry, ...]
     sent: int
+    second_wind_shown: bool = False
+    revivals: tuple[PendingRevival, ...] = ()
+    revivals_sent: int = 0
 
 
 async def claim_lists(
@@ -205,6 +285,13 @@ async def claim_lists(
                 .order_by(YtWeeklyEntry.rank)
             )
         ).all()
+        revivals = (
+            await session.scalars(
+                select(YtWeeklyRevival)
+                .where(YtWeeklyRevival.list_id == found.id)
+                .order_by(YtWeeklyRevival.rank)
+            )
+        ).all()
         claimed.append(
             PendingList(
                 id=found.id,
@@ -230,6 +317,24 @@ async def claim_lists(
                     if entry.delivered_at is None
                 ),
                 sent=sum(entry.delivered_at is not None for entry in entries),
+                second_wind_shown=found.second_wind_shown,
+                revivals=tuple(
+                    PendingRevival(
+                        rank=revival.rank,
+                        channel_id=revival.channel_id,
+                        video_id=revival.video_id,
+                        start_at=revival.start_at,
+                        end_at=revival.end_at,
+                        acceleration=revival.acceleration,
+                        share=revival.share,
+                        others=revival.others,
+                    )
+                    for revival in revivals
+                    if revival.delivered_at is None
+                ),
+                revivals_sent=sum(
+                    revival.delivered_at is not None for revival in revivals
+                ),
             )
         )
     return claimed
@@ -246,6 +351,22 @@ async def mark_entries_delivered(
         .where(
             YtWeeklyEntry.list_id == list_id,
             YtWeeklyEntry.rank.in_(ranks),
+        )
+        .values(delivered_at=at)
+    )
+
+
+async def mark_revivals_delivered(
+    session: AsyncSession, list_id: int, ranks: Sequence[int], *, at: datetime
+) -> None:
+    """Record that these second wind entries went out."""
+    if not ranks:
+        return
+    await session.execute(
+        update(YtWeeklyRevival)
+        .where(
+            YtWeeklyRevival.list_id == list_id,
+            YtWeeklyRevival.rank.in_(ranks),
         )
         .values(delivered_at=at)
     )
@@ -283,3 +404,137 @@ async def entry_evidence(
         scored_at=entry.scored_at,
         short_max_seconds=short_max_seconds,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class RevivalEvidence:
+    """What a second wind entry shows of its video, read at sending.
+
+    ``evidence`` is the video as an entry shows it, scored at the end of
+    its week; ``start_views`` and ``end_views`` YouTube's views at the two
+    readings, ``None`` where it reported none.
+    """
+
+    evidence: YtEvidence
+    start_views: int | None
+    end_views: int | None
+
+
+async def revival_evidence(
+    session: AsyncSession, revival: PendingRevival
+) -> RevivalEvidence | None:
+    """A second wind entry's video and its two readings, or ``None``."""
+    evidence = await video_evidence(
+        session, video_id=revival.video_id, scored_at=revival.end_at
+    )
+    if evidence is None:
+        return None
+    start_views = await session.scalar(
+        select(YtRawVideoStat.views).where(
+            YtRawVideoStat.video_id == revival.video_id,
+            YtRawVideoStat.observed_at == revival.start_at,
+        )
+    )
+    return RevivalEvidence(
+        evidence=evidence,
+        start_views=start_views,
+        end_views=evidence.scored.views,
+    )
+
+
+type Mark = tuple[datetime, float]
+
+
+@dataclass(frozen=True, slots=True)
+class VideoMarks:
+    """A video the second wind judges, with its three readings' views."""
+
+    channel_id: str
+    video_id: str
+    format: YtVideoFormat | None
+    published: datetime
+    before: Mark | None
+    start: Mark | None
+    end: Mark | None
+
+
+_PROBE = """
+    LEFT JOIN LATERAL (
+        SELECT s.observed_at, s.views FROM yt_raw_video_stats s
+        WHERE s.video_id = v.video_id
+          AND s.observed_at <= :{moment} AND s.views IS NOT NULL
+        ORDER BY s.observed_at DESC LIMIT 1
+    ) {name} ON true
+"""
+
+# The videos of channels in scope — seeds labelled `en` or `ru` with a
+# kind, as scoring's scope is — with what their format is read from, and
+# no more of their payload.
+VIDEOS_WITH_MARKS = f"""
+    SELECT v.channel_id, v.video_id,
+           (v.payload#>>'{{snippet,publishedAt}}')::timestamptz AS published,
+           jsonb_strip_nulls(jsonb_build_object(
+               'contentDetails', v.payload->'contentDetails',
+               'liveStreamingDetails', v.payload->'liveStreamingDetails'
+           )) AS shape,
+           p.observed_at, p.views, a.observed_at, a.views,
+           z.observed_at, z.views
+    FROM yt_raw_videos v
+    JOIN yt_channels c ON c.channel_id = v.channel_id
+    {_PROBE.format(moment="before", name="p")}
+    {_PROBE.format(moment="start", name="a")}
+    {_PROBE.format(moment="end", name="z")}
+    WHERE c.status = 'seed'
+      AND c.lang IN ('en', 'ru')
+      AND c.kind IS NOT NULL
+      AND (v.payload#>>'{{snippet,publishedAt}}')::timestamptz >= :since
+      AND (v.payload#>>'{{snippet,publishedAt}}')::timestamptz < :until
+"""
+
+
+async def videos_with_marks(
+    session: AsyncSession,
+    *,
+    since: datetime,
+    until: datetime,
+    before: datetime,
+    start: datetime,
+    end: datetime,
+    short_max_seconds: int,
+) -> list[VideoMarks]:
+    """Videos in scope published between two moments, with three readings.
+
+    The format is worked out on reading, as scoring's is, and never
+    stored; which format is judged is the caller's to say.
+    """
+    rows = await session.execute(
+        text(VIDEOS_WITH_MARKS),
+        {
+            "since": since,
+            "until": until,
+            "before": before,
+            "start": start,
+            "end": end,
+        },
+    )
+
+    def mark(at: datetime | None, views: int | None) -> Mark | None:
+        return None if at is None or views is None else (at, float(views))
+
+    found: list[VideoMarks] = []
+    for row in rows.tuples():
+        channel_id, video_id, published, shape = row[:4]
+        p_at, p_views, a_at, a_views, z_at, z_views = row[4:]
+        payload: dict[str, Any] = shape or {}
+        found.append(
+            VideoMarks(
+                channel_id=channel_id,
+                video_id=video_id,
+                format=format_of(payload, short_max_seconds=short_max_seconds),
+                published=published,
+                before=mark(p_at, p_views),
+                start=mark(a_at, a_views),
+                end=mark(z_at, z_views),
+            )
+        )
+    return found

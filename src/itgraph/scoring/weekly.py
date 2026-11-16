@@ -29,26 +29,40 @@ tables, and with a preview nothing at all.
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from itgraph.config import settings
 from itgraph.db.baselines import Baselines, RunInForce, load_baselines
 from itgraph.db.baselines import runs_in_force as find_runs
 from itgraph.db.models import Metric
 from itgraph.db.session import Database
-from itgraph.db.weekly import NewEntry, NewList, store_week, week_has_list
+from itgraph.db.weekly import (
+    NewEntry,
+    NewList,
+    NewRevival,
+    PostMarks,
+    posts_with_marks,
+    store_week,
+    week_has_list,
+)
+from itgraph.scoring.fold import burst_heads
 from itgraph.scoring.run import load_readings
 from itgraph.scoring.score import Baseline, Best, Reading, best_per_post
 from itgraph.scoring.weeks import (
+    WEEK,
+    Candidate,
     Ranked,
+    Revival,
     check_week,
     last_ended_week,
     merge_best,
+    pace_of,
+    rank_revivals,
     rank_week,
     week_bounds,
 )
 
-__all__ = ["WeeklySummary", "run_weekly", "score_week"]
+__all__ = ["WeeklySummary", "run_weekly", "score_week", "second_wind"]
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +133,94 @@ def score_week(
 
 
 @dataclass(frozen=True, slots=True)
+class SecondWind:
+    """A week's second wind: how many posts were judged, and who sped up."""
+
+    judged: int
+    revivals: list[Revival[int, int]]
+
+
+def second_wind(
+    posts: Sequence[PostMarks],
+    baselines: Baselines | None,
+    *,
+    week_start: datetime,
+    acceleration: float,
+    share: float,
+) -> SecondWind:
+    """The older posts that sped up, ranked; pure over what was read.
+
+    Read as the scoring pass reads posts — an album by its first part, a
+    burst by its first message — and each judged against its channel's
+    eight-hour views in ``baselines``, the newest run: a channel without
+    one has no norm and none of its posts is judged.
+    """
+    first_part: dict[tuple[int, int], int] = {}
+    for post in posts:
+        if post.album is not None:
+            key = (post.channel_id, post.album)
+            first_part[key] = min(
+                first_part.get(key, post.msg_id), post.msg_id
+            )
+    parts = [
+        post
+        for post in posts
+        if post.album is None
+        or first_part[(post.channel_id, post.album)] == post.msg_id
+    ]
+    heads = burst_heads(
+        (((post.channel_id, post.msg_id), post.published) for post in parts),
+        gap=timedelta(seconds=settings.scoring_burst_seconds),
+    )
+
+    candidates: list[Candidate[int, int]] = []
+    for post in parts:
+        key = (post.channel_id, post.msg_id)
+        if heads[key] != key or baselines is None:
+            continue
+        paces = pace_of(
+            post.before, post.start, post.end, week_start=week_start
+        )
+        baseline = baselines.for_channel(post.channel_id, Metric.VIEWS)
+        if paces is None or baseline is None:
+            continue
+        candidates.append(
+            Candidate(
+                channel=post.channel_id,
+                item=post.msg_id,
+                paces=paces,
+                norm=baseline.reference * baseline.factor,
+            )
+        )
+    return SecondWind(
+        judged=len(candidates),
+        revivals=rank_revivals(
+            candidates, acceleration=acceleration, share=share
+        ),
+    )
+
+
+def _revivals(
+    revivals: Sequence[Revival[int, int]], *, size: int
+) -> list[NewRevival]:
+    return [
+        NewRevival(
+            rank=rank,
+            channel_id=revival.candidate.channel,
+            msg_id=revival.candidate.item,
+            before_at=revival.candidate.paces.before_at,
+            start_at=revival.candidate.paces.start_at,
+            end_at=revival.candidate.paces.end_at,
+            previous_pace=revival.candidate.paces.previous_pace,
+            pace=revival.candidate.paces.pace,
+            norm=revival.candidate.norm,
+            others=revival.others,
+        )
+        for rank, revival in enumerate(revivals[:size], start=1)
+    ]
+
+
+@dataclass(frozen=True, slots=True)
 class WeeklySummary:
     """What a run of the pass computed, and whether it wrote it."""
 
@@ -135,6 +237,11 @@ class WeeklySummary:
     runs: tuple[int, ...] = ()
     standings: list[Ranked[int, int]] = field(default_factory=list)
     entries: list[NewEntry] = field(default_factory=list)
+    # The second wind: posts judged, channels qualifying, and the section.
+    second_wind_judged: int = 0
+    second_wind_channels: int = 0
+    revivals: list[NewRevival] = field(default_factory=list)
+    second_wind_shown: bool = False
     # Whether the list was stored: False for a preview, and for a week
     # that already had its list.
     stored: bool = False
@@ -164,20 +271,48 @@ class WeeklySummary:
                 f"; {self.unscored_readings} reading(s) taken before any "
                 "baseline run, not scored"
             )
+        line += (
+            f"; second wind: {len(self.revivals)} listed of "
+            f"{self.second_wind_channels} channel(s), "
+            f"{self.second_wind_judged} older post(s) judged, "
+            + ("shown" if self.second_wind_shown else "in the shadow")
+        )
         if not self.stored:
             line += "; preview, nothing written"
         return line
 
     def preview(self) -> list[str]:
-        """The list by ids, one line an entry."""
-        if not self.entries:
-            return ["  nothing at or above the threshold"]
-        return [
-            f"  {entry.rank:>2}. z {entry.value:5.2f} "
-            f"{entry.metric.value:<9} {entry.channel_id} {entry.msg_id}"
-            + (f" +{entry.others}" if entry.others else "")
-            for entry in self.entries
-        ]
+        """The list by ids, one line an entry, then the second wind."""
+        lines = (
+            [
+                f"  {entry.rank:>2}. z {entry.value:5.2f} "
+                f"{entry.metric.value:<9} {entry.channel_id} {entry.msg_id}"
+                + (f" +{entry.others}" if entry.others else "")
+                for entry in self.entries
+            ]
+            if self.entries
+            else ["  nothing at or above the threshold"]
+        )
+        lines.append(
+            "  second wind"
+            + ("" if self.second_wind_shown else " (in the shadow)")
+            + ":"
+        )
+        if not self.revivals:
+            lines.append("    nothing sped up")
+        for revival in self.revivals:
+            faster = (
+                "new growth"
+                if revival.previous_pace is None
+                else f"x{revival.pace / revival.previous_pace:.1f}"
+            )
+            lines.append(
+                f"    {revival.rank:>2}. {revival.pace:9.1f}/day {faster:<10} "
+                f"share {WEEK.days * revival.pace / revival.norm:5.2f} "
+                f"{revival.channel_id} {revival.msg_id}"
+                + (f" +{revival.others}" if revival.others else "")
+            )
+        return lines
 
 
 def _entries(
@@ -239,6 +374,18 @@ async def run_weekly(
             baselines = await load_baselines(session, run_id=run.run_id)
             if baselines is not None:
                 runs.append((run, baselines))
+        # The second wind: posts published before the previous week and
+        # inside the late horizon, with their three readings, judged
+        # against the newest run's norms.
+        older = await posts_with_marks(
+            session,
+            since=start - timedelta(days=settings.watch_late_horizon_days),
+            until=start - WEEK,
+            before=start - WEEK,
+            start=start,
+            end=min(end, moment),
+        )
+        newest = await load_baselines(session)
 
     readings = [
         reading
@@ -254,6 +401,15 @@ async def run_weekly(
     )
     standings = rank_week(scored.best, floor=threshold)
     entries = _entries(standings, size=size)
+    shown = settings.weekly_second_wind_enabled
+    wind = second_wind(
+        older,
+        newest,
+        week_start=start,
+        acceleration=settings.weekly_second_wind_acceleration,
+        share=settings.weekly_second_wind_norm_share,
+    )
+    revivals = _revivals(wind.revivals, size=settings.weekly_second_wind_size)
 
     stored = False
     if not preview:
@@ -269,6 +425,15 @@ async def run_weekly(
                     posts_scored=len(scored.best),
                     channels_above=len(standings),
                     entries=tuple(entries),
+                    revivals=tuple(revivals),
+                    second_wind_shown=shown,
+                    second_wind_acceleration=(
+                        settings.weekly_second_wind_acceleration
+                    ),
+                    second_wind_norm_share=(
+                        settings.weekly_second_wind_norm_share
+                    ),
+                    second_wind_size=settings.weekly_second_wind_size,
                 ),
             )
 
@@ -286,6 +451,10 @@ async def run_weekly(
         runs=tuple(run.run_id for run, _ in runs),
         standings=standings,
         entries=entries,
+        second_wind_judged=wind.judged,
+        second_wind_channels=len(wind.revivals),
+        revivals=revivals,
+        second_wind_shown=shown,
         stored=stored,
         already=not preview and not stored,
     )
