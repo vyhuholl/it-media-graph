@@ -187,7 +187,7 @@ The system SHALL send each alert to the destination configured for it: a chat, a
 
 ### Requirement: The Bot Cannot Write Collection State
 
-The system SHALL confine the bot's writes to the delivery state of the alert queues and of both platforms' weekly lists. The bot MUST NOT modify the channel inventory, the raw layer, metric snapshots, derived edges, collection progress, YouTube's stored data, what an alert is about and the score that raised it, or what a weekly list holds, and this SHALL be enforced by the database's own permissions rather than by convention.
+The system SHALL confine the bot's writes to the delivery state of the alert queues and of both platforms' weekly lists and their second wind entries. The bot MUST NOT modify the channel inventory, the raw layer, metric snapshots, derived edges, collection progress, YouTube's stored data, what an alert is about and the score that raised it, or what a weekly list holds, and this SHALL be enforced by the database's own permissions rather than by convention.
 
 #### Scenario: The bot's credentials cannot write collection tables
 
@@ -206,12 +206,17 @@ The system SHALL confine the bot's writes to the delivery state of the alert que
 
 #### Scenario: The bot records a list's delivery
 
-- **WHEN** the bot marks a weekly list of either platform or its entries delivered, or counts a failed attempt on a list
+- **WHEN** the bot marks a weekly list of either platform, its entries or its second wind entries delivered, or counts a failed attempt on a list
 - **THEN** the write succeeds
 
 #### Scenario: The bot cannot write a list
 
 - **WHEN** the bot attempts to insert a weekly list or an entry of either platform, or to change an entry's rank, channel, post or video, reading, signal, count or score
+- **THEN** the database refuses it
+
+#### Scenario: The bot cannot write a second wind entry
+
+- **WHEN** the bot attempts to insert a second wind entry of either platform, or to change its rank, channel, post or video, readings, acceleration or share
 - **THEN** the database refuses it
 
 ### Requirement: The Bot Holds No Telegram Session

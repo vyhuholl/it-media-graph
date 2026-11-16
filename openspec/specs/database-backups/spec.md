@@ -213,7 +213,7 @@ After loading, the restore SHALL compare every table's row count with the rows t
 
 ### Requirement: A Restored Copy Acts On Nobody
 
-After a restore, nothing in the copy SHALL cause a message to anyone but the environment's own chat, or a request to Telegram, YouTube or B2. Every alert and every weekly list of either platform not yet delivered in the dump SHALL be marked delivered before the bot starts, and the restore's read-back SHALL fail if one remains.
+After a restore, nothing in the copy SHALL cause a message to anyone but the environment's own chat, or a request to Telegram, YouTube or B2. Every alert, every weekly list of either platform and every second wind entry not yet delivered in the dump SHALL be marked delivered before the bot starts, and the restore's read-back SHALL fail if one remains.
 
 #### Scenario: An undelivered alert in the dump
 
@@ -238,6 +238,13 @@ After a restore, nothing in the copy SHALL cause a message to anyone but the env
 - **GIVEN** a restored copy still holding an undelivered weekly list or entry of either platform
 - **WHEN** the read-back runs
 - **THEN** it fails, naming undelivered weekly lists
+
+#### Scenario: An undelivered second wind entry in the dump
+
+- **GIVEN** a dump holding a list of either platform with second wind entries not delivered
+- **WHEN** the restore finishes and the bot starts
+- **THEN** no message of them is sent, and each is marked delivered
+- **AND** the read-back fails while one remains undelivered
 
 #### Scenario: No collection and no YouTube work
 

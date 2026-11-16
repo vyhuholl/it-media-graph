@@ -65,8 +65,8 @@ Rules for every task:
 
 ## 7. Rollout
 
-- [ ] 7.1 **(operator)** Cut a release, deploy it to the test environment, and restore. Verify: the restore's previews print both sections, and nothing of a section is sent.
-- [ ] 7.2 **(operator)** Pin the release in production. Verify: the list of 23 November is sent without a section, and its revivals are stored with `second_wind_shown` false.
+- [x] 7.1 **(operator)** Cut a release, deploy it to the test environment, and restore. Verify: the restore's previews print both sections, and nothing of a section is sent.
+- [x] 7.2 **(operator)** Pin the release in production. Verify: the list of 23 November is sent without a section, and its revivals are stored with `second_wind_shown` false.
 
 ## Workflow follow-up
 

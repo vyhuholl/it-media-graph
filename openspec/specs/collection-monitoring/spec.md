@@ -139,7 +139,7 @@ Every series SHALL be worked out at scrape time from durable state in the databa
 
 ### Requirement: Metrics Carry Nothing YouTube Said
 
-No series SHALL carry a title, handle, description, channel id, video id or statistic read from YouTube. What the exporter reads of YouTube's tables SHALL be limited to when each row was fetched, enforced by the database role it connects as. Of a YouTube alert it SHALL read only its moments and delivery state; of a baseline run of either platform, only when it completed and how many channels it counted; of a YouTube weekly list, only its language and its moments, and of a Telegram weekly list only its moments, and nothing of either's entries; of a refresh's record, only when it ended and how.
+No series SHALL carry a title, handle, description, channel id, video id or statistic read from YouTube. What the exporter reads of YouTube's tables SHALL be limited to when each row was fetched, enforced by the database role it connects as. Of a YouTube alert it SHALL read only its moments and delivery state; of a baseline run of either platform, only when it completed and how many channels it counted; of a YouTube weekly list, only its language and its moments, and of a Telegram weekly list only its moments, and nothing of either's entries or second wind entries; of a refresh's record, only when it ended and how.
 
 #### Scenario: The role cannot read a title
 
@@ -162,7 +162,7 @@ No series SHALL carry a title, handle, description, channel id, video id or stat
 #### Scenario: The role cannot read what a list holds
 
 - **GIVEN** the exporter's database role
-- **WHEN** it selects any column of a weekly list's entries of either platform, or a list's week, counts or parameters
+- **WHEN** it selects any column of a weekly list's entries or second wind entries of either platform, or a list's week, counts or parameters
 - **THEN** the database refuses with a permission error
 
 #### Scenario: The role cannot read a refresh's counts
