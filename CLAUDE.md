@@ -92,6 +92,7 @@ When the prompt and the actual behaviour of a library or of the code disagree, d
 ## Style
 - ruff and mypy settings are deliberate. Do not loosen config or sprinkle `# type: ignore` to make an error disappear — fix the code, or ask.
 - Code, identifiers and comments in English. Docs and commit messages may be Russian.
+- **Bot button text:** one to three words, with a leading emoji: `🔘 Да`. The leading emoji does not count as a word. No trailing punctuation.
 
 ## Database access
 During explore you may read the production database as `itgraph_reader`, a read-only user. The operator opens SSH tunnel, and the password is in `.pgpass` at the repository root (gitignored), not in `~/.pgpass` — hence `PGPASSFILE`, run from the root: do not look for it or print it.
