@@ -16,6 +16,7 @@ from itgraph.db.channels import DiscoveredChannel, upsert_channels
 from itgraph.db.metrics import (
     count_snapshots,
     latest_observation,
+    latest_observations,
     store_metrics,
 )
 from itgraph.db.models import DiscoverySource
@@ -27,15 +28,17 @@ CHANNEL = 1000000001
 NOW = datetime(2026, 8, 3, 12, 0, tzinfo=UTC)
 
 
-async def seed(database: Database, *msg_ids: int) -> None:
+async def seed(
+    database: Database, *msg_ids: int, channel: int = CHANNEL
+) -> None:
     """A channel and some collected messages to hang snapshots on."""
     async with database.session() as session:
         await upsert_channels(
             session,
             [
                 DiscoveredChannel(
-                    tg_id=CHANNEL,
-                    username="example",
+                    tg_id=channel,
+                    username=f"example{channel}",
                     title="Example",
                     is_chat=False,
                 )
@@ -44,7 +47,7 @@ async def seed(database: Database, *msg_ids: int) -> None:
         )
         await store_messages(
             session,
-            channel_id=CHANNEL,
+            channel_id=channel,
             payloads={
                 msg_id: {"_": "Message", "id": msg_id} for msg_id in msg_ids
             },
@@ -276,4 +279,45 @@ async def test_the_last_reading_of_a_message_is_findable(
         assert (
             await latest_observation(session, channel_id=CHANNEL, msg_id=99)
             is None
+        )
+
+
+async def test_the_last_reading_of_several_messages_in_one_query(
+    database: Database,
+) -> None:
+    """Each message's newest reading; one never read is absent; another
+    channel's message of the same id is not mixed in."""
+    other = CHANNEL + 1
+    await seed(database, 10, 11, 12)
+    await seed(database, 10, channel=other)
+    later = NOW + timedelta(days=3)
+
+    async with database.session() as session:
+        await store_metrics(
+            session,
+            channel_id=CHANNEL,
+            observed_at=NOW,
+            counters={10: Counters(views=1), 11: Counters(views=1)},
+        )
+        await store_metrics(
+            session,
+            channel_id=CHANNEL,
+            observed_at=later,
+            counters={10: Counters(views=2)},
+        )
+        await store_metrics(
+            session,
+            channel_id=other,
+            observed_at=later + timedelta(days=1),
+            counters={10: Counters(views=9)},
+        )
+
+    async with database.session() as session:
+        found = await latest_observations(
+            session, channel_id=CHANNEL, msg_ids=[10, 11, 12]
+        )
+        assert found == {10: later, 11: NOW}
+        assert (
+            await latest_observations(session, channel_id=CHANNEL, msg_ids=[])
+            == {}
         )

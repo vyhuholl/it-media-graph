@@ -210,6 +210,20 @@ class Settings(BaseSettings):
     # rather than letting a configured sample quietly never happen.
     watch_horizon_hours: float = Field(default=49.0, gt=0)
 
+    # Late readings (`add-late-readings`): a post past the horizon is still
+    # in the window a poll fetches for as long as the channel's next posts
+    # leave it there — a median of 17 days over the seeds — and its views
+    # are still moving (a median ×1.12 between 24 and 48 hours). So its
+    # counters are kept at these ages, in days, from whatever poll comes
+    # first past each, and not past the late horizon. They make no poll
+    # due and widen no window: a post the window does not reach is not
+    # read. Roughly geometric, starting a day past the last sample above.
+    # Empty turns late readings off.
+    watch_late_offsets_days: tuple[float, ...] = (3, 4, 5, 7, 10, 14, 21, 30)
+    # Past the last age by room for an idle channel's poll, which can be
+    # days apart, to take the last reading.
+    watch_late_horizon_days: float = Field(default=35.0, gt=0)
+
     # A channel with nothing live is checked on an interval derived from
     # its own posting rate — the mean gap between its posts, divided by
     # this. Above 1 so a channel is checked several times per expected
@@ -702,6 +716,16 @@ class Settings(BaseSettings):
     # limit.
     youtube_backfill_general_floor: int = Field(default=2_000, ge=0)
 
+    # Late readings (`add-late-readings`): while the walk is enabled, the
+    # refresh ends by reading the counts of every past upload it keeps —
+    # daily up to this age, then every so many days up to the walk's
+    # depth — so a video that takes off weeks or months after it was
+    # published is seen within days, not at the next 25-day refresh. A
+    # unit per fifty videos, from the general pool: about 400 a day at
+    # 2026-11's stock. 120 days is the settled window's upper edge.
+    youtube_late_daily_until_days: int = Field(default=120, ge=1)
+    youtube_late_weekly_interval_days: int = Field(default=7, ge=1)
+
     # --- YouTube scoring ---------------------------------------------
     #
     # YouTube's own, apart from Telegram's: views accrue over days rather
@@ -1018,6 +1042,39 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _late_ages_can_be_reached(self) -> Self:
+        """Refuse late ages that could never be taken, or never in order.
+
+        The rule is the one `watch_sample_offsets` follows: a misordered
+        list or an age past its own horizon would skip readings silently,
+        and a first age inside the tracking horizon would read a post the
+        schedule is already reading.
+        """
+        offsets = self.watch_late_offsets_days
+        if not offsets:
+            return self
+        if list(offsets) != sorted(offsets):
+            raise ValueError(
+                "watch_late_offsets_days must be in ascending order; a "
+                "post is read at the largest age it has passed, and an "
+                "unsorted list would skip readings silently"
+            )
+        if offsets[0] * 24 <= self.watch_horizon_hours:
+            raise ValueError(
+                f"the first watch_late_offsets_days entry ({offsets[0]} d) "
+                f"is not past watch_horizon_hours ({self.watch_horizon_hours}"
+                " h): the schedule still reads a post that young"
+            )
+        if offsets[-1] >= self.watch_late_horizon_days:
+            raise ValueError(
+                f"the last watch_late_offsets_days entry ({offsets[-1]} d) "
+                "is not inside watch_late_horizon_days "
+                f"({self.watch_late_horizon_days} d): a post old enough for "
+                "that reading would already be past the late horizon"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _digest_is_not_inside_quiet_hours(self) -> Self:
         """Refuse a digest hour the bot would never be allowed to speak at.
 
@@ -1251,6 +1308,27 @@ class Settings(BaseSettings):
                 "not lie past youtube_watch_horizon_days "
                 f"({self.youtube_watch_horizon_days}): every video a walk "
                 "could store belongs to the poll loop"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _youtube_late_daily_tier_reaches_past_the_horizon(self) -> Self:
+        """Refuse a daily tier the poll loop's horizon covers.
+
+        Late readings start where the loop stops, so a daily tier ending
+        at or before the horizon would read every past upload weekly from
+        its first day out of the loop — the opposite of what was set.
+        """
+        if (
+            self.youtube_late_daily_until_days
+            <= self.youtube_watch_horizon_days
+        ):
+            raise ValueError(
+                "youtube_late_daily_until_days "
+                f"({self.youtube_late_daily_until_days}) does not lie past "
+                "youtube_watch_horizon_days "
+                f"({self.youtube_watch_horizon_days}): no past upload would "
+                "be read daily"
             )
         return self
 

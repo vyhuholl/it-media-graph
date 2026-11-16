@@ -87,6 +87,7 @@ __all__ = [
     "YtRawLookup",
     "YtRawVideo",
     "YtRawVideoStat",
+    "YtRefreshRun",
     "YtRejectReason",
     "YtRequest",
     "YtRequestOutcome",
@@ -2245,6 +2246,37 @@ class YtWatchPass(Base):
     def __repr__(self) -> str:
         return (
             f"YtWatchPass(started_at={self.started_at}, "
+            f"outcome={self.outcome.value!r})"
+        )
+
+
+class YtRefreshRun(Base):
+    """What one run of `yt refresh` did, and how it ended.
+
+    The refresh is a daily job whose last step takes the late readings of
+    past uploads; a run that stops there for quota leaves no other trace.
+    This row is what the monitoring reads: a newest complete run that is
+    old is a refresh that has stopped doing its work. Written once, at the
+    run's end, so a process killed part way leaves no row and does not
+    count as complete. Counts of its own work and its error, no API data.
+    """
+
+    __tablename__ = "yt_refresh_runs"
+    __table_args__ = (Index("ix_yt_refresh_runs_started_at", "started_at"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    outcome: Mapped[YtPassOutcome] = mapped_column(
+        _pg_enum(YtPassOutcome, "yt_pass_outcome")
+    )
+    late_due: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    late_read: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    error: Mapped[str | None] = mapped_column(Text)
+
+    def __repr__(self) -> str:
+        return (
+            f"YtRefreshRun(started_at={self.started_at}, "
             f"outcome={self.outcome.value!r})"
         )
 

@@ -314,6 +314,16 @@ class FakeYouTube:
                     {k: v for k, v in video.items() if k != "statistics"}
                     for video in found
                 ]
+            # And a request for the counts alone gets the id and counts.
+            if params.get("part") == "statistics":
+                found = [
+                    {
+                        k: v
+                        for k, v in video.items()
+                        if k in {"id", "statistics"}
+                    }
+                    for video in found
+                ]
             if self.batch_404 and len(found) < len(ids):
                 return httpx.Response(
                     404, json=error_body(404, "videoNotFound")

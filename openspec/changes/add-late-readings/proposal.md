@@ -19,7 +19,7 @@ Measured on the production database on 2026-11-16 (aggregates only):
 - **YouTube: the refresh ends with the late readings.** `itgraph yt refresh`, still daily, reads the counts of every watched seed's past upload inside the walk's depth. A video up to 120 days old is read daily and an older one weekly. The request asks for the counts alone (`part=statistics`), fifty videos a unit, from the general pool. The stored payload is not replaced, and a video YouTube no longer returns is removed as today. Shorts and broadcasts are read like any other video.
 - **The YouTube settled reference keeps its meaning.** The fallback reference takes each settled video's *earliest* reading between 29 and 120 days instead of its latest. With daily readings, "latest" would drift towards 120 days and push every z down. Today no video has two readings in that window, so no reference changes on the day of the switch.
 - **The refresh records itself.** Each run of `yt refresh` is a row holding its outcome and how many late readings were due and taken. A series exposes the newest complete run, and the infrastructure repository is asked for an alert on it.
-- **Docs:** `docs/PLAN.md` (the measurements, the three-change order), `src/itgraph/README.md`, the module map. The sentence in `docs/privacy.html` on how often uploads are fetched is the operator's to settle, from wording in design.md.
+- **Docs:** `docs/PLAN.md` (the measurements, the three-change order), `src/itgraph/README.md`, the module map. `docs/privacy.html` is not touched (decision record, at the end).
 
 **Out of scope:**
 
@@ -78,4 +78,8 @@ Confirmed as of 2026-11-16:
 - A YouTube late reading falls due a few hours before its full interval, so a daily job never slips to every other day (design.md, Decision 7).
 - The refresh's record as a table and a series, not a late pass's own (design.md, Decision 9).
 
-**Open, and the operator's:** `docs/privacy.html` says that YouTube statistics are kept at most 30 days, that what is not fetched again within 30 days is deleted, and that YouTube data is never in backups. Since `b5b0c15` (2026-11-11) none of this is true: nothing is removed for its age, and full dumps carry every YouTube table. This change adds more of what that page says is not kept. It is not fixed here in passing (design.md, Open Questions).
+**Ignored, by the operator's decision of 2026-11-16:** `docs/privacy.html` says that YouTube statistics are kept at most 30 days, that what is not fetched again within 30 days is deleted, and that YouTube data is never in backups. Since `b5b0c15` (2026-11-11) none of this is true: nothing is removed for its age, and full dumps carry every YouTube table. This change adds more of what that page says is not kept. Asked, the operator answered:
+
+> Несоответствие между privacy.html и реальным кодом проекта игнорируем.
+
+This change does not touch `docs/privacy.html`.

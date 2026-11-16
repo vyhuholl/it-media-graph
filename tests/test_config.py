@@ -341,6 +341,69 @@ def test_caps_leaving_the_general_pool_nothing_are_refused(
     assert YOUTUBE_KEY not in str(caught.value)
 
 
+def test_the_late_ages_default_load(env: pytest.MonkeyPatch) -> None:
+    """Eight ages from 3 to 30 days, inside a late horizon of 35."""
+    settings = build()
+    assert settings.watch_late_offsets_days == (3, 4, 5, 7, 10, 14, 21, 30)
+    assert settings.watch_late_horizon_days == 35
+
+
+def test_unsorted_late_ages_are_refused(env: pytest.MonkeyPatch) -> None:
+    env.setenv("WATCH_LATE_OFFSETS_DAYS", "[4,3]")
+    with pytest.raises(ValidationError, match="ascending"):
+        build()
+
+
+def test_a_late_age_inside_the_tracking_horizon_is_refused(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """Two days is 48 hours, inside the 49 the schedule still reads."""
+    env.setenv("WATCH_LATE_OFFSETS_DAYS", "[2,3]")
+    with pytest.raises(ValidationError) as caught:
+        build()
+    assert "watch_late_offsets_days" in str(caught.value)
+    assert "watch_horizon_hours" in str(caught.value)
+
+
+def test_a_late_horizon_at_the_last_late_age_is_refused(
+    env: pytest.MonkeyPatch,
+) -> None:
+    env.setenv("WATCH_LATE_HORIZON_DAYS", "30")
+    with pytest.raises(ValidationError) as caught:
+        build()
+    assert "watch_late_offsets_days" in str(caught.value)
+    assert "watch_late_horizon_days" in str(caught.value)
+
+
+def test_no_late_ages_turn_late_readings_off(env: pytest.MonkeyPatch) -> None:
+    env.setenv("WATCH_LATE_OFFSETS_DAYS", "[]")
+    assert build().watch_late_offsets_days == ()
+
+
+def test_the_late_reading_tiers_default_load(env: pytest.MonkeyPatch) -> None:
+    settings = build()
+    assert settings.youtube_late_daily_until_days == 120
+    assert settings.youtube_late_weekly_interval_days == 7
+
+
+def test_a_daily_tier_inside_the_loop_s_horizon_is_refused(
+    env: pytest.MonkeyPatch,
+) -> None:
+    env.setenv("YOUTUBE_LATE_DAILY_UNTIL_DAYS", "29")
+    with pytest.raises(ValidationError) as caught:
+        build()
+    assert "youtube_late_daily_until_days" in str(caught.value)
+    assert "youtube_watch_horizon_days" in str(caught.value)
+
+
+def test_a_weekly_interval_under_a_day_is_refused(
+    env: pytest.MonkeyPatch,
+) -> None:
+    env.setenv("YOUTUBE_LATE_WEEKLY_INTERVAL_DAYS", "0")
+    with pytest.raises(ValidationError, match="youtube_late_weekly_interval"):
+        build()
+
+
 def test_the_youtube_schedule_defaults_load(env: pytest.MonkeyPatch) -> None:
     """Seventeen readings from an hour to four weeks, inside 29 days."""
     settings = build()

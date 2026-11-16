@@ -16,8 +16,9 @@ by id, as ``channels.list`` is: whether one dead id can fail a batch is
 not documented, and one must not cost forty-nine their reading.
 
 Past uploads — what the history walk finds and the refresh keeps — are
-asked for in the poll loop's shape, counters included. A video linked
-from elsewhere is asked for its channel id alone (``OWNER``).
+asked for in the poll loop's shape, counters included; a late reading of
+one asks for its counts alone (``COUNTS``). A video linked from elsewhere
+is asked for its channel id alone (``OWNER``).
 """
 
 from collections.abc import Iterable, Sequence
@@ -28,6 +29,7 @@ from typing import Any
 from itgraph.yt.client import YouTube
 
 __all__ = [
+    "COUNTS",
     "FIELDS",
     "IDS_PER_CALL",
     "LOOP",
@@ -66,6 +68,13 @@ class Asked:
 # The poll loop's request, and a past upload's: everything the privacy
 # policy lists.
 LOOP = Asked(parts=PARTS, fields=FIELDS)
+
+
+# A past upload's late reading: its counts and nothing else. The same unit
+# as the full shape, without the descriptions that are the bulk of an
+# answer; its stored data is fetched again by the refresh before it is 25
+# days old, and this request does not touch it (`add-late-readings`).
+COUNTS = Asked(parts="statistics", fields=f"items(id,{_COUNTERS})")
 
 
 # A linked video's lookup: which channel it belongs to, and nothing else.

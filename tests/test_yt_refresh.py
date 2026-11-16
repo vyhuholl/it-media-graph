@@ -725,3 +725,511 @@ async def test_a_restore_is_completed_by_a_refresh(database: Database) -> None:
         channel_id(1): [channel_id(9)],
         channel_id(2): [],
     }
+
+
+# --- late readings: the counts of past uploads, daily then weekly ----------
+
+
+async def _kept(
+    database: Database,
+    number: int,
+    *,
+    age: float,
+    read_ago: timedelta | None,
+    channel: int = 1,
+    due_at: datetime | None = None,
+    duration: str | None = None,
+    **resource: Any,
+) -> None:
+    """A past upload with fresh data, last read ``read_ago`` (or never)."""
+    from itgraph.db.models import YtDiscoveryPath
+    from itgraph.db.yt_videos import (
+        FoundVideo,
+        VideoWrite,
+        store_found_videos,
+        store_videos,
+    )
+    from itgraph.derive.yt_videos import Counters
+
+    payload = video_resource(
+        number,
+        published=datetime.now(UTC) - timedelta(days=age),
+        channel=channel,
+        **resource,
+    )
+    if duration is not None:
+        payload["contentDetails"]["duration"] = duration
+    async with database.session() as session:
+        if read_ago is None:
+            await store_found_videos(
+                session,
+                [
+                    FoundVideo(
+                        video_id=video_id(number),
+                        payload=payload,
+                        due_at=due_at,
+                        reading=None,
+                    )
+                ],
+                fetched_at=FRESH,
+            )
+        else:
+            await store_videos(
+                session,
+                [
+                    VideoWrite(
+                        video_id=video_id(number),
+                        payload=payload,
+                        due_at=due_at,
+                        reading=Counters(views=10, likes=1, comments=0),
+                        discovered_via=YtDiscoveryPath.CHECK,
+                    )
+                ],
+                observed_at=datetime.now(UTC) - read_ago,
+            )
+
+
+async def _listed(database: Database, number: int = 1) -> None:
+    """A seed whose featured list is fresh, so the refresh asks nothing
+    of it and the first request a test queues for is a video request."""
+    async with database.session() as session:
+        await store_sections(
+            session,
+            channel_id(number),
+            sections_response([]),
+            fetched_at=FRESH,
+        )
+
+
+def _counts(number: int, *, age: float = 60, **counters: Any) -> Any:
+    return video_resource(
+        number,
+        published=datetime.now(UTC) - timedelta(days=age),
+        **{"views": 5000, **counters},
+    )
+
+
+async def _readings_of(database: Database, number: int) -> list[Any]:
+    from itgraph.db.models import YtRawVideoStat
+
+    async with database.session() as session:
+        return list(
+            await session.scalars(
+                select(YtRawVideoStat)
+                .where(YtRawVideoStat.video_id == video_id(number))
+                .order_by(YtRawVideoStat.observed_at)
+            )
+        )
+
+
+async def test_a_young_past_upload_is_read_daily(
+    database: Database, walk_enabled: None
+) -> None:
+    await _seed(database)
+    await _kept(database, 1, age=60, read_ago=timedelta(hours=24))
+    fake = FakeYouTube(videos=[_counts(1)])
+
+    async with client(database, fake) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert (summary.late_due, summary.late_read) == (1, 1)
+    assert "late readings due 1, read 1" in summary.line()
+    [_, late] = await _readings_of(database, 1)
+    assert late.views == 5000
+    [call] = fake.calls("videos")
+    assert call["part"] == "statistics"
+
+
+async def test_an_older_past_upload_is_read_weekly(
+    database: Database, walk_enabled: None
+) -> None:
+    await _seed(database)
+    await _kept(database, 1, age=200, read_ago=timedelta(days=3))
+    await _kept(database, 2, age=200, read_ago=timedelta(days=7))
+    fake = FakeYouTube(videos=[_counts(1, age=200), _counts(2, age=200)])
+
+    async with client(database, fake) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert summary.late_due == 1
+    assert len(await _readings_of(database, 1)) == 1
+    assert len(await _readings_of(database, 2)) == 2
+
+
+async def test_a_daily_run_does_not_slip_a_day(
+    database: Database, walk_enabled: None
+) -> None:
+    await _seed(database)
+    await _kept(database, 1, age=60, read_ago=timedelta(hours=23))
+
+    async with client(database, FakeYouTube(videos=[_counts(1)])) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert summary.late_read == 1
+
+
+async def test_a_video_read_once_in_a_run_is_not_read_twice(
+    database: Database, walk_enabled: None
+) -> None:
+    """Its data was stale, so the step before fetched it with a reading."""
+    await _seed(database)
+    await _past_upload(database, 1, age=100)
+    fake = FakeYouTube(videos=[_answer(1, age=100)])
+
+    async with client(database, fake) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert (summary.past_readings, summary.late_due) == (1, 0)
+    assert len(await _readings_of(database, 1)) == 1
+    assert len(fake.calls("videos")) == 1
+
+
+async def test_what_the_refresh_does_not_keep_is_not_read(
+    database: Database, walk_enabled: None
+) -> None:
+    await _seed(database)
+    await _channels(database, [2], FRESH)
+    month = timedelta(days=30)
+    # Past the depth; still the loop's; a broadcast yet to start; a
+    # channel that is no longer a seed.
+    await _kept(database, 1, age=370, read_ago=month)
+    await _kept(
+        database,
+        2,
+        age=10,
+        read_ago=month,
+        due_at=datetime.now(UTC) + timedelta(days=1),
+    )
+    await _kept(
+        database,
+        3,
+        age=60,
+        read_ago=None,
+        broadcast="upcoming",
+        scheduled=datetime.now(UTC) + timedelta(days=1),
+    )
+    await _kept(database, 4, age=60, read_ago=month, channel=2)
+    fake = FakeYouTube(videos=[_counts(n) for n in range(1, 5)])
+
+    async with client(database, fake) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert summary.late_due == 0
+    assert fake.calls("videos") == []
+
+
+async def test_nothing_is_read_late_while_the_walk_is_disabled(
+    database: Database,
+) -> None:
+    await _seed(database)
+    await _kept(database, 1, age=60, read_ago=timedelta(days=2))
+    fake = FakeYouTube(videos=[_counts(1)])
+
+    async with client(database, fake) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert summary.late_due == 0
+    assert fake.calls("videos") == []
+    assert "late readings" not in summary.line()
+
+
+async def test_every_format_is_read_alike(
+    database: Database, walk_enabled: None
+) -> None:
+    """A 40-second video and a finished stream, each read like any other."""
+    await _seed(database)
+    two_days = timedelta(days=2)
+    await _kept(database, 1, age=60, read_ago=two_days, duration="PT40S")
+    await _kept(
+        database,
+        2,
+        age=60,
+        read_ago=two_days,
+        live_started=datetime.now(UTC) - timedelta(days=60),
+    )
+    fake = FakeYouTube(videos=[_counts(1), _counts(2)])
+
+    async with client(database, fake) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert summary.late_read == 2
+
+
+async def test_videos_share_requests(
+    database: Database, walk_enabled: None
+) -> None:
+    await _seed(database)
+    for number in range(120):
+        await _kept(database, number, age=60, read_ago=timedelta(days=2))
+    fake = FakeYouTube(videos=[_counts(n) for n in range(120)])
+
+    async with client(database, fake) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert summary.late_read == 120
+    calls = fake.calls("videos")
+    assert [len(call["id"].split(",")) for call in calls] == [50, 50, 20]
+
+
+async def test_the_stored_data_is_not_replaced(
+    database: Database, walk_enabled: None
+) -> None:
+    await _seed(database)
+    await _kept(database, 1, age=60, read_ago=timedelta(days=2))
+    before = await _video_row(database, 1)
+    fake = FakeYouTube(videos=[_counts(1, likes=None, title="Renamed")])
+
+    async with client(database, fake) as yt:
+        await refresh_channels(yt, database)
+
+    after = await _video_row(database, 1)
+    assert (after.payload, after.fetched_at) == (
+        before.payload,
+        before.fetched_at,
+    )
+    late = (await _readings_of(database, 1))[-1]
+    assert (late.views, late.likes, late.comments) == (5000, None, 3)
+
+
+async def test_a_past_upload_youtube_no_longer_returns_is_removed_late(
+    database: Database, walk_enabled: None
+) -> None:
+    await _seed(database)
+    await _kept(database, 1, age=60, read_ago=timedelta(days=2))
+    await _kept(database, 2, age=60, read_ago=timedelta(days=2))
+    fake = FakeYouTube(videos=[_counts(2)])
+
+    async with client(database, fake) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert summary.past_removed == 1
+    assert await _video_row(database, 1) is None
+    assert await _readings_of(database, 1) == []
+    assert len(await _readings_of(database, 2)) == 2
+
+
+async def test_exhaustion_stops_the_readings_part_way(
+    database: Database, walk_enabled: None
+) -> None:
+    from itgraph.db.yt_videos import past_uploads_for_late_readings
+    from itgraph.yt_schedule import late_reading_due
+
+    await _seed(database)
+    await _listed(database)
+    for number in range(60):
+        await _kept(database, number, age=60, read_ago=timedelta(days=2))
+    fake = FakeYouTube()
+    fake.queued = [
+        httpx.Response(
+            200,
+            json={
+                "items": [
+                    {"id": video_id(n), "statistics": {"viewCount": "7"}}
+                    for n in range(50)
+                ]
+            },
+        ),
+        httpx.Response(403, json=error_body(403, "quotaExceeded")),
+    ]
+
+    async with client(database, fake) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert isinstance(summary.stopped, QuotaExhaustedError)
+    assert (summary.late_due, summary.late_read) == (60, 50)
+    now = datetime.now(UTC)
+    async with database.session() as session:
+        kept = await past_uploads_for_late_readings(
+            session, since=now - timedelta(days=365)
+        )
+    still = [
+        upload
+        for upload in kept
+        if late_reading_due(upload.published_at, upload.newest_reading_at, now)
+    ]
+    assert len(still) == 10
+    # The least recently read come first, so the next run starts there.
+    assert {upload.video_id for upload in kept[:10]} == {
+        upload.video_id for upload in still
+    }
+
+
+async def test_late_readings_are_booked_to_the_general_pool(
+    database: Database, walk_enabled: None
+) -> None:
+    from itgraph.db.models import YtQuotaPool, YtRequest
+
+    await _seed(database)
+    await _listed(database)
+    await _kept(database, 1, age=60, read_ago=timedelta(days=2))
+
+    async with client(database, FakeYouTube(videos=[_counts(1)])) as yt:
+        await refresh_channels(yt, database)
+
+    async with database.session() as session:
+        booked = list(
+            await session.execute(
+                select(YtRequest.pool, YtRequest.command, YtRequest.method)
+            )
+        )
+    assert booked == [(YtQuotaPool.GENERAL, YtCommand.REFRESH, "videos.list")]
+
+
+# --- each run is recorded ------------------------------------------------
+
+
+async def _runs(database: Database) -> list[Any]:
+    from itgraph.db.models import YtRefreshRun
+
+    async with database.session() as session:
+        return list(
+            await session.scalars(
+                select(YtRefreshRun).order_by(YtRefreshRun.started_at)
+            )
+        )
+
+
+def _fake_api(monkeypatch: pytest.MonkeyPatch, fake: FakeYouTube) -> None:
+    original = yt_client.youtube
+
+    def faked(database: Database, command: YtCommand) -> object:
+        return original(
+            database, command, transport=fake.transport(), sleep=no_sleep
+        )
+
+    monkeypatch.setattr(yt_client, "youtube", faked)
+
+
+async def test_a_complete_run_is_recorded(
+    database: Database, walk_enabled: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from itgraph.db.models import YtPassOutcome
+    from itgraph.yt.refresh import run_refresh
+
+    await _seed(database)
+    await _kept(database, 1, age=60, read_ago=timedelta(days=2))
+    _fake_api(monkeypatch, FakeYouTube(videos=[_counts(1)]))
+
+    summary = await run_refresh(database)
+
+    assert summary.stopped is None
+    [run] = await _runs(database)
+    assert run.outcome == YtPassOutcome.COMPLETE
+    assert (run.late_due, run.late_read, run.error) == (1, 1, None)
+    assert run.finished_at >= run.started_at
+
+
+async def test_a_run_stopped_for_quota_is_recorded_as_such(
+    database: Database, walk_enabled: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from itgraph.db.models import YtPassOutcome
+    from itgraph.yt.refresh import run_refresh
+
+    await _seed(database)
+    await _listed(database)
+    await _kept(database, 1, age=60, read_ago=timedelta(days=2))
+    fake = FakeYouTube()
+    fake.queued = [httpx.Response(403, json=error_body(403, "quotaExceeded"))]
+    _fake_api(monkeypatch, fake)
+
+    await run_refresh(database)
+
+    [run] = await _runs(database)
+    assert run.outcome == YtPassOutcome.EXHAUSTED
+    assert (run.late_due, run.late_read) == (1, 0)
+    assert "quotaExceeded" in (run.error or "")
+
+
+async def test_a_run_refused_on_an_exhausted_day_is_recorded(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from itgraph.db.models import YtPassOutcome
+    from itgraph.yt.refresh import run_refresh
+
+    await record_exhaustion(database, command=YtCommand.ADD)
+    fake = FakeYouTube()
+    _fake_api(monkeypatch, fake)
+
+    summary = await run_refresh(database)
+
+    assert not summary.attempted
+    assert fake.requests == []
+    [run] = await _runs(database)
+    assert run.outcome == YtPassOutcome.EXHAUSTED
+
+
+async def test_a_run_that_fails_is_recorded_as_failed(
+    database: Database, walk_enabled: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from itgraph.db.models import YtPassOutcome
+    from itgraph.yt.refresh import run_refresh
+
+    await _seed(database)
+    await _listed(database)
+    await _kept(database, 1, age=60, read_ago=timedelta(days=2))
+    fake = FakeYouTube()
+    fake.queued = [httpx.Response(400, json=error_body(400, "badRequest"))]
+    _fake_api(monkeypatch, fake)
+
+    await run_refresh(database)
+
+    [run] = await _runs(database)
+    assert run.outcome == YtPassOutcome.FAILED
+    assert run.error
+
+
+async def test_what_a_message_shows_is_the_reading_not_the_payload(
+    database: Database,
+) -> None:
+    """After a late reading the payload's own counts lag; what an alert
+    and a weekly entry show (`video_evidence`, which `entry_evidence`
+    wraps) is the newest reading."""
+    from itgraph.db.yt_alerts import video_evidence
+    from itgraph.db.yt_videos import store_readings
+    from itgraph.derive.yt_videos import Counters
+
+    await _seed(database)
+    await _kept(database, 1, age=60, read_ago=timedelta(days=2))
+    [scored] = await _readings_of(database, 1)
+    async with database.session() as session:
+        await store_readings(
+            session,
+            {video_id(1): Counters(views=5000, likes=40, comments=7)},
+            observed_at=datetime.now(UTC),
+        )
+    row = await _video_row(database, 1)
+    assert row.payload["statistics"]["viewCount"] == "100"
+
+    async with database.session() as session:
+        for short_max_seconds in (None, 180):
+            evidence = await video_evidence(
+                session,
+                video_id=video_id(1),
+                scored_at=scored.observed_at,
+                short_max_seconds=short_max_seconds,
+            )
+            assert evidence is not None
+            assert evidence.counters == Counters(
+                views=5000, likes=40, comments=7
+            )
+            assert evidence.scored.views == 10
+
+
+async def test_a_run_without_a_key_is_recorded_as_failed(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run that could not start is a run too, and did not complete."""
+    from itgraph.db.models import YtPassOutcome
+    from itgraph.yt.refresh import run_refresh
+
+    fake = FakeYouTube()
+    _fake_api(monkeypatch, fake)
+    monkeypatch.setattr(settings, "youtube_api_key", None)
+
+    summary = await run_refresh(database)
+
+    assert not summary.attempted
+    assert fake.requests == []
+    [run] = await _runs(database)
+    assert run.outcome == YtPassOutcome.FAILED
+    assert "YOUTUBE_API_KEY" in (run.error or "")

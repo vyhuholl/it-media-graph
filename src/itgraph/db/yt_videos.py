@@ -40,6 +40,7 @@ __all__ = [
     "LOOP_PATHS",
     "DueVideo",
     "FoundVideo",
+    "PastUpload",
     "VideoWrite",
     "count_due",
     "count_found_by_walks",
@@ -50,9 +51,11 @@ __all__ = [
     "known_video_ids",
     "oldest_due",
     "past_uploads_due_for_refresh",
+    "past_uploads_for_late_readings",
     "remove_videos",
     "replace_payloads",
     "store_found_videos",
+    "store_readings",
     "store_videos",
 ]
 
@@ -342,6 +345,90 @@ async def replace_payloads(
         }
         for video_id, counters in (readings or {}).items()
         if video_id in payloads
+    ]
+    if not rows:
+        return 0
+    stored = await session.execute(
+        insert(YtRawVideoStat)
+        .values(rows)
+        .on_conflict_do_nothing()
+        .returning(YtRawVideoStat.video_id)
+    )
+    return len(stored.all())
+
+
+@dataclass(frozen=True, slots=True)
+class PastUpload:
+    """A past upload the refresh keeps, and when it was last read."""
+
+    video_id: str
+    published_at: datetime
+    newest_reading_at: datetime | None
+
+
+async def past_uploads_for_late_readings(
+    session: AsyncSession, *, since: datetime
+) -> list[PastUpload]:
+    """Every past upload the refresh keeps, with its newest reading.
+
+    The set `past_uploads_due_for_refresh` reads, whatever the payload's
+    age: a seed's video the poll loop is done with, not a broadcast still
+    waiting to start, published since ``since``. Which of them are due is
+    ``yt_schedule.late_reading_due``'s to say, not this module's.
+
+    The least recently read first, never read before all, so a run that
+    stops part way leaves the freshest for the next.
+    """
+    snippet = YtRawVideo.payload["snippet"]
+    published = cast(snippet["publishedAt"].astext, DateTime(timezone=True))
+    broadcast = snippet["liveBroadcastContent"].astext
+    newest = (
+        select(func.max(YtRawVideoStat.observed_at))
+        .where(YtRawVideoStat.video_id == YtRawVideo.video_id)
+        .correlate(YtRawVideo)
+        .scalar_subquery()
+    )
+    rows = await session.execute(
+        select(YtRawVideo.video_id, published, newest)
+        .where(
+            _watched(),
+            YtRawVideo.due_at.is_(None),
+            func.coalesce(broadcast, "none") != "upcoming",
+            published >= since,
+        )
+        .order_by(newest.asc().nulls_first(), YtRawVideo.video_id)
+    )
+    return [
+        PastUpload(
+            video_id=video_id,
+            published_at=published_at,
+            newest_reading_at=newest_reading_at,
+        )
+        for video_id, published_at, newest_reading_at in rows.tuples()
+    ]
+
+
+async def store_readings(
+    session: AsyncSession,
+    readings: Mapping[str, Counters],
+    *,
+    observed_at: datetime,
+) -> int:
+    """Add a reading of each video, leaving its stored data as it was.
+
+    A late reading's answer holds the counts alone, so it replaces no
+    payload and moves no fetch time; the payload is fetched again by the
+    refresh before it is 25 days old. Returns how many readings were new.
+    """
+    rows = [
+        {
+            "video_id": video_id,
+            "observed_at": observed_at,
+            "views": counters.views,
+            "likes": counters.likes,
+            "comments": counters.comments,
+        }
+        for video_id, counters in readings.items()
     ]
     if not rows:
         return 0

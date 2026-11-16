@@ -16,7 +16,7 @@ Per format and metric:
 - **a channel's own reference** is the median day-old value of its newest
   videos of that format (the mean, zeros kept, for comments);
 - **its settled reference**, where it has too few of its own, is the median
-  of its settled videos — one reading each, the latest inside the settled
+  of its settled videos — one reading each, the earliest inside the settled
   window — scaled by its kind's factor; comments take none, as on Telegram;
 - **the curve, factor and spreads** are fitted per kind, borrowed from the
   format's pool where a kind is too thin.
@@ -234,9 +234,16 @@ def _settled(
     # unless a replay lets settled readings come later (``fit_youtube``).
     """Each channel's settled median, over at least the minimum videos.
 
-    One reading per video — the latest whose age is inside the window —
-    because the refresh reads a past upload every 25 days, and a video read
-    four times would otherwise count four times.
+    One reading per video, because the refresh reads a past upload again
+    and again, and a video read four times would otherwise count four
+    times. **The earliest whose age is inside the window**, not the latest:
+    the late readings read a past upload daily until 120 days of age
+    (`add-late-readings`), so "the latest" would be the reading nearest the
+    video's current age, capped at the window's end — every channel's
+    settled median would climb for three months and every fallback z fall,
+    with no change saying so. The earliest stays put: a video the poll
+    loop finished contributes its first reading past the window's start,
+    one the walk found already settled its single reading.
     """
     low = timedelta(days=params.mature_days)
     high = timedelta(days=params.mature_max_days)
@@ -249,7 +256,7 @@ def _settled(
         ]
         if not settled:
             continue
-        value = _value(max(settled, key=lambda entry: entry[0])[1], metric)
+        value = _value(min(settled, key=lambda entry: entry[0])[1], metric)
         if value is None or value <= 0:
             continue
         values.setdefault(video.channel_id, []).append(float(value))

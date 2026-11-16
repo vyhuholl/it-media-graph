@@ -12,6 +12,7 @@ getting it wrong is a database error rather than a silent inconsistency —
 but the error arrives at the write, and the reason for it lives here.
 """
 
+from collections.abc import Collection
 from datetime import datetime
 from typing import Any
 
@@ -22,7 +23,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from itgraph.db.models import MessageMetric
 from itgraph.derive.metrics import Counters
 
-__all__ = ["count_snapshots", "latest_observation", "store_metrics"]
+__all__ = [
+    "count_snapshots",
+    "latest_observation",
+    "latest_observations",
+    "store_metrics",
+]
 
 
 async def store_metrics(
@@ -99,3 +105,25 @@ async def latest_observation(
     )
     observed: datetime | None = await session.scalar(statement)
     return observed
+
+
+async def latest_observations(
+    session: AsyncSession, *, channel_id: int, msg_ids: Collection[int]
+) -> dict[int, datetime]:
+    """When each of several messages of one channel was last read.
+
+    One grouped query on the primary key, which is what lets the poll loop
+    ask it on every poll that holds posts past the horizon. A message
+    never read is absent from the result, not mapped to ``None``.
+    """
+    if not msg_ids:
+        return {}
+    rows = await session.execute(
+        select(MessageMetric.msg_id, func.max(MessageMetric.observed_at))
+        .where(
+            MessageMetric.channel_id == channel_id,
+            MessageMetric.msg_id.in_(msg_ids),
+        )
+        .group_by(MessageMetric.msg_id)
+    )
+    return {msg_id: observed for msg_id, observed in rows.tuples()}

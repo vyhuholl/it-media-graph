@@ -14,6 +14,7 @@ from itgraph.yt_quota import day_start, next_reset
 from itgraph.yt_schedule import (
     check_due,
     deferrable,
+    late_reading_due,
     listing_retry_at,
     next_check_of_upcoming,
     next_reading_at,
@@ -176,3 +177,41 @@ def test_pace_divides_by_the_real_length_of_the_day(
 
     assert pace_allows(1500, 3000, midday)
     assert not pace_allows(1501, 3000, midday)
+
+
+# --- late readings of past uploads --------------------------------------
+#
+# Daily up to 120 days of age, weekly after, nothing past the walk's depth
+# of 365; each interval due three hours early, so a daily refresh starting
+# a minute either side of its hour reads a young video every day.
+
+
+def test_a_young_past_upload_is_read_daily() -> None:
+    assert late_reading_due(START, at(days=59), at(days=60))
+
+
+def test_an_older_past_upload_is_read_weekly() -> None:
+    assert not late_reading_due(START, at(days=197), at(days=200))
+    assert late_reading_due(START, at(days=193), at(days=200))
+
+
+def test_a_daily_run_does_not_slip_a_day() -> None:
+    """Read by yesterday's run 23 hours ago, a little after its hour."""
+    assert late_reading_due(START, at(days=59, hours=1), at(days=60))
+    # ...but not twice in one run, nor by a second run the same morning.
+    assert not late_reading_due(START, at(days=60), at(days=60, hours=2))
+
+
+def test_the_daily_tier_ends_at_a_hundred_and_twenty_days() -> None:
+    assert late_reading_due(START, at(days=119), at(days=120))
+    assert not late_reading_due(START, at(days=120), at(days=121))
+    assert late_reading_due(START, at(days=114), at(days=121))
+
+
+def test_nothing_past_the_walk_s_depth_is_read() -> None:
+    assert not late_reading_due(START, at(days=300), at(days=365))
+    assert not late_reading_due(START, None, at(days=370))
+
+
+def test_a_past_upload_never_read_is_due() -> None:
+    assert late_reading_due(START, None, at(days=200))

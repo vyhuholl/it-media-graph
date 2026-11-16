@@ -1849,24 +1849,22 @@ def yt_refresh() -> None:
     YouTube no longer returns loses its data and is marked gone; its
     record and review stay. Then the seeds' featured lists and, while the
     history walk is enabled, the year of past uploads, each read again
-    with its counts. Runs daily from a timer on the host.
+    with its counts. Last, the late readings: the counts alone of every
+    past upload, daily up to 120 days of age and weekly after, fifty a
+    unit. Each run is recorded. Runs daily from a timer on the host.
     """
-    from itgraph.db.models import YtCommand
     from itgraph.db.session import Database
-    from itgraph.db.yt_quota import check_not_exhausted
-    from itgraph.yt.client import youtube
-    from itgraph.yt.refresh import refresh_channels
+    from itgraph.yt.refresh import run_refresh
 
     async def run() -> None:
         database = Database()
         try:
-            await check_not_exhausted(database)
-            async with youtube(database, YtCommand.REFRESH) as client:
-                summary = await refresh_channels(client, database)
+            summary = await run_refresh(database)
         finally:
             await database.dispose()
 
-        typer.echo(summary.line())
+        if summary.attempted:
+            typer.echo(summary.line())
         for channel_id in summary.gone:
             typer.echo(f"  gone: {channel_id}")
         for channel_id in summary.returned:

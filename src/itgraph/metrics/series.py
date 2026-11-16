@@ -36,6 +36,7 @@ from itgraph.db.models import (
     YtQuotaExhausted,
     YtQuotaPool,
     YtRawChannel,
+    YtRefreshRun,
     YtWatchPass,
     YtWeeklyList,
 )
@@ -132,6 +133,14 @@ async def _youtube(session: AsyncSession, now: datetime) -> list[Family]:
             YtWatchPass.outcome == YtPassOutcome.COMPLETE
         )
     )
+    # The daily refresh: a run that stopped for quota part way through its
+    # late readings fails nothing a cluster sees, so its own record says
+    # whether it did all that was due.
+    last_refresh = await session.scalar(
+        select(func.max(YtRefreshRun.finished_at)).where(
+            YtRefreshRun.outcome == YtPassOutcome.COMPLETE
+        )
+    )
     # The refresh reads every channel again before the refresh age, so the
     # oldest channel payload's age is how far behind it is. Only channels:
     # an old video, lookup or search run is old by design.
@@ -173,6 +182,11 @@ async def _youtube(session: AsyncSession, now: datetime) -> list[Family]:
             "itgraph_youtube_last_complete_pass_timestamp_seconds",
             "When a pass of the poll loop last completed.",
             _timestamp(last_pass),
+        ),
+        _gauge(
+            "itgraph_youtube_last_complete_refresh_timestamp_seconds",
+            "When a run of the refresh last completed.",
+            _timestamp(last_refresh),
         ),
         Family(
             "itgraph_youtube_oldest_payload_age_seconds",

@@ -32,6 +32,9 @@ __all__ = [
     "idle_interval",
     "in_quiet_hours",
     "in_quiet_window",
+    "late_horizon",
+    "late_offsets",
+    "late_reading_due",
     "next_channel_poll",
     "next_sample_at",
     "quiet_until",
@@ -72,8 +75,10 @@ def next_sample_at(
     simply gone.
 
     ``None`` once the post is past the last offset or past the horizon:
-    it has stopped moving, and reading it again would cost a request to
-    learn a number that no longer changes.
+    no poll is made for it any more. It has not stopped moving — views
+    still grow by a median ×1.12 from its first day to its second — but
+    what it gains after is slow enough to read only when a poll comes
+    anyway (``late_reading_due``).
 
     The offsets and the horizon default to Telegram's. YouTube passes its
     own, which is the one part of this module the two platforms share —
@@ -88,6 +93,49 @@ def next_sample_at(
         if offset > age:
             return published_at + offset
     return None
+
+
+def late_offsets() -> tuple[timedelta, ...]:
+    """The ages past the horizon at which a post is read, if a poll comes."""
+    return tuple(
+        timedelta(days=days) for days in settings.watch_late_offsets_days
+    )
+
+
+def late_horizon() -> timedelta:
+    """Past this age a post is not read at all, late or otherwise."""
+    return timedelta(days=settings.watch_late_horizon_days)
+
+
+def late_reading_due(
+    published_at: datetime,
+    newest_reading_at: datetime | None,
+    now: datetime,
+) -> bool:
+    """Whether a post past the horizon is read by the poll happening now.
+
+    **The one reading in the project taken after its moment.** The rule
+    at the top of this module drops a missed sample because replaying it
+    would cost requests. A late reading costs none: it rides on a poll
+    the schedule makes anyway, and it never makes a poll due. Dropping it
+    because that poll came hours after the age — an idle channel is polled
+    hours to days apart — would lose most of them. So a post is read when
+    the largest late age it has passed lies beyond the age of its newest
+    reading; one reading however many ages were passed since, and the row
+    records when it was actually taken.
+
+    A post with no reading at all counts as never read. Inside the
+    tracking horizon and past the late horizon nothing is due here.
+    """
+    age = now - published_at
+    if age < horizon() or age >= late_horizon():
+        return False
+    passed = [offset for offset in late_offsets() if offset <= age]
+    if not passed:
+        return False
+    if newest_reading_at is None:
+        return True
+    return newest_reading_at - published_at < passed[-1]
 
 
 def idle_interval(posts_per_day: float | None) -> timedelta:

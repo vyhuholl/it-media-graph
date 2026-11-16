@@ -18,6 +18,8 @@ What is YouTube's own:
 - **Pace.** The loop's pool is spread across the Pacific quota day, so
   a busy morning cannot leave the evening blind.
 - **Listing backoff,** for a channel whose uploads cannot be listed.
+- **Late readings** of past uploads, read by the daily refresh: daily
+  while young, weekly after, each interval due a few hours early.
 """
 
 from datetime import datetime, timedelta
@@ -30,6 +32,7 @@ __all__ = [
     "check_due",
     "deferrable",
     "horizon",
+    "late_reading_due",
     "listing_retry_at",
     "next_check_of_upcoming",
     "next_reading_at",
@@ -46,6 +49,12 @@ UPCOMING_CHECK = timedelta(hours=1)
 # The ceiling on a failing channel's wait. A day, so a channel that comes
 # back is listed again no later than the daily check would list it.
 LISTING_BACKOFF_CAP = timedelta(hours=24)
+
+# How early a late reading's interval comes due. The refresh runs once a
+# day, starting a minute or so either side of its hour and taking minutes;
+# a reading taken at 05:00:40 is not a day old at 05:00:20 the next
+# morning, and without this a "daily" video would be read every other day.
+LATE_SLACK = timedelta(hours=3)
 
 
 def sample_offsets() -> tuple[timedelta, ...]:
@@ -146,6 +155,32 @@ def check_due(listed_at: datetime | None, now: datetime) -> bool:
     return now - listed_at >= timedelta(
         hours=settings.youtube_watch_check_hours
     )
+
+
+def late_reading_due(
+    published_at: datetime,
+    newest_reading_at: datetime | None,
+    now: datetime,
+) -> bool:
+    """Whether the refresh takes a late reading of this past upload now.
+
+    Daily up to ``youtube_late_daily_until_days`` of age, every
+    ``youtube_late_weekly_interval_days`` after, nothing past the walk's
+    depth; each interval comes due ``LATE_SLACK`` early. Age is from the
+    publication time, as the past uploads' own choice is: at weeks of age
+    a broadcast's hours between scheduling and starting do not matter.
+    A video never read is due.
+    """
+    age = now - published_at
+    if age >= timedelta(days=settings.youtube_backfill_days):
+        return False
+    if newest_reading_at is None:
+        return True
+    daily = age <= timedelta(days=settings.youtube_late_daily_until_days)
+    interval = timedelta(
+        days=1 if daily else settings.youtube_late_weekly_interval_days
+    )
+    return newest_reading_at <= now - interval + LATE_SLACK
 
 
 def listing_retry_at(attempted_at: datetime, failures: int) -> datetime:

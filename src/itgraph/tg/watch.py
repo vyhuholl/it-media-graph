@@ -58,7 +58,7 @@ from telethon.errors import RPCError
 
 from itgraph.config import settings
 from itgraph.db.backfill import advance_newest
-from itgraph.db.metrics import store_metrics
+from itgraph.db.metrics import latest_observations, store_metrics
 from itgraph.db.models import Channel, CollectionCommand
 from itgraph.db.poll import (
     DueChannel,
@@ -72,10 +72,12 @@ from itgraph.db.poll import (
 from itgraph.db.raw import store_messages
 from itgraph.db.session import Database
 from itgraph.db.session_lease import SessionLease
-from itgraph.derive.metrics import counters_of
+from itgraph.derive.metrics import Counters, counters_of
 from itgraph.schedule import (
     horizon,
     in_quiet_hours,
+    late_horizon,
+    late_reading_due,
     next_channel_poll,
     window_size,
 )
@@ -112,10 +114,11 @@ BATCH = 25
 
 @dataclass(slots=True)
 class PollOutcome:
-    """What one channel's poll did."""
+    """What one channel's poll did. ``late`` is among ``snapshots``."""
 
     stored: int = 0
     snapshots: int = 0
+    late: int = 0
     newest_id: int | None = None
 
 
@@ -152,6 +155,7 @@ class WatchStats:
     polled: int = 0
     stored: int = 0
     snapshots: int = 0
+    late: int = 0
     skipped: int = 0
     failed: int = 0
     timed_out: int = 0
@@ -165,6 +169,10 @@ class WatchStats:
             f"polled {self.polled}, {self.stored} new messages, "
             f"{self.snapshots} snapshots"
         )
+        # Among the snapshots, and said apart: a loop whose late readings
+        # stopped looks identical to a healthy one in every other number.
+        if self.late:
+            line += f" ({self.late} late)"
         if self.skipped:
             line += f"; {len(self.skipped_channels)} channel(s) have no cached peer"
         if self.failed:
@@ -231,8 +239,10 @@ async def poll_channel(
         return PollOutcome()
 
     cutoff = now - horizon()
+    late_cutoff = now - late_horizon()
     payloads: dict[int, dict[str, Any]] = {}
-    readings = {}
+    readings: dict[int, Counters] = {}
+    past: dict[int, tuple[datetime, Counters]] = {}
     newest_id: int | None = None
     newest_date: datetime | None = None
 
@@ -241,14 +251,21 @@ async def poll_channel(
         payloads[message.id] = payload
         if newest_id is None or message.id > newest_id:
             newest_id, newest_date = message.id, message.date
-        # Only posts still inside the horizon are read. An older one is
-        # in the window because the window is sized in messages rather
-        # than in time, and re-reading it would cost a row to learn a
-        # number that has stopped moving.
+        counters = counters_of(payload)
+        if counters is None:
+            continue
+        # A post inside the horizon is read on every poll. An older one
+        # is in the window because the window is sized in messages rather
+        # than in time, and it is still moving — a median ×1.12 between
+        # its first and second day — so it is read at its late ages, from
+        # this request: no poll is made or widened for it.
         if message.date >= cutoff:
-            counters = counters_of(payload)
-            if counters is not None:
-                readings[message.id] = counters
+            readings[message.id] = counters
+        elif message.date > late_cutoff:
+            past[message.id] = (message.date, counters)
+
+    late = await _late_readings(session, channel.tg_id, past, now)
+    readings |= late
 
     stored = await store_messages(
         session, channel_id=channel.tg_id, payloads=payloads
@@ -269,7 +286,35 @@ async def poll_channel(
             .values(last_post_at=newest_date)
         )
 
-    return PollOutcome(stored=stored, snapshots=snapshots, newest_id=newest_id)
+    return PollOutcome(
+        stored=stored,
+        snapshots=snapshots,
+        late=len(late),
+        newest_id=newest_id,
+    )
+
+
+async def _late_readings(
+    session: AsyncSession,
+    channel_id: int,
+    past: dict[int, tuple[datetime, Counters]],
+    now: datetime,
+) -> dict[int, Counters]:
+    """Which of the window's posts past the horizon are read now.
+
+    One query for the newest reading of each, on the primary key, and only
+    when the window holds such a post at all.
+    """
+    if not past:
+        return {}
+    newest = await latest_observations(
+        session, channel_id=channel_id, msg_ids=list(past)
+    )
+    return {
+        msg_id: counters
+        for msg_id, (published_at, counters) in past.items()
+        if late_reading_due(published_at, newest.get(msg_id), now)
+    }
 
 
 def _rate_is_stale(channel: DueChannel, now: datetime) -> bool:
@@ -694,6 +739,7 @@ async def _poll_one(
         stats.polled += 1
         stats.stored += outcome.stored
         stats.snapshots += outcome.snapshots
+        stats.late += outcome.late
         found_nothing = outcome.stored == 0
         if outcome.stored:
             logger.info(

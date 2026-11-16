@@ -347,6 +347,7 @@ async def observations(
     *,
     since: datetime,
     burst_gap: timedelta = timedelta(0),
+    horizon: timedelta | None = None,
 ) -> dict[ChannelKind, list[Observation[int, int]]]:
     """Snapshots of posts published since a moment, grouped by channel kind.
 
@@ -354,6 +355,12 @@ async def observations(
     stored publication date. Never which sample in the schedule this was
     meant to be — samples are irregular by design, and a curve fitted on
     intended ages would describe a schedule rather than a metric.
+
+    **A reading past ``horizon`` is not an observation here.** The poll
+    loop keeps late readings of posts past the tracking horizon, at days
+    of age, for a later judgement (`add-late-readings`). No band reaches
+    them, so no fit would use one; read anyway, they would only swell the
+    count each fit stores as its samples, and the rows a refresh loads.
 
     **A counted metric is read the way its posts are scored**: zeros kept,
     since its curve and dispersion are made of them as much as of anything,
@@ -392,6 +399,8 @@ async def observations(
             FROM posts p
             LEFT JOIN message_metrics m
               ON m.channel_id = p.channel_id AND m.msg_id = p.msg_id
+             AND (CAST(:horizon AS interval) IS NULL
+                  OR m.observed_at - p.published < :horizon)
         """
     else:
         query = f"""
@@ -407,8 +416,15 @@ async def observations(
             JOIN channels c ON c.tg_id = m.channel_id
             WHERE (r.payload->>'date')::timestamptz >= :since
               AND c.kind IS NOT NULL
+              AND (CAST(:horizon AS interval) IS NULL
+                   OR m.observed_at - (r.payload->>'date')::timestamptz
+                      < :horizon)
         """
-    rows = (await session.execute(text(query), {"since": since})).all()
+    rows = (
+        await session.execute(
+            text(query), {"since": since, "horizon": horizon}
+        )
+    ).all()
 
     heads: dict[tuple[int, int], tuple[int, int]] | None = None
     if counted:

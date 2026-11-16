@@ -15,6 +15,7 @@ from itgraph.schedule import (
     backoff_factor,
     idle_interval,
     in_quiet_hours,
+    late_reading_due,
     next_channel_poll,
     next_sample_at,
     window_size,
@@ -287,3 +288,61 @@ def test_the_quiet_window_is_read_in_the_configured_zone(
     # 03:00 in Tokyo is quiet whatever the machine's clock says.
     tokyo_night = datetime(2026, 8, 3, 3, 0, tzinfo=ZoneInfo("Asia/Tokyo"))
     assert in_quiet_hours(tokyo_night.astimezone(UTC))
+
+
+# --- late readings ------------------------------------------------------
+#
+# A post past the horizon is read from whatever poll comes first past one
+# of its late ages (3, 4, 5, 7, 10, 14, 21 and 30 days, up to 35). The
+# reading is the one taken after its moment on purpose: it costs no
+# request, so there is no backlog to avoid.
+
+
+def test_a_post_that_has_passed_a_late_age_is_read() -> None:
+    assert late_reading_due(PUBLISHED, at(hours=48), at(days=3.5))
+
+
+def test_several_late_ages_passed_at_once_give_one_reading() -> None:
+    """At six days the 3, 4 and 5 were all passed: one reading, at six.
+
+    The next poll reads nothing until the 7-day age is passed.
+    """
+    assert late_reading_due(PUBLISHED, at(hours=48), at(days=6))
+    assert not late_reading_due(PUBLISHED, at(days=6), at(days=6.9))
+    assert late_reading_due(PUBLISHED, at(days=6), at(days=7.1))
+
+
+def test_a_post_already_read_at_its_latest_late_age_is_not_read_again() -> (
+    None
+):
+    assert not late_reading_due(PUBLISHED, at(days=3.2), at(days=3.8))
+
+
+def test_past_the_late_horizon_a_post_is_not_read() -> None:
+    assert not late_reading_due(PUBLISHED, at(days=21), at(days=40))
+    assert not late_reading_due(PUBLISHED, None, at(days=35))
+
+
+def test_a_post_never_read_is_read_at_the_age_it_has_reached() -> None:
+    """A post the backfill stored, with no reading at all."""
+    assert late_reading_due(PUBLISHED, None, at(days=12))
+
+
+def test_nothing_is_late_before_the_first_late_age() -> None:
+    """Past the horizon but short of three days: nothing to read yet."""
+    assert not late_reading_due(PUBLISHED, at(hours=48), at(hours=60))
+    assert not late_reading_due(PUBLISHED, None, at(hours=60))
+
+
+def test_inside_the_horizon_nothing_is_late() -> None:
+    """The tracking schedule reads a young post; a late reading never does."""
+    assert not late_reading_due(PUBLISHED, None, at(hours=30))
+
+
+def test_the_last_late_age_is_reachable() -> None:
+    assert late_reading_due(PUBLISHED, at(days=21.5), at(days=30.5))
+
+
+def test_no_late_ages_read_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "watch_late_offsets_days", ())
+    assert not late_reading_due(PUBLISHED, None, at(days=10))

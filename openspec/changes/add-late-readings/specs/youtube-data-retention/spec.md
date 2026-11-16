@@ -106,3 +106,10 @@ Every run of `itgraph yt refresh` SHALL record when it started and ended, how it
 - **GIVEN** a refresh whose request fails for a reason other than quota
 - **WHEN** it ends
 - **THEN** its record says it failed
+
+#### Scenario: A run that cannot start
+
+- **GIVEN** no API key configured
+- **WHEN** a refresh is run
+- **THEN** no request is made
+- **AND** its record says it failed, naming the missing key

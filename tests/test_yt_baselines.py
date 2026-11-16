@@ -258,7 +258,7 @@ async def test_too_few_newest_videos_fall_back_to_the_settled_ones(
     assert (channel_id(2), "long", "comments") not in found
 
 
-async def test_a_settled_video_counts_once_at_its_latest_reading(
+async def test_a_settled_video_counts_once_at_its_earliest_reading(
     database: Database,
 ) -> None:
     await a_channel(database, 1)
@@ -283,7 +283,46 @@ async def test_a_settled_video_counts_once_at_its_latest_reading(
         (channel_id(2), "long", "views")
     ]
     assert samples == 3
-    assert median == round(1000 * 1.9)
+    assert median == round(1000 * 1.4)
+
+
+async def test_daily_readings_do_not_age_the_reference(
+    database: Database,
+) -> None:
+    """Read every day from 29 to 120 days of age, as the late readings
+    read a past upload: two refreshes a month apart take each video at
+    the same reading, its earliest in the window."""
+    await a_channel(database, 1)
+    await seed_channel(database, 2)
+    await seed_videos(
+        database,
+        [
+            settled(
+                200 + index,
+                2,
+                days_ago=100,
+                views=1000,
+                read_at_days=tuple(range(29, 121)),
+            )
+            for index in range(3)
+        ],
+    )
+
+    await refresh_yt_baselines(database, now=NOW - timedelta(days=30))
+    await refresh_yt_baselines(database, now=NOW)
+
+    async with database.session() as session:
+        medians = list(
+            await session.scalars(
+                text(
+                    "SELECT median FROM yt_channel_baselines "
+                    "WHERE channel_id = :c AND format = 'long' "
+                    "AND metric = 'views' ORDER BY run_id"
+                ),
+                {"c": channel_id(2)},
+            )
+        )
+    assert medians == [round(1000 * 1.29)] * 2
 
 
 async def test_a_channel_s_shorts_and_talks_are_two_references(
@@ -599,3 +638,44 @@ async def test_a_period_before_any_run_has_none_in_force_at_its_start(
 
     assert [run.completed_at for run in found] == [NOW - timedelta(days=2)]
     assert none == []
+
+
+def test_a_replay_s_late_settled_reading_is_the_earliest_up_to_its_bound() -> (
+    None
+):
+    """Each settled video read first at 40 days, after the fit's moment,
+    and again at 60, before the bound: the replay takes the 40-day one."""
+    from itgraph.db.models import YtChannelKind, YtVideoFormat
+    from itgraph.db.yt_baselines import YtVideo
+    from itgraph.derive.yt_videos import Counters
+    from itgraph.scoring.yt_refresh import YtParams, fit_youtube
+
+    moment = NOW - timedelta(days=30)
+    channel = channel_id(7)
+    videos = {}
+    for index in range(10):
+        published = moment - timedelta(days=35)
+        videos[video_id(700 + index)] = YtVideo(
+            video_id=video_id(700 + index),
+            channel_id=channel,
+            published=published,
+            format=YtVideoFormat.LONG,
+            broadcast=False,
+            readings=(
+                (published + timedelta(days=40), Counters(views=1400)),
+                (published + timedelta(days=60), Counters(views=1600)),
+            ),
+        )
+
+    fitted = fit_youtube(
+        videos,
+        {channel: YtChannelKind.PERSONAL},
+        moment,
+        YtParams.from_settings(),
+        settled_until=NOW,
+    )
+
+    value, samples, _ = fitted.references[
+        (channel, YtVideoFormat.LONG, YtMetric.VIEWS)
+    ]
+    assert (value, samples) == (1400, 10)

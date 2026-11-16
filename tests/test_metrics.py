@@ -36,6 +36,7 @@ from itgraph.db.models import (
     YtRawChannel,
     YtRawVideo,
     YtRawVideoStat,
+    YtRefreshRun,
     YtWatchPass,
     YtWeeklyList,
 )
@@ -61,6 +62,7 @@ EXPECTED = {
     "itgraph_youtube_quota_cap_units",
     "itgraph_youtube_quota_exhausted",
     "itgraph_youtube_last_complete_pass_timestamp_seconds",
+    "itgraph_youtube_last_complete_refresh_timestamp_seconds",
     "itgraph_youtube_oldest_payload_age_seconds",
     "itgraph_alerts_oldest_undelivered_seconds",
     "itgraph_alerts_failing",
@@ -299,6 +301,50 @@ async def test_only_a_complete_pass_counts(database: Database) -> None:
     assert (
         value(read, "itgraph_youtube_last_complete_pass_timestamp_seconds")
         == (NOW - timedelta(minutes=15)).timestamp()
+    )
+
+
+async def test_a_refresh_that_stopped_for_quota_is_not_complete(
+    database: Database,
+) -> None:
+    """Yesterday's complete run is the newest complete one; today's
+    stopped for quota."""
+    yesterday = NOW - timedelta(days=1)
+    async with database.session() as session:
+        session.add_all(
+            [
+                YtRefreshRun(
+                    started_at=yesterday,
+                    finished_at=yesterday + timedelta(minutes=9),
+                    outcome=YtPassOutcome.COMPLETE,
+                    late_due=400,
+                    late_read=400,
+                ),
+                YtRefreshRun(
+                    started_at=NOW - timedelta(hours=1),
+                    finished_at=NOW - timedelta(minutes=50),
+                    outcome=YtPassOutcome.EXHAUSTED,
+                    late_due=400,
+                    late_read=100,
+                    error="quotaExceeded",
+                ),
+            ]
+        )
+
+    read = await families(database)
+
+    assert (
+        value(read, "itgraph_youtube_last_complete_refresh_timestamp_seconds")
+        == (yesterday + timedelta(minutes=9)).timestamp()
+    )
+
+
+async def test_no_refresh_yet_reads_as_zero(database: Database) -> None:
+    read = await families(database)
+
+    assert (
+        value(read, "itgraph_youtube_last_complete_refresh_timestamp_seconds")
+        == 0
     )
 
 

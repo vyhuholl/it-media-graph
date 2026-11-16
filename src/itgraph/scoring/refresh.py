@@ -282,6 +282,7 @@ async def refresh_baselines(
                 metric,
                 since=since,
                 burst_gap=timedelta(seconds=settings.scoring_burst_seconds),
+                horizon=timedelta(hours=settings.watch_horizon_hours),
             )
             if not by_kind:
                 # No snapshot in the window carried this metric at all —

@@ -26,16 +26,21 @@ from telethon.errors import ChannelPrivateError, FloodWaitError
 
 from itgraph.config import settings
 from itgraph.db.channels import DiscoveredChannel, upsert_channels
+from itgraph.db.metrics import store_metrics
 from itgraph.db.models import DiscoverySource
 from itgraph.db.poll import due_channels
+from itgraph.db.raw import store_messages
 from itgraph.db.session import Database
+from itgraph.derive.metrics import Counters
 from itgraph.tg import watch as watch_module
 from itgraph.tg.errors import WatchStalled
+from itgraph.tg.payload import encode_payload
 from itgraph.tg.watch import watch
 
 FIRST = 1000000001
 SECOND = 1000000002
 NOW = datetime(2026, 8, 3, 12, 0, tzinfo=UTC)
+DAY = 24 * 60  # minutes, for `fresh`
 
 # A stall window a test can outlive, and enough cycles to outlive it.
 # The stall tests are the one place where running *past* the window is
@@ -238,23 +243,190 @@ async def test_a_poll_that_finds_nothing_new_still_snapshots(
     assert stats.snapshots == 1
 
 
-async def test_a_post_past_the_horizon_is_not_snapshotted(
+async def test_a_post_past_the_late_horizon_is_not_snapshotted(
     database: Database,
 ) -> None:
-    """It has stopped moving; reading it costs a row to learn nothing."""
+    """Past 35 days a post is not read, late or otherwise; and between
+    the tracking horizon and the first late age there is nothing to read
+    yet."""
     await seed(database, FIRST)
-    old = fresh(9, 60 * 24 * 9, views=5000)
-    client = client_for({FIRST: [fresh(10, 5, views=10), old]})
+    old = fresh(9, DAY * 40, views=5000)
+    between = fresh(8, DAY * 2.5, views=700)
+    client = client_for({FIRST: [fresh(10, 5, views=10), between, old]})
 
     await watch(client, database, max_cycles=1)
 
     assert [row[1] for row in await snapshots(database)] == [10]
-    # ...but it is still stored, because the request already returned it.
+    # ...but both are stored, because the request already returned them.
     async with database.session() as session:
         stored = await session.scalar(
             text("SELECT count(*) FROM raw_messages")
         )
-    assert stored == 2
+    assert stored == 3
+
+
+# --- late readings ------------------------------------------------------
+
+
+async def readings_of(database: Database, msg_id: int) -> list[datetime]:
+    async with database.session() as session:
+        result = await session.execute(
+            text(
+                "SELECT observed_at FROM message_metrics "
+                "WHERE msg_id = :m ORDER BY observed_at"
+            ),
+            {"m": msg_id},
+        )
+        return list(result.scalars())
+
+
+async def read_at(
+    database: Database, channel: int, message: Any, age: timedelta
+) -> None:
+    """Store a message and one reading of it at the given age."""
+    async with database.session() as session:
+        await store_messages(
+            session,
+            channel_id=channel,
+            payloads={message.id: encode_payload(message)},
+        )
+        await store_metrics(
+            session,
+            channel_id=channel,
+            observed_at=message.date + age,
+            counters={message.id: Counters(views=1)},
+        )
+
+
+async def due_again(database: Database) -> None:
+    async with database.session() as session:
+        await session.execute(
+            text("UPDATE poll_state SET due_at = now() - interval '1 hour'")
+        )
+
+
+async def test_a_post_that_has_passed_a_late_age_is_read(
+    database: Database,
+) -> None:
+    """From the window the poll fetched anyway, at the poll's moment."""
+    await seed(database, FIRST)
+    old = fresh(9, DAY * 3.5, views=4321, forwards=7)
+    await read_at(database, FIRST, old, timedelta(hours=48))
+    client = client_for({FIRST: [fresh(10, 5, views=10), old]})
+
+    before = datetime.now(UTC)
+    stats = await watch(client, database, max_cycles=1)
+
+    assert stats.late == 1
+    assert "1 late" in stats.line()
+    taken = await readings_of(database, 9)
+    assert len(taken) == 2
+    assert taken[-1] >= before
+    rows = [row for row in await snapshots(database) if row[1] == 9]
+    assert (rows[-1][2], rows[-1][3]) == (4321, 7)
+    assert len(client.windows) == 1
+
+
+async def test_several_late_ages_passed_at_once_give_one_reading(
+    database: Database,
+) -> None:
+    await seed(database, FIRST)
+    old = fresh(9, DAY * 6, views=100)
+    await read_at(database, FIRST, old, timedelta(hours=48))
+    client = client_for({FIRST: [old]})
+
+    await watch(client, database, max_cycles=1)
+    await due_again(database)
+    await watch(client, database, max_cycles=1)
+
+    # The one at 48 hours, and one at six days; none before seven.
+    assert len(await readings_of(database, 9)) == 2
+
+
+async def test_a_post_already_read_at_its_latest_late_age_is_not_read_again(
+    database: Database,
+) -> None:
+    await seed(database, FIRST)
+    old = fresh(9, DAY * 3.8, views=100)
+    await read_at(database, FIRST, old, timedelta(days=3.2))
+    client = client_for({FIRST: [old]})
+
+    stats = await watch(client, database, max_cycles=1)
+
+    assert stats.late == 0
+    assert len(await readings_of(database, 9)) == 1
+
+
+async def test_a_post_the_window_does_not_reach_is_not_read(
+    database: Database,
+) -> None:
+    """Ten messages a window for a channel with no rate yet; the eleventh
+    is not asked for, however due it is."""
+    await seed(database, FIRST)
+    history = [fresh(100 - n, 5 + n, views=1) for n in range(10)]
+    beyond = fresh(50, DAY * 10, views=9999)
+    client = client_for({FIRST: [*history, beyond]})
+
+    await watch(client, database, max_cycles=1)
+
+    assert await readings_of(database, 50) == []
+    assert len(client.windows) == 1
+
+
+async def test_a_late_reading_does_not_replay_a_missed_sample(
+    database: Database,
+) -> None:
+    """Nothing read at 24 or 48 hours; one reading now, and only one."""
+    await seed(database, FIRST)
+    old = fresh(9, DAY * 3.5, views=300)
+    client = client_for({FIRST: [old]})
+
+    await watch(client, database, max_cycles=1)
+
+    assert len(await readings_of(database, 9)) == 1
+
+
+async def test_late_readings_cost_no_request(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same window asked for, and the same next due moment, whether
+    or not the window holds posts due a late reading."""
+
+    def history() -> list[Any]:
+        return [fresh(9, DAY * 3.5, views=1), fresh(8, DAY * 8, views=1)]
+
+    async def interval(tg_id: int) -> timedelta:
+        async with database.session() as session:
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT due_at - last_polled_at FROM poll_state "
+                        "WHERE channel_id = :c"
+                    ),
+                    {"c": tg_id},
+                )
+            ).one()
+        return row[0]  # type: ignore[no-any-return]
+
+    await seed(database, FIRST)
+    ages = settings.watch_late_offsets_days
+
+    monkeypatch.setattr(settings, "watch_late_offsets_days", ())
+    off = client_for({FIRST: history()})
+    await watch(off, database, max_cycles=1)
+    assert await snapshots(database) == []
+
+    # Seeded only now, so the first run did not find it due and skip it.
+    await seed(database, SECOND)
+    monkeypatch.setattr(settings, "watch_late_offsets_days", ages)
+    on = client_for({SECOND: history()})
+    stats = await watch(on, database, max_cycles=1)
+    assert stats.late == 2
+
+    assert [limit for _, _, limit in off.windows] == [
+        limit for _, _, limit in on.windows
+    ]
+    assert await interval(FIRST) == await interval(SECOND)
 
 
 async def test_a_service_message_is_stored_but_not_measured(

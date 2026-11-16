@@ -67,6 +67,7 @@ A late age passed by more than one reading at once leaves one row (spec: "Severa
 - **`tg/watch.poll_channel`** adds to `readings` the posts past the horizon that `late_reading_due` names, in the same transaction and with the same `observed_at`. `PollOutcome` counts them, and the loop's report line says how many.
 - **Unchanged:** `window_size`, `next_channel_poll`, `live_post_dates`. Tests pin that the request's `limit` and the next due moment are identical with and without posts due a late reading (spec: "Late Readings Cost No Request").
 - **Scoring:** a test pins that a Telegram baseline refresh and a scoring pass give identical results on a database with and without late readings.
+- **Found while applying.** That test failed on one column: `metric_baselines.samples` grew by about a quarter. `db/baselines.observations` loaded every reading of a post in the fit window, and `fit` stores `len(entries)` as the samples. No band reaches a late reading, so factors, spreads, curves, references and alerts were all already identical. `observations` now takes `horizon` (the tracking horizon, passed by `scoring/refresh.py`) and leaves out readings past it. The stored count stays what it was, and a refresh does not load on the order of a hundred thousand rows it would ignore. The characterisation record is unedited and still matches.
 
 ### 5. YouTube: a step of `yt refresh`, not a command of its own
 
@@ -133,7 +134,7 @@ Late readings and refresh records act on nothing. `neutralise.sql` and `readback
 - **`docs/PLAN.md`:** the measurements of 2026-11-16 under "Detecting strong reactions" and under YouTube "Scoring". The order A → B → C under "Order of changes". The sentence "then never again" on Telegram's samples, corrected.
 - **`src/itgraph/README.md`:** the late readings in the loop and the refresh, the new series in its table, and what the refresh's report line says.
 - **The module map** (`src/itgraph/CLAUDE.md`): `schedule.py`, `yt_schedule.py`, `db/metrics.py`, `yt/videos.py`, `yt/refresh.py` and `db/yt_videos.py` rows updated.
-- **The site** is the operator's to word. Proposed for `docs/privacy.html`, "How long it is kept", the second sentence: "A channel's uploads of the past year are fetched again before their data is 25 days old, and their view, like and comment counts are read daily until they are 120 days old and weekly after, while the channel is in scope." With "Last updated" on the day of the deploy.
+- **The site is not touched.** The operator decided on 2026-11-16 that the mismatch between `docs/privacy.html` and the code is ignored (proposal.md, decision record).
 
 ## Risks / Trade-offs
 
@@ -155,5 +156,4 @@ Late readings and refresh records act on nothing. `neutralise.sql` and `readback
 
 ## Open Questions
 
-- **The privacy page and retention** (proposal.md, Open). `docs/privacy.html` still says YouTube statistics are kept at most 30 days, that data not fetched again within 30 days is deleted, and that YouTube data never enters backups. None of this has held since `b5b0c15` (2026-11-11). The specs and the code do not depend on the answer, so it does not block this change. But whatever the page should say is the operator's, and this change makes the gap larger.
 - **`videos.batchGetStats`' id limit**: deferred with the method itself (Decision 5).

@@ -13,6 +13,7 @@ from itgraph.db.models import YtCommand
 from itgraph.db.session import Database
 from itgraph.yt.client import YouTube, youtube
 from itgraph.yt.videos import (
+    COUNTS,
     FIELDS,
     LOOP,
     PARTS,
@@ -138,14 +139,38 @@ def _named(fields: str) -> set[str]:
     return set(re.findall(r"[A-Za-z]+", fields)) - STRUCTURE
 
 
-def test_every_field_named_is_on_the_privacy_page() -> None:
-    asked = LOOP
+@pytest.mark.parametrize("asked", [LOOP, COUNTS], ids=["loop", "counts"])
+def test_every_field_named_is_on_the_privacy_page(asked: Asked) -> None:
     page = (Path(__file__).parent.parent / "docs" / "privacy.html").read_text()
     videos = page[page.index("About videos") :]
     videos = videos[: videos.index("</li>")]
     for field in _named(asked.fields):
         assert field in DECLARED, f"{field} is read and not declared"
         assert DECLARED[field] in videos, f"{DECLARED[field]!r} not on page"
+
+
+def test_a_late_reading_asks_for_the_counts_alone() -> None:
+    assert COUNTS == Asked(
+        parts="statistics",
+        fields="items(id,statistics(viewCount,likeCount,commentCount))",
+    )
+    assert _named(COUNTS.fields) == {"id", "viewCount", "likeCount"} | {
+        "commentCount"
+    }
+
+
+async def test_a_late_reading_s_answer_holds_the_counts_alone(
+    database: Database,
+) -> None:
+    fake = _fake(1, 2)
+
+    async with client(database, fake) as yt:
+        found = await by_ids(yt, [video_id(1), video_id(2)], asked=COUNTS)
+
+    assert set(found) == {video_id(1), video_id(2)}
+    assert set(found[video_id(1)]) == {"id", "statistics"}
+    call = fake.calls("videos")[0]
+    assert (call["part"], call["fields"]) == (COUNTS.parts, COUNTS.fields)
 
 
 def test_the_loop_s_request_is_unchanged() -> None:
