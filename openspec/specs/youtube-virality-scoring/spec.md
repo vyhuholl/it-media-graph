@@ -131,7 +131,7 @@ The system SHALL take a channel's reference for a format and signal as the media
 
 ### Requirement: Too Few Newest Videos Fall Back To The Settled Ones
 
-Where a channel has too few newest videos of a format, the system SHALL use for views and likes the median of its settled videos of that format — one reading each, the latest taken between 29 and 120 days of age by default — needing a configured minimum, scaled by its kind's factor. Comments SHALL take no fallback. A channel on the fallback SHALL be recorded as such.
+Where a channel has too few newest videos of a format, the system SHALL use for views and likes the median of its settled videos of that format — one reading each, the earliest taken between 29 and 120 days of age by default — needing a configured minimum, scaled by its kind's factor. Comments SHALL take no fallback. A channel on the fallback SHALL be recorded as such.
 
 #### Scenario: A channel uploading twice a month
 
@@ -145,7 +145,13 @@ Where a channel has too few newest videos of a format, the system SHALL use for 
 
 - **GIVEN** a settled video read at 40, 65 and 90 days of age
 - **WHEN** the settled median is taken
-- **THEN** the video contributes its reading at 90 days alone
+- **THEN** the video contributes its reading at 40 days alone
+
+#### Scenario: Daily readings do not age the reference
+
+- **GIVEN** a channel whose settled videos are each read daily from 29 to 120 days of age
+- **WHEN** baselines are refreshed on two days a month apart
+- **THEN** a video already past 29 days on the first day contributes the same reading on both days, its earliest inside the window
 
 ### Requirement: A Channel Without Enough History Is Not Scored, And Is Reported
 

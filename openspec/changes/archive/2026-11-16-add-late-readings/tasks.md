@@ -80,12 +80,12 @@ Rules for every task:
 
 ## 6. Rollout
 
-- [ ] 6.1 **(operator)** Cut a release, deploy the role to the test environment, and restore from a fresh full dump. Verify: the revision applies, and the new series is served (0, or the copy's moment).
-- [ ] 6.2 **(operator)** Pin the release in production, and ask the infrastructure repository for the alert and panel of design.md, Decision 9. Verify:
+- [x] 6.1 **(operator)** Cut a release, deploy the role to the test environment, and restore from a fresh full dump. Verify: the revision applies, and the new series is served (0, or the copy's moment).
+- [x] 6.2 **(operator)** Pin the release in production, and ask the infrastructure repository for the alert and panel of design.md, Decision 9. Verify:
   - the first refresh's line shows about 52 thousand late readings due and taken, for about 1,050 units of the general pool;
   - the watch loop's line counts late readings;
   - the series shows the refresh complete.
-- [ ] 6.3 Two days after the pin, read the production database in aggregates. Verify:
+- [x] 6.3 Two days after the pin, read the production database in aggregates. Verify:
   - Telegram late readings per day are under 5 thousand after the first day;
   - YouTube late readings per day are about 20 thousand, and the general pool spends about 400 units;
   - no Telegram poll's request size or count changed (`flood_events` and polls a day against the week before).

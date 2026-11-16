@@ -276,8 +276,14 @@ Every request SHALL name the resource parts and the fields within them that it r
 
 #### Scenario: A past upload is asked for as the poll loop asks
 
-- **WHEN** the history walk or the refresh asks for past uploads
+- **WHEN** the history walk stores a past upload, or the refresh fetches a past upload's data again
 - **THEN** the request names the video's fields as the poll loop's does, counts included
+
+#### Scenario: A late reading asks for the counts alone
+
+- **WHEN** the refresh takes late readings of past uploads
+- **THEN** the request names each video's id and its view, like and comment counts
+- **AND** no title, description, channel id, publication time, duration or broadcast data
 
 #### Scenario: A linked video is asked for its channel only
 

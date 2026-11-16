@@ -60,6 +60,7 @@ Every series SHALL be worked out at scrape time from durable state in the databa
 | `itgraph_youtube_quota_cap_units{pool}` | gauge | the pool's cap |
 | `itgraph_youtube_quota_exhausted{bucket}` | gauge | 1 when this quota day was declared over for that bucket |
 | `itgraph_youtube_last_complete_pass_timestamp_seconds` | gauge | the newest poll pass that completed, 0 when none |
+| `itgraph_youtube_last_complete_refresh_timestamp_seconds` | gauge | when the newest refresh that completed ended, 0 when none |
 | `itgraph_youtube_oldest_payload_age_seconds{kind}` | gauge | how long ago the oldest stored channel payload was read, `kind="channel"` only; absent when there is none |
 | `itgraph_alerts_oldest_undelivered_seconds{platform}` | gauge | the oldest alert of that platform's queue not delivered, held ones included, 0 when none |
 | `itgraph_alerts_failing{platform}` | gauge | undelivered alerts of that platform's queue past the failure-report attempts |
@@ -110,9 +111,21 @@ Every series SHALL be worked out at scrape time from durable state in the databa
 - **WHEN** a client scrapes
 - **THEN** both weekly list series are 0 for `route="en"` and `route="ru"`
 
+#### Scenario: A refresh that stopped for quota
+
+- **GIVEN** a refresh that completed yesterday and one today that stopped for quota
+- **WHEN** a client scrapes
+- **THEN** `itgraph_youtube_last_complete_refresh_timestamp_seconds` is when yesterday's ended
+
+#### Scenario: No refresh yet
+
+- **GIVEN** no refresh recorded
+- **WHEN** a client scrapes
+- **THEN** `itgraph_youtube_last_complete_refresh_timestamp_seconds` is 0
+
 ### Requirement: Metrics Carry Nothing YouTube Said
 
-No series SHALL carry a title, handle, description, channel id, video id or statistic read from YouTube. What the exporter reads of YouTube's tables SHALL be limited to when each row was fetched, enforced by the database role it connects as. Of a YouTube alert it SHALL read only its moments and delivery state; of a baseline run of either platform, only when it completed and how many channels it counted; of a weekly list, only its language and its moments, and nothing of its entries.
+No series SHALL carry a title, handle, description, channel id, video id or statistic read from YouTube. What the exporter reads of YouTube's tables SHALL be limited to when each row was fetched, enforced by the database role it connects as. Of a YouTube alert it SHALL read only its moments and delivery state; of a baseline run of either platform, only when it completed and how many channels it counted; of a weekly list, only its language and its moments, and nothing of its entries; of a refresh's record, only when it ended and how.
 
 #### Scenario: The role cannot read a title
 
@@ -136,6 +149,12 @@ No series SHALL carry a title, handle, description, channel id, video id or stat
 
 - **GIVEN** the exporter's database role
 - **WHEN** it selects any column of a weekly list's entries, or a list's counts or parameters
+- **THEN** the database refuses with a permission error
+
+#### Scenario: The role cannot read a refresh's counts
+
+- **GIVEN** the exporter's database role
+- **WHEN** it selects how many late readings a refresh found due or took, or its error
 - **THEN** the database refuses with a permission error
 
 #### Scenario: The role can write nothing
