@@ -94,9 +94,9 @@ When the prompt and the actual behaviour of a library or of the code disagree, d
 - Code, identifiers and comments in English. Docs and commit messages may be Russian.
 
 ## Database access
-During explore you may read the production database as `itgraph_reader`, a read-only user. The operator opens SSH tunnel, and the password is in `.pgpass`: do not look for it or print it.
+During explore you may read the production database as `itgraph_reader`, a read-only user. The operator opens SSH tunnel, and the password is in `.pgpass` at the repository root (gitignored), not in `~/.pgpass` — hence `PGPASSFILE`, run from the root: do not look for it or print it.
 ```bash
-PGOPTIONS='-c statement_timeout=60s' /opt/homebrew/opt/libpq/bin/psql -h localhost -p 15433 -U itgraph_reader -d itgraph
+PGPASSFILE=.pgpass PGOPTIONS='-c statement_timeout=60s' /opt/homebrew/opt/libpq/bin/psql -h localhost -p 15433 -U itgraph_reader -d itgraph
 ```
 Rules:
 * This is the working database, and the collector writes to it while you read. Read large tables through aggregates and with `LIMIT`. If a query hits `statement_timeout`, narrow it rather than lifting the limit.
