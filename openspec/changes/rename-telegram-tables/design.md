@@ -64,7 +64,16 @@ The downgrade is lossless and is exercised already: role tests such as `test_met
 
 `channels` is also the name of a YouTube API method, an `itgraph` command and an English word. `alerts`, `edges` and `metric` are words too. So no blind replace: every raw SQL string, every `__tablename__` and enum `name=`, `db/views.py`, `INVENTORY_TABLES`, `files/neutralise.sql`, `files/readback.sql`, the role's tasks, `e2e.sh`, the tests and the tracked notebooks are edited where they name a table.
 
-The suite then runs on the new names, so any SQL a test reaches and that was missed fails loudly. For what no test reaches, a closing sweep over `src/`, `tests/`, `deploy/`, `scripts/` and `notebooks/` looks for the old names in SQL position: after `FROM`, `JOIN`, `INTO`, `UPDATE`, `TABLE`, `ON`, `REFERENCES`, in `to_regclass('…')`, and as `::type` casts. It must come back empty. This is a step of the change, not a permanent test. Once the change is done, a test about names that no longer exist is noise.
+The suite then runs on the new names, so any SQL a test reaches and that was missed fails loudly. For what no test reaches, a closing sweep over `src/`, `tests/`, `deploy/`, `scripts/` and `notebooks/` looks for the old names in SQL position:
+- after `FROM`, `JOIN`, `INTO`, `UPDATE`, `TABLE`, `ON`, `REFERENCES`;
+- in `to_regclass('…')`;
+- as `::type` casts;
+- qualified by the schema, as `public.channels` — the form a dump's `GRANT … ON TABLE` takes;
+- every old constraint, index and sequence name of the revision's list, wherever it appears. Code names a constraint as the target of `ON CONFLICT ON CONSTRAINT`, and tests match one in an error.
+
+It must come back empty, except where an old name is meant. This is a step of the change, not a permanent test. Once the change is done, a test about names that no longer exist is noise.
+
+The first sweep looked only at the table names, and the last two forms got through. The suite caught the constraint names and e2e caught the schema-qualified one (tasks.md, 4.1). The list above is what the sweep has to cover.
 
 ### 7. Python names stay; docs follow the schema
 
@@ -77,6 +86,20 @@ The model classes, the module names and the CLI do not change. The docs that des
   - After production's deploy, the operator takes a full dump at once (`scripts/on-host.sh --backups backup --full`), so `full-LATEST.dump` stops predating the rename the same day rather than within a week.
   - The README's manual-restore section says that a full dump older than the rename is restored the rehearsal's way.
 - **Inventory dump from before the rename:** `pg_restore --data-only --table=channels` no longer matches anything. The README says to restore such a dump into a scratch database, rename its tables there, and pour the rows from it. Inventory dumps are kept 30 days (`backup_keep_inventory`), so the last of them ages out a month after the deploy.
+
+### 9. The role's checks give up when quiet hours would overtake them
+
+Found by e2e while verifying this change, and brought into it by the operator. The role tries the bot (an alert through each destination, after a restore) and the collector (a poll newer than its start, after a deploy). Each waits up to five minutes. Before this change each read the hour once, decided by it alone, and then waited. A trial that started at 01:58 Moscow time raised its YouTube alerts, the bot fell quiet at 02:00 and held them, and the wait ran out on a bot that worked. The poll check fails the same way, and so does any deploy run a few minutes before 02:00.
+
+So each check now asks one question, in `tasks/quiet.yml`: do quiet hours hold now, or begin before its wait would end?
+- **The wait.** For the trials: retries × delay, twice where the environment has YouTube alerts, since Telegram's and YouTube's trials run one after the other under one answer. For polls: retries × delay. A minute more in both, for the seconds a clock read to the minute drops.
+- **One answer for both trials.** They are proven together or reported together, which is what e2e's quiet-hours branch already expects: no alert of either platform raised.
+- **Read as the code reads a quiet window** (`schedule.in_quiet_window`): past midnight when the window starts later than it ends, and none at all when its bounds are equal. The role read neither before: a window of 22–06 would never have counted as quiet, and the trials would have waited into it.
+- **What it says.** A check that cannot be made says why, and still begins "could not be proven" or "could not be checked", as e2e reads it: "the bot falls quiet at 2:00 Europe/Moscow, before the wait for its alerts would end".
+
+Rejected: checking the hour again when the wait runs out, and calling a failure inside quiet hours "not proven". By then the alerts are raised and held. They would be sent at 07:00 as a digest from the test environment's restore, and e2e's quiet branch asserts that nothing was raised.
+
+The first run's unexplained miss — a Telegram trial at 00:45 with nothing delivered in five minutes and no log kept — is not this, and is not addressed here.
 
 ## Risks / Trade-offs
 
