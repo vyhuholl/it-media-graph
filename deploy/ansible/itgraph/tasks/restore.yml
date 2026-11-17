@@ -49,6 +49,10 @@
       ansible.builtin.set_fact:
         __itgraph_unneutralised: true
 
+    # pg_restore may stop reading before the end of a pipe, and through `kubectl
+    # exec` an unread rest larger than the stream's buffers stalls it for good: a
+    # dump of a neutralised copy left 150 kB of 343. So the rest is read to its end,
+    # as the dump check reads it, and the outcome is still pg_restore's.
     - name: Replace the data with the dump's
       ansible.builtin.shell:
         cmd: "{{ __itgraph_in_database }} {{ __itgraph_replace | quote }} < {{ itgraph_restore_from | quote }}"
@@ -57,7 +61,10 @@
           export PGUSER={{ itgraph_db_user }}
           dropdb --force {{ itgraph_db_name }}
           createdb -O {{ itgraph_db_user }} {{ itgraph_db_name }}
-          pg_restore --exit-on-error --no-owner -d {{ itgraph_db_name }}
+          rc=0
+          pg_restore --exit-on-error --no-owner -d {{ itgraph_db_name }} || rc=$?
+          cat >/dev/null
+          exit "$rc"
       changed_when: true
 
     # COPY's text format puts one row on a line and escapes a newline within a value,
@@ -68,6 +75,7 @@
       vars:
         __itgraph_count: |-
           export PGUSER={{ itgraph_db_user }}
+          rc=0
           pg_restore --data-only -f - |
             awk 'inside && /^\\\.$/ { print table, rows; inside = 0; next }
                  inside { rows++; next }
@@ -82,7 +90,9 @@
                 fi
               done
               exit "$bad"
-            }
+            } || rc=$?
+          cat >/dev/null
+          exit "$rc"
       register: __itgraph_counts
       changed_when: false
 
