@@ -881,3 +881,15 @@ def test_a_rising_setting_out_of_range_is_refused(
     env.setenv(name, value)
     with pytest.raises(ValidationError, match=name.lower()):
         build()
+
+
+def test_five_offers_a_day(env: pytest.MonkeyPatch) -> None:
+    assert build().rising_offers_per_day == 5
+
+
+def test_a_day_without_room_for_an_offer_is_refused(
+    env: pytest.MonkeyPatch,
+) -> None:
+    env.setenv("RISING_OFFERS_PER_DAY", "0")
+    with pytest.raises(ValidationError, match="rising_offers_per_day"):
+        build()

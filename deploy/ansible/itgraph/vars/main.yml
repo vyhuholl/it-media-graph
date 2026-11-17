@@ -275,9 +275,10 @@ __itgraph_heavy_job_resources:
 # Forbid cannot block every later one. The daily deadlines let a run missed while
 # the node was down start when it is back, the same day.
 #
-# Detection is one job of two sibling containers: `alerts` never runs on edges a
-# failed `derive` would have left stale, and `score`, which reads no edge, does
-# not stop when `derive` fails. The job fails if either does.
+# Detection is one job of three sibling containers: `alerts` never runs on edges
+# a failed `derive` would have left stale; `score`, which reads no edge, does not
+# stop when `derive` fails; and `reviews` applies the decisions pressed in the bot
+# whatever the other two do. The job fails if any does.
 __itgraph_cronjobs_always:
   - name: itgraph-detect
     schedule: "{{ itgraph_detect_schedule }}"
@@ -291,6 +292,10 @@ __itgraph_cronjobs_always:
         resources: "{{ __itgraph_job_resources }}"
       - name: score
         args: [score]
+        env_from: ["{{ __itgraph_from_config }}", "{{ __itgraph_from_database }}"]
+        resources: "{{ __itgraph_job_resources }}"
+      - name: reviews
+        args: [apply-reviews]
         env_from: ["{{ __itgraph_from_config }}", "{{ __itgraph_from_database }}"]
         resources: "{{ __itgraph_job_resources }}"
     mounts: []
@@ -361,6 +366,23 @@ __itgraph_cronjobs_always:
     containers:
       - name: itgraph
         args: [weekly]
+        env_from: ["{{ __itgraph_from_config }}", "{{ __itgraph_from_database }}"]
+        resources: "{{ __itgraph_job_resources }}"
+    mounts: []
+    volumes: []
+  # Telegram's rising channels, offered for review in the bot: read from
+  # collected data alone, so it runs in every environment, into that
+  # environment's own chat. Counts only in its output, never `--preview`.
+  - name: itgraph-offer
+    schedule: "{{ itgraph_offer_schedule }}"
+    # Thirteen hours: a run missed while the host was down starts when it is
+    # back, the same day, and never runs into the next day's.
+    starting_deadline: 46800
+    active_deadline: 1800
+    labels: "{{ __itgraph_may_reach_database }}"
+    containers:
+      - name: itgraph
+        args: [offer]
         env_from: ["{{ __itgraph_from_config }}", "{{ __itgraph_from_database }}"]
         resources: "{{ __itgraph_job_resources }}"
     mounts: []

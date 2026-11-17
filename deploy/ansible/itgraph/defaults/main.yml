@@ -63,6 +63,8 @@ itgraph_yt_baselines_schedule: "30 5 * * *"
 # The weekly lists on Monday morning, for the week that ended at midnight.
 itgraph_yt_weekly_schedule: "0 10 * * 1"
 itgraph_weekly_schedule: "0 10 * * 1"
+# Telegram's rising channels, a day's selection for the bot to send.
+itgraph_offer_schedule: "0 11 * * *"
 # Hourly, so a new seed is walked within the hour of being marked; a run with
 # nothing to walk makes no request. Once daily at 11:30, early in a fresh quota
 # day, while walks were whole rounds of seeds. Now one is a seed or two at about

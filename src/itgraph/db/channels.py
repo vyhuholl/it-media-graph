@@ -53,6 +53,7 @@ __all__ = [
     "count_families",
     "create_resolved_channel",
     "existing_usernames",
+    "families_subquery",
     "find_channel",
     "link_discussion_chat",
     "list_channels",
@@ -88,12 +89,12 @@ def _identity(channel: Channel) -> str:
     return f"@{channel.username}" if channel.username else str(channel.tg_id)
 
 
-def _families_subquery() -> Any:
+def families_subquery() -> Any:
     """The ``tg_channel_families`` view, as something a query can join.
 
     Not a model: nothing maps to a view, and giving it one would invite
-    `create_all` to try building it as a table. Declared inline instead,
-    in the one place both readers of it need.
+    `create_all` to try building it as a table. Declared once, here, for
+    every reader that joins it.
     """
     return (
         select(
@@ -397,7 +398,7 @@ async def list_channels(
     back to the channel's own id, so a channel in no family is its own
     family of one and comes back when asked for by itself.
     """
-    families = _families_subquery()
+    families = families_subquery()
     statement = (
         select(Channel)
         .outerjoin(families, families.c.channel_id == Channel.tg_id)
@@ -419,7 +420,7 @@ async def count_families(session: AsyncSession) -> FamilyCounts:
     rather than pointers. A channel in no family is in neither count — it
     is its own family of one, which is true and not worth reporting.
     """
-    families = _families_subquery()
+    families = families_subquery()
     channels = (
         await session.scalar(select(func.count()).select_from(families))
     ) or 0

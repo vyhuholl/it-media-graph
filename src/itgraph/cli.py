@@ -1279,6 +1279,67 @@ def rising() -> None:
 
 
 @app.command()
+def offer(
+    preview: Annotated[
+        bool,
+        typer.Option(
+            "--preview",
+            help="Print the day's offers by name, and write nothing.",
+        ),
+    ] = False,
+    now: NowOption = None,
+) -> None:
+    """Select today's rising channels for review in the bot.
+
+    The highest-ranked rising channels with a username never offered
+    before, at most `rising_offers_per_day`, stored for the bot to send;
+    an empty day is stored too. A day is selected once. Makes no request
+    and takes no lease. Prints counts only, since the daily job's output
+    is kept; `--preview` names the channels and is for a person at a
+    terminal.
+    """
+    from itgraph.db.session import Database
+    from itgraph.derive.offers import run_offer
+
+    moment = _moment(now)
+
+    async def run() -> None:
+        database = Database()
+        try:
+            summary = await run_offer(database, now=moment, preview=preview)
+        finally:
+            await database.dispose()
+        typer.echo(summary.line())
+        for line in summary.preview():
+            typer.echo(line)
+
+    _run(run())
+
+
+@app.command("apply-reviews")
+def apply_reviews() -> None:
+    """Apply the decisions taken on rising offers in the bot.
+
+    Each once, oldest first, as `itgraph mark` would apply it, to a
+    channel still a candidate or a maybe; a channel reviewed some other
+    way since keeps that review. Run by the detection job every 15
+    minutes. Prints counts only.
+    """
+    from itgraph.db.session import Database
+    from itgraph.derive.offers import apply_reviews as run_apply
+
+    async def run() -> None:
+        database = Database()
+        try:
+            summary = await run_apply(database)
+        finally:
+            await database.dispose()
+        typer.echo(summary.line())
+
+    _run(run())
+
+
+@app.command()
 def backup(
     full: Annotated[
         bool,

@@ -97,6 +97,23 @@ async def seed(connection: Any) -> None:
     await connection.execute(
         "INSERT INTO tg_pending_mentions (username) VALUES ('fake_person')"
     )
+    # A day's rising offers: one not yet sent, one decided and not applied,
+    # on channels the restore keeps.
+    await connection.execute(
+        "INSERT INTO tg_rising_offer_days (day, computed_at, size) "
+        "VALUES ($1, $2, 5)",
+        NOW.date(),
+        NOW,
+    )
+    await connection.execute(
+        "INSERT INTO tg_rising_offers (day, channel_id, rank, families, "
+        "families_before, offered_at, delivered_at, decision, kind, "
+        "decided_at) VALUES "
+        "($1, 5, 1, 2, 0, $2, NULL, NULL, NULL, NULL), "
+        "($1, 4, 2, 2, 0, $2, $2, 'seed', 'media', $2)",
+        NOW.date(),
+        NOW,
+    )
     payloads: list[dict[str, Any]] = [
         {
             "id": 10,
@@ -310,6 +327,8 @@ async def test_a_seeded_database_fails_the_read_back(
         "undelivered Telegram weekly list entries: 1",
         "undelivered Telegram second wind entries: 1",
         "undelivered YouTube second wind entries: 1",
+        "undelivered rising offers: 1",
+        "unapplied rising decisions: 1",
         "users in posts: 2",
         "mentions by id in posts: 2",
         "names in posts: 1",
@@ -433,6 +452,15 @@ async def test_neutralising_passes_the_read_back_and_keeps_what_it_should(
                 )
                 == 1
             ), table
+        # The offers stay, closed: sent, and not applied in the copy.
+        offers = await connection.fetch(
+            "SELECT channel_id, delivered_at IS NOT NULL AS sent, applied "
+            "FROM tg_rising_offers ORDER BY rank"
+        )
+        assert [tuple(row) for row in offers] == [
+            (5, True, None),
+            (4, True, False),
+        ]
         # YouTube data is what the copy is for, as posts are.
         assert (
             await connection.fetchval(

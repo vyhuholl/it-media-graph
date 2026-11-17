@@ -33,6 +33,11 @@ a list is marked — is its ``WeeklySource``.
 same parts, and only for a list computed while its platform's section was
 switched on: entries and second wind entries are one run of items, each
 part marking what it carried, so a resumed list sends neither twice.
+
+**And Telegram's rising offers** (`tg-rising-review`): a card per offer to
+Telegram's chat, in rank order, with the buttons that review it — outside
+quiet hours, neither capped nor digested, each marked as it goes. An offer
+whose channel was reviewed some other way first is closed unsent.
 """
 
 import asyncio
@@ -72,10 +77,24 @@ from itgraph.bot.render import (
     weekly_gone,
     weekly_header,
 )
+from itgraph.bot.review import (
+    CardView,
+    Keyboard,
+    channel_link,
+    first_step,
+    render_card,
+)
 from itgraph.config import settings
 from itgraph.db import weekly as tg_weekly
 from itgraph.db.alerts import alert_evidence, digest_is_due
-from itgraph.db.models import YtVideoFormat
+from itgraph.db.models import ChannelStatus, YtVideoFormat
+from itgraph.db.offers import (
+    PendingOffer,
+    card_posts,
+    claim_offers,
+    mark_offer_delivered,
+    mark_offer_failed,
+)
 from itgraph.db.session import Database
 from itgraph.db.yt_weekly import (
     PendingList,
@@ -120,10 +139,18 @@ class Sender:
     """
 
     async def send(
-        self, text: str, *, destination: Destination, preview: bool = True
+        self,
+        text: str,
+        *,
+        destination: Destination,
+        preview: bool = True,
+        preview_url: str | None = None,
+        keyboard: Keyboard | None = None,
     ) -> None:
         """Send ``text`` to the destination; ``preview=False`` shows no
-        link preview, for a message of many links."""
+        link preview, for a message of many links. ``preview_url`` names
+        the link to preview, and ``keyboard`` the buttons under the
+        message — a rising offer's card alone has either."""
         raise NotImplementedError
 
 
@@ -136,6 +163,7 @@ class BotStats:
     excluded: int = 0
     failed: int = 0
     lists: int = 0
+    offers: int = 0
     cycles: int = 0
     # When each destination's digest last went out, by its key. In memory:
     # a bot that restarts sends its next digest at the next hour, not at
@@ -148,6 +176,8 @@ class BotStats:
             line += f", {self.excluded} excluded"
         if self.lists:
             line += f", {self.lists} weekly list(s)"
+        if self.offers:
+            line += f", {self.offers} rising offer(s)"
         if self.failed:
             line += f", {self.failed} failed"
         return line
@@ -212,6 +242,9 @@ async def deliver_once(
                 sender,
                 stats,
                 now=moment,
+            )
+            await _deliver_offers(
+                database, destination, sender, stats, now=moment
             )
         async with database.session() as session:
             await queue.settle(session, at=datetime.now(UTC))
@@ -838,6 +871,102 @@ async def _deliver_weekly[L: WeeklyPending](
         await _send_list(
             database, source, pending, destination, sender, stats, now=now
         )
+
+
+# What an offer's channel may be for its card to go out: not yet reviewed
+# some other way.
+OFFERABLE = (ChannelStatus.CANDIDATE, ChannelStatus.MAYBE)
+
+
+async def _deliver_offers(
+    database: Database,
+    destination: Destination,
+    sender: Sender,
+    stats: BotStats,
+    *,
+    now: datetime,
+) -> None:
+    """Send Telegram's undelivered rising offers, a card each, in order.
+
+    Only to Telegram's chat and outside its quiet hours; no alert, so
+    neither the cap nor the digest counts it. A card that fails counts an
+    attempt and ends this pass's try, so that the cards after it are not
+    sent ahead of it. An offer whose channel was reviewed some other way,
+    or lost its username, before its card went is closed unsent.
+    """
+    if destination.platform is not Platform.TELEGRAM or destination.is_quiet(
+        now
+    ):
+        return
+    async with database.session() as session:
+        claimed = await claim_offers(session)
+    for offer in claimed:
+        if offer.status not in OFFERABLE or not offer.username:
+            logger.info(
+                "rising offer %d closed unsent: its channel was reviewed "
+                "or has no username",
+                offer.id,
+            )
+            async with database.session() as session:
+                await mark_offer_delivered(
+                    session, offer.id, at=datetime.now(UTC)
+                )
+            continue
+        text = await _card(database, offer, offer.username, destination)
+        try:
+            await sender.send(
+                text,
+                destination=destination,
+                preview_url=channel_link(offer.username),
+                keyboard=first_step(offer.id),
+            )
+        except Exception as exc:
+            # Everything, as for an alert: a card that cannot be sent
+            # waits, and the bot goes on.
+            logger.warning(
+                "could not deliver rising offer %d to %s",
+                offer.id,
+                destination.key,
+                exc_info=True,
+            )
+            async with database.session() as session:
+                await mark_offer_failed(
+                    session, offer.id, error=f"{type(exc).__name__}: {exc}"
+                )
+            stats.failed += 1
+            return
+        async with database.session() as session:
+            await mark_offer_delivered(session, offer.id, at=datetime.now(UTC))
+        stats.offers += 1
+
+
+async def _card(
+    database: Database,
+    offer: PendingOffer,
+    username: str,
+    destination: Destination,
+) -> str:
+    """An offer's card, with the seed posts of its window read now."""
+    window = timedelta(days=settings.rising_window_days)
+    async with database.session() as session:
+        posts = await card_posts(
+            session,
+            offer.channel_id,
+            since=offer.offered_at - window,
+            until=offer.offered_at,
+        )
+    return render_card(
+        CardView(
+            username=username,
+            title=offer.title,
+            families=offer.families,
+            families_before=offer.families_before,
+            first_in_window=offer.first_in_window,
+            posts=posts,
+        ),
+        window_days=settings.rising_window_days,
+        zone=destination.zone,
+    )
 
 
 # What one item of a list's parts is: an entry, a second wind entry, or the

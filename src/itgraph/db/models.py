@@ -1890,6 +1890,124 @@ class Resolution(Base):
         )
 
 
+class RisingOfferDay(Base):
+    """One day's selection of Telegram's rising channels, an empty one too.
+
+    The day is the Moscow date it was computed on, and one is computed
+    once. A row with no offer is what tells "nothing rose" from "the
+    pass did not run".
+    """
+
+    __tablename__ = "tg_rising_offer_days"
+
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # `rising_offers_per_day` when it was computed.
+    size: Mapped[int] = mapped_column(Integer)
+
+
+class RisingOffer(Base):
+    """A rising channel offered for review in the bot, and what came of it.
+
+    A channel is offered once, ever. The row holds the ranking's numbers
+    as they stood, the bot's delivery and the decision pressed — never a
+    name, a title or who pressed; the bot reads the channel at sending.
+    The detection pass applies the decision to the inventory and says
+    here whether it could.
+    """
+
+    __tablename__ = "tg_rising_offers"
+    __table_args__ = (
+        UniqueConstraint("channel_id", name="uq_tg_rising_offers_channel"),
+        CheckConstraint(
+            "decision IS NULL OR decision <> 'candidate'",
+            name="decision_is_a_review",
+        ),
+        # `coalesce`, or an offer with no decision would pass holding a
+        # kind: a comparison with NULL is NULL, which a check accepts.
+        CheckConstraint(
+            "coalesce(decision = 'seed', false) = (kind IS NOT NULL)"
+            " AND coalesce(decision = 'rejected', false)"
+            " = (reject_reason IS NOT NULL)",
+            name="decision_has_its_choice",
+        ),
+        CheckConstraint(
+            "(decision IS NULL) = (decided_at IS NULL)",
+            name="decided_when_decided",
+        ),
+        CheckConstraint(
+            "(applied_at IS NULL) = (applied IS NULL)"
+            " AND (applied_at IS NULL OR decided_at IS NOT NULL)",
+            name="applied_after_decided",
+        ),
+        # What the bot asks on every poll, and the detection pass on
+        # every run.
+        Index(
+            "ix_tg_rising_offers_undelivered",
+            "day",
+            "rank",
+            postgresql_where=text("delivered_at IS NULL"),
+        ),
+        Index(
+            "ix_tg_rising_offers_unapplied",
+            "decided_at",
+            postgresql_where=text(
+                "decided_at IS NOT NULL AND applied_at IS NULL"
+            ),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    day: Mapped[date] = mapped_column(
+        ForeignKey("tg_rising_offer_days.day", ondelete="CASCADE")
+    )
+    channel_id: Mapped[int] = mapped_column(
+        ForeignKey("tg_channels.tg_id", ondelete="CASCADE")
+    )
+    rank: Mapped[int] = mapped_column(Integer)
+    # The ranking's numbers when it was offered.
+    families: Mapped[int] = mapped_column(Integer)
+    families_before: Mapped[int] = mapped_column(Integer)
+    first_in_window: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    offered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    # The bot's delivery.
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    attempts: Mapped[int] = mapped_column(Integer, server_default="0")
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+    # The decision pressed, as `itgraph mark` would record it.
+    decision: Mapped[ChannelStatus | None] = mapped_column(
+        _pg_enum(ChannelStatus, "channel_status")
+    )
+    kind: Mapped[ChannelKind | None] = mapped_column(
+        _pg_enum(ChannelKind, "tg_channel_kind")
+    )
+    reject_reason: Mapped[RejectReason | None] = mapped_column(
+        _pg_enum(RejectReason, "tg_reject_reason")
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+    # The detection pass's: when it looked, and whether the channel was
+    # still a candidate or a maybe so that the decision could land.
+    applied_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    applied: Mapped[bool | None] = mapped_column()
+
+    def __repr__(self) -> str:
+        return (
+            f"RisingOffer(day={self.day}, rank={self.rank}, "
+            f"decision={self.decision})"
+        )
+
+
 class YtChannel(Base):
     """One YouTube channel, and the review it has had.
 

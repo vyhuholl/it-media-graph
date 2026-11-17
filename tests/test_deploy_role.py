@@ -280,6 +280,8 @@ SCHEDULES = {
     "itgraph-yt-weekly": ("0 10 * * 1", 518400, 1800),
     # Telegram's list, the same Monday morning and the same six days.
     "itgraph-weekly": ("0 10 * * 1", 518400, 1800),
+    # Telegram's rising channels, daily; a missed run starts the same day.
+    "itgraph-offer": ("0 11 * * *", 46800, 1800),
     # Hourly, for a new seed; a late start gives way to the next hour's.
     "itgraph-yt-backfill": ("30 * * * *", 3300, 3000),
 }
@@ -312,13 +314,16 @@ def test_detection_is_sibling_containers_and_derive_comes_before_alerts(
     detect = named(everything(rendered["a"]), "CronJob", "itgraph-detect")
     spec = detect["spec"]["jobTemplate"]["spec"]["template"]["spec"]
     assert "initContainers" not in spec
-    alerts, score = spec["containers"]
+    alerts, score, reviews = spec["containers"]
     assert alerts["command"] == [
         "sh",
         "-c",
         "itgraph derive && itgraph alerts",
     ]
     assert score["args"] == ["score"]
+    # Beside the other two, so that neither holds back a decision.
+    assert reviews["args"] == ["apply-reviews"]
+    assert reviews["envFrom"] == score["envFrom"]
 
 
 def test_every_container_of_ours_runs_in_moscow_time(
@@ -411,6 +416,7 @@ SECRET_KEYS = {
         ("CronJob", "itgraph-yt-baselines", set()),
         ("CronJob", "itgraph-yt-weekly", set()),
         ("CronJob", "itgraph-weekly", set()),
+        ("CronJob", "itgraph-offer", set()),
         ("CronJob", "itgraph-backup", {"B2_APPLICATION_KEY"}),
         ("CronJob", "itgraph-yt-watch", {"YOUTUBE_API_KEY"}),
         ("CronJob", "itgraph-yt-refresh", {"YOUTUBE_API_KEY"}),
@@ -480,6 +486,7 @@ def test_a_key_absent_means_no_youtube_job_and_no_key(
         "itgraph-yt-baselines",
         "itgraph-yt-weekly",
         "itgraph-weekly",
+        "itgraph-offer",
     }
     assert not [
         s
@@ -516,6 +523,44 @@ def test_telegram_s_weekly_list_runs_in_every_environment(
     }
 
 
+@pytest.mark.parametrize("environment", SETS)
+def test_telegram_s_rising_selection_runs_in_every_environment(
+    rendered: dict[str, dict[str, Objects]], environment: str
+) -> None:
+    """Collecting or not: it reads collected data alone, so a test
+    environment offers its restored copy into its own chat."""
+    objects = everything(rendered[environment])
+    job = named(objects, "CronJob", "itgraph-offer")
+    spec = job["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+    [container] = spec["containers"]
+    assert container["args"] == ["offer"]
+    assert job["spec"]["schedule"] == "0 11 * * *"
+    assert job["spec"]["timeZone"] == "Europe/Moscow"
+    keys = keys_of(objects, "CronJob", "itgraph-offer")
+    assert keys & SECRET_KEYS == set()
+    assert "DATABASE_URL" in keys
+    assert not [m for m in spec.get("volumes", []) if "session" in m["name"]]
+    labels = job["spec"]["jobTemplate"]["spec"]["template"]["metadata"][
+        "labels"
+    ]
+    assert {k for k in labels if k.startswith("itgraph/")} == {
+        "itgraph/database"
+    }
+
+
+@pytest.mark.parametrize("environment", SETS)
+def test_no_job_previews_the_selection(
+    rendered: dict[str, dict[str, Objects]], environment: str
+) -> None:
+    """`--preview` names channels, and a job's output is kept."""
+    for name, _, spec in pods(everything(rendered[environment])):
+        for container in containers(spec):
+            assert "--preview" not in container.get("args", []), name
+            assert "--preview" not in " ".join(container.get("command", [])), (
+                name
+            )
+
+
 def test_no_offsite_means_no_key_and_no_way_out(
     rendered: dict[str, dict[str, Objects]],
 ) -> None:
@@ -539,6 +584,7 @@ REACH = {
     "itgraph-yt-baselines": {"itgraph/database"},
     "itgraph-yt-weekly": {"itgraph/database"},
     "itgraph-weekly": {"itgraph/database"},
+    "itgraph-offer": {"itgraph/database"},
     "itgraph-backup": {"itgraph/database", "itgraph/internet"},
     "itgraph-yt-watch": {"itgraph/database", "itgraph/internet"},
     "itgraph-yt-refresh": {"itgraph/database", "itgraph/internet"},

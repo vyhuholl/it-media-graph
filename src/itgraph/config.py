@@ -196,6 +196,9 @@ class Settings(BaseSettings):
     # The least time between two of the loop's resolutions, read from the
     # journal's newest `watch` row, so a restart does not reset it.
     rising_resolve_gap_minutes: float = Field(default=20.0, ge=0)
+    # How many rising channels a day's selection offers for review in the
+    # bot; the rest wait for the next day's, which ranks again.
+    rising_offers_per_day: int = Field(default=5, ge=1)
 
     # Messages read per partition when deriving edges. Derivation touches
     # no network, so this is a memory/round-trip trade, not a pacing one:

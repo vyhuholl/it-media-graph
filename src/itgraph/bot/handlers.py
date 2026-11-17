@@ -16,6 +16,10 @@ because this is where an outsider can first be seen:
   operator's own subscriptions.
 * **A chat the bot cannot reach stops it at start,** not at the first
   alert, hours or days later.
+
+A press on a rising offer's card is taken in Telegram's chat alone, and
+what it records names nobody: the handler reads the button's data and
+the message, never who pressed.
 """
 
 import logging
@@ -28,13 +32,31 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, LinkPreviewOptions, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    LinkPreviewOptions,
+    Message,
+)
 
 from itgraph.bot.app import Sender
 from itgraph.bot.destinations import Destination, Platform
+from itgraph.bot.review import (
+    Decision,
+    Keyboard,
+    Press,
+    PressKind,
+    decision_line,
+    first_step,
+    kinds,
+    parse,
+    reasons,
+)
 from itgraph.bot.status import telegram_status, youtube_status
 from itgraph.config import settings
 from itgraph.db.models import YtAlertRoute
+from itgraph.db.offers import offer_state, record_decision
 from itgraph.db.session import Database
 
 __all__ = [
@@ -50,6 +72,13 @@ logger = logging.getLogger(__name__)
 # What the feedback buttons sent, under messages from before they were
 # removed. Matched only to retire them.
 OLD_BUTTON = r"^(useful|boring):\d+$"
+
+# What a rising offer's buttons send; `bot/review.py` reads the rest.
+REVIEW_BUTTON = r"^rv:"
+
+# What a press is answered with when it decides nothing.
+DECIDED = "уже размечено"
+UNKNOWN = "нет такого предложения"
 
 
 def build_bot(token: str) -> Bot:
@@ -68,19 +97,42 @@ class BotSender(Sender):
         self._bot = bot
 
     async def send(
-        self, text: str, *, destination: Destination, preview: bool = True
+        self,
+        text: str,
+        *,
+        destination: Destination,
+        preview: bool = True,
+        preview_url: str | None = None,
+        keyboard: Keyboard | None = None,
     ) -> None:
-        # No buttons: feedback was asked of every alert from the first
-        # one, pressed once in three months, and removed. The preview
-        # through `link_preview_options`, which replaced
+        # No buttons under an alert: feedback was asked of every alert
+        # from the first one, pressed once in three months, and removed.
+        # A rising offer's card carries the buttons that review it. The
+        # preview through `link_preview_options`, which replaced
         # `disable_web_page_preview` in Bot API 7.0.
         await self._bot.send_message(
             destination.chat_id,
             text,
             message_thread_id=destination.topic_id,
             parse_mode="HTML",
-            link_preview_options=LinkPreviewOptions(is_disabled=not preview),
+            link_preview_options=LinkPreviewOptions(
+                is_disabled=not preview, url=preview_url
+            ),
+            reply_markup=markup(keyboard) if keyboard is not None else None,
         )
+
+
+def markup(keyboard: Keyboard) -> InlineKeyboardMarkup:
+    """A keyboard of `bot/review.py`, as Telegram takes it."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=label, callback_data=data)
+                for label, data in row
+            ]
+            for row in keyboard
+        ]
+    )
 
 
 class ChatUnreachableError(RuntimeError):
@@ -178,6 +230,69 @@ def build_dispatcher(
                 return
         await message.answer(text)
 
+    @dispatcher.callback_query(F.data.regexp(REVIEW_BUTTON))
+    async def review(query: CallbackQuery) -> None:
+        """A press on a rising offer's card, in Telegram's chat alone.
+
+        Seed and reject show their second step and back the first, writing
+        nothing; a deciding press records the decision once, and the card
+        then says it and loses its buttons. Who pressed is never read.
+        """
+        message = query.message
+        press = parse(query.data)
+        bot = query.bot
+        if (
+            press is None
+            or bot is None
+            or telegram is None
+            or not isinstance(message, Message)
+            or message.chat.id != telegram.chat_id
+        ):
+            await query.answer()
+            return
+
+        decision = press.decision
+        async with database.session() as session:
+            state = await offer_state(session, press.offer_id)
+            recorded = (
+                state is not None
+                and state.sent
+                and state.decision is None
+                and decision is not None
+                and await record_decision(
+                    session,
+                    press.offer_id,
+                    status=decision.status,
+                    kind=decision.kind,
+                    reason=decision.reason,
+                )
+            )
+            if decision is not None and not recorded:
+                state = await offer_state(session, press.offer_id)
+
+        if state is None or not state.sent:
+            await query.answer(UNKNOWN)
+            return
+        if recorded and decision is not None:
+            await query.answer()
+            await _show_decision(bot, message, decision)
+            return
+        if state.decision is not None:
+            await query.answer(DECIDED)
+            await _show_decision(
+                bot,
+                message,
+                Decision(state.decision, kind=state.kind, reason=state.reason),
+            )
+            return
+        await query.answer()
+        with suppress(TelegramBadRequest):
+            await bot.edit_message_reply_markup(
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                reply_markup=markup(_step(press)),
+            )
+
     @dispatcher.callback_query(F.data.regexp(OLD_BUTTON))
     async def retired_button(query: CallbackQuery) -> None:
         """A press on a button from before feedback was removed.
@@ -197,3 +312,41 @@ def build_dispatcher(
             )
 
     return dispatcher
+
+
+def _step(press: Press) -> Keyboard:
+    """The buttons a press that decides nothing shows."""
+    if press.kind is PressKind.SEED:
+        return kinds(press.offer_id)
+    if press.kind is PressKind.REJECT:
+        return reasons(press.offer_id)
+    return first_step(press.offer_id)
+
+
+async def _show_decision(
+    bot: Bot, message: Message, decision: Decision
+) -> None:
+    """The card with its decision said, and no buttons left.
+
+    Its text as Telegram holds it, so the card is not read again; a card
+    that already says it — the other of two presses — only loses its
+    buttons.
+    """
+    line = decision_line(decision)
+    text = message.html_text
+    with suppress(TelegramBadRequest):
+        if text.endswith(line):
+            await bot.edit_message_reply_markup(
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                reply_markup=None,
+            )
+            return
+        await bot.edit_message_text(
+            text=f"{text}\n\n{line}",
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            parse_mode="HTML",
+            link_preview_options=message.link_preview_options,
+            reply_markup=None,
+        )

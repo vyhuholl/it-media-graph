@@ -10,6 +10,7 @@ worst available direction — correctly in a private chat, silently in a
 group, so the bug ships and surfaces the day the alerts are shared.
 """
 
+import logging
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -32,6 +33,7 @@ from aiogram.types import (
     User,
 )
 from pydantic import HttpUrl
+from sqlalchemy import text
 
 from itgraph.bot import handlers
 from itgraph.bot.destinations import Destination, Platform
@@ -330,7 +332,8 @@ async def test_a_command_for_another_bot_is_not_answered(
     assert replies == []
 
 
-async def test_the_two_interactions_are_registered(database_url: str) -> None:
+async def test_the_interactions_are_registered(database_url: str) -> None:
+    """`/status`, a press on a rising offer, a press on a retired button."""
     database = Database(database_url)
     try:
         dispatcher = build_dispatcher(database, ALL)
@@ -338,7 +341,7 @@ async def test_the_two_interactions_are_registered(database_url: str) -> None:
         await database.dispose()
 
     assert len(dispatcher.message.handlers) == 1
-    assert len(dispatcher.callback_query.handlers) == 1
+    assert len(dispatcher.callback_query.handlers) == 2
 
 
 # --- the YouTube chat -----------------------------------------------
@@ -654,3 +657,255 @@ async def test_status_counts_what_was_folded(database_url: str) -> None:
 
     assert "свёрнуто в серии: 1" in replies[0]
     assert "не доставлено: 1" in replies[0]
+
+
+# --- a press on a rising offer's card ---------------------------------
+
+RISING = 2000000001
+CARD = (
+    '📈 Растёт: <a href="https://t.me/fake_rising">@fake_rising</a>\n'
+    "<b>Fake Rising</b>"
+)
+PRESSER = User(
+    id=7007, is_bot=False, first_name="Fakename", username="fake_presser"
+)
+
+
+async def an_offer(database_url: str, *, delivered: bool = True) -> int:
+    """A channel offered today, its card sent unless said otherwise."""
+    database = Database(database_url)
+    try:
+        async with database.session() as session:
+            await session.execute(
+                text(
+                    "INSERT INTO tg_channels (tg_id, username, discovered_via) "
+                    "VALUES (:id, 'fake_rising', 'forward')"
+                ),
+                {"id": RISING},
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO tg_rising_offer_days (day, computed_at, size) "
+                    "VALUES ('2026-11-18', now(), 5)"
+                )
+            )
+            offer_id = await session.scalar(
+                text(
+                    "INSERT INTO tg_rising_offers (day, channel_id, rank, "
+                    "families, families_before, offered_at, delivered_at) "
+                    "VALUES ('2026-11-18', :id, 1, 2, 0, now(), "
+                    "CASE WHEN :sent THEN now() END) RETURNING id"
+                ),
+                {"id": RISING, "sent": delivered},
+            )
+        assert isinstance(offer_id, int)
+        return offer_id
+    finally:
+        await database.dispose()
+
+
+async def decision_of(database_url: str) -> tuple[Any, ...]:
+    database = Database(database_url)
+    try:
+        async with database.session() as session:
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT decision::text, kind::text, "
+                        "reject_reason::text, decided_at IS NOT NULL "
+                        "FROM tg_rising_offers"
+                    )
+                )
+            ).one()
+        return tuple(row)
+    finally:
+        await database.dispose()
+
+
+def card_press(chat_id: int, data: str) -> Update:
+    """A press on a card, by someone with a name and a username."""
+    return Update(
+        update_id=3,
+        callback_query=CallbackQuery(
+            id="2",
+            from_user=PRESSER,
+            chat_instance="2",
+            data=data,
+            message=Message(
+                message_id=44,
+                date=datetime(2026, 11, 18, 8, 0, tzinfo=UTC),
+                chat=Chat(id=chat_id, type="supergroup"),
+                text="📈 Растёт: @fake_rising\nFake Rising",
+                entities=[
+                    MessageEntity(
+                        type="text_link",
+                        offset=11,
+                        length=12,
+                        url="https://t.me/fake_rising",
+                    ),
+                    MessageEntity(type="bold", offset=24, length=11),
+                ],
+            ),
+        ),
+    )
+
+
+def calls(session: OfflineSession, name: str) -> list[Any]:
+    return [m for m in session.calls if type(m).__name__ == name]
+
+
+def answered(session: OfflineSession) -> list[str | None]:
+    return [
+        getattr(m, "text", None) for m in calls(session, "AnswerCallbackQuery")
+    ]
+
+
+def labels(markup: Any) -> list[str]:
+    return [button.text for row in markup.inline_keyboard for button in row]
+
+
+async def press(
+    database_url: str, data: str, chat_id: int = OPERATOR
+) -> OfflineSession:
+    _, session = await feed(database_url, card_press(chat_id, data))
+    return session
+
+
+async def test_seed_asks_for_a_kind_and_records_nothing(
+    database_url: str,
+) -> None:
+    offer = await an_offer(database_url)
+
+    session = await press(database_url, f"rv:{offer}:seed")
+
+    (edit,) = calls(session, "EditMessageReplyMarkup")
+    assert labels(edit.reply_markup)[:2] == ["👤 Личный", "📰 Агрегатор"]
+    assert labels(edit.reply_markup)[-1] == "↩️ Назад"
+    assert await decision_of(database_url) == (None, None, None, False)
+
+
+async def test_back_shows_the_three_again(database_url: str) -> None:
+    offer = await an_offer(database_url)
+
+    session = await press(database_url, f"rv:{offer}:back")
+
+    (edit,) = calls(session, "EditMessageReplyMarkup")
+    assert labels(edit.reply_markup) == [
+        "🌱 В сиды",
+        "🤔 Может быть",
+        "🚫 Отклонить",
+    ]
+    assert await decision_of(database_url) == (None, None, None, False)
+
+
+async def test_a_seed_of_a_kind_is_decided_and_said(database_url: str) -> None:
+    offer = await an_offer(database_url)
+
+    session = await press(database_url, f"rv:{offer}:kind:media")
+
+    assert await decision_of(database_url) == ("seed", "media", None, True)
+    (edit,) = calls(session, "EditMessageText")
+    assert edit.text.endswith("\n\n✅ В сиды · медиа")
+    assert edit.text.startswith(CARD)
+    assert edit.reply_markup is None
+
+
+async def test_reject_asks_for_a_reason_then_decides(
+    database_url: str,
+) -> None:
+    offer = await an_offer(database_url)
+
+    asked = await press(database_url, f"rv:{offer}:reject")
+    (edit,) = calls(asked, "EditMessageReplyMarkup")
+    assert "🪙 Крипта" in labels(edit.reply_markup)
+
+    decided = await press(database_url, f"rv:{offer}:reason:crypto")
+    assert await decision_of(database_url) == (
+        "rejected",
+        None,
+        "crypto",
+        True,
+    )
+    (said,) = calls(decided, "EditMessageText")
+    assert said.text.endswith("🚫 Отклонён · крипта")
+
+
+async def test_maybe_is_one_press(database_url: str) -> None:
+    offer = await an_offer(database_url)
+
+    session = await press(database_url, f"rv:{offer}:maybe")
+
+    assert await decision_of(database_url) == ("maybe", None, None, True)
+    (said,) = calls(session, "EditMessageText")
+    assert said.text.endswith("🤔 Может быть")
+
+
+async def test_of_two_presses_one_decision_is_recorded(
+    database_url: str,
+) -> None:
+    offer = await an_offer(database_url)
+    await press(database_url, f"rv:{offer}:kind:media")
+
+    late = await press(database_url, f"rv:{offer}:reason:crypto")
+
+    assert await decision_of(database_url) == ("seed", "media", None, True)
+    assert answered(late) == ["уже размечено"]
+    (said,) = calls(late, "EditMessageText")
+    assert said.text.endswith("✅ В сиды · медиа")
+
+
+async def test_a_step_on_a_decided_card_is_told_so(database_url: str) -> None:
+    offer = await an_offer(database_url)
+    await press(database_url, f"rv:{offer}:maybe")
+
+    late = await press(database_url, f"rv:{offer}:seed")
+
+    assert answered(late) == ["уже размечено"]
+    assert calls(late, "EditMessageReplyMarkup") == []
+
+
+@pytest.mark.parametrize("delivered", [True, False], ids=["unknown", "unsent"])
+async def test_an_offer_the_bot_did_not_send_decides_nothing(
+    database_url: str, delivered: bool
+) -> None:
+    offer = await an_offer(database_url, delivered=delivered)
+    target = offer + 1 if delivered else offer
+
+    session = await press(database_url, f"rv:{target}:maybe")
+
+    assert answered(session) == ["нет такого предложения"]
+    assert await decision_of(database_url) == (None, None, None, False)
+    assert calls(session, "EditMessageText") == []
+
+
+async def test_a_press_in_the_youtube_chat_decides_nothing(
+    database_url: str,
+) -> None:
+    offer = await an_offer(database_url)
+
+    session = await press(database_url, f"rv:{offer}:maybe", YOUTUBE_CHAT)
+
+    assert await decision_of(database_url) == (None, None, None, False)
+    assert calls(session, "EditMessageText") == []
+
+
+async def test_nobody_who_pressed_is_recorded(
+    database_url: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    offer = await an_offer(database_url)
+
+    with caplog.at_level(logging.DEBUG):
+        await press(database_url, f"rv:{offer}:kind:media")
+
+    database = Database(database_url)
+    try:
+        async with database.session() as session:
+            row = await session.scalar(
+                text("SELECT o::text FROM tg_rising_offers o")
+            )
+    finally:
+        await database.dispose()
+    assert isinstance(row, str)
+    for trace in (str(PRESSER.id), "Fakename", "fake_presser"):
+        assert trace not in row
+        assert trace not in caplog.text

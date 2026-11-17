@@ -706,6 +706,14 @@ kubectl -n "$namespace" create job e2e-detect --from=cronjob/itgraph-detect >/de
 kubectl -n "$namespace" wait --for=condition=complete job/e2e-detect --timeout=180s >/dev/null || fail 'detection failed on the copy'
 kubectl -n "$namespace" delete job e2e-detect >/dev/null
 ok 'detection runs on the copy'
+detect_containers="$(kubectl -n "$namespace" get cronjob itgraph-detect -o json |
+	jq -r '[.spec.jobTemplate.spec.template.spec.containers[].name] | join(",")')"
+[ "$detect_containers" = alerts,score,reviews ] || fail "detection's containers: $detect_containers"
+ok 'detection applies the decisions pressed in the bot, beside derivation and scoring'
+if psql_in "$namespace" "SET ROLE itgraph_bot; UPDATE tg_channels SET kind = kind" >/dev/null 2>&1; then
+	fail "the bot's role changed the inventory"
+fi
+ok "the bot's role cannot change the copy's inventory"
 kubectl -n "$namespace" get cronjob itgraph-yt-watch >/dev/null 2>&1 && fail 'a YouTube collection job without a key'
 for job in yt-baselines yt-score; do
 	kubectl -n "$namespace" create job "e2e-$job" --from="cronjob/itgraph-$job" >/dev/null
@@ -719,6 +727,13 @@ kubectl -n "$namespace" get cronjob itgraph-yt-weekly >/dev/null 2>&1 || fail 'n
 ok 'the weekly list is scheduled on the copy, with no key'
 kubectl -n "$namespace" get cronjob itgraph-weekly >/dev/null 2>&1 || fail "no Telegram weekly list job where nothing is collected"
 ok "Telegram's weekly list is scheduled on the copy, which collects nothing"
+kubectl -n "$namespace" get cronjob itgraph-offer >/dev/null 2>&1 || fail "no rising selection job where nothing is collected"
+kubectl -n "$namespace" create job e2e-offer --from=cronjob/itgraph-offer >/dev/null
+kubectl -n "$namespace" wait --for=condition=complete job/e2e-offer --timeout=180s >/dev/null || fail 'the rising selection failed on the copy'
+kubectl -n "$namespace" delete job e2e-offer >/dev/null
+[ "$(read_rows "SELECT count(*) FROM tg_rising_offer_days WHERE day = (now() AT TIME ZONE 'Europe/Moscow')::date")" = 1 ] ||
+	fail "the copy's selection of the day was not recorded"
+ok "Telegram's rising selection is scheduled on the copy, and a run records its day"
 
 say 'a second restore, from a dump of the neutralised copy'
 dump_from_claim "$work/neutralised.dump"

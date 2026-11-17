@@ -31,6 +31,8 @@ from itgraph.db.models import (
     FloodEvent,
     Platform,
     PollState,
+    RisingOffer,
+    RisingOfferDay,
     WeeklyList,
     YtAlertRoute,
     YtBaselineRun,
@@ -422,6 +424,56 @@ async def _telegram_weekly_list(session: AsyncSession) -> list[Family]:
     ]
 
 
+async def _rising_offers(session: AsyncSession, now: datetime) -> list[Family]:
+    """Telegram's rising selection and its decisions, from moments alone:
+    when a day was last computed, how long the oldest offer has waited to
+    be sent, and how long the oldest decision has waited to be applied."""
+    computed = await session.scalar(
+        select(func.max(RisingOfferDay.computed_at))
+    )
+    undelivered = await session.scalar(
+        select(func.min(RisingOffer.offered_at)).where(
+            RisingOffer.delivered_at.is_(None)
+        )
+    )
+    unapplied = await session.scalar(
+        select(func.min(RisingOffer.decided_at)).where(
+            RisingOffer.decided_at.is_not(None),
+            RisingOffer.applied_at.is_(None),
+        )
+    )
+
+    def waited(since: datetime | None) -> float:
+        return max((now - since).total_seconds(), 0.0) if since else 0.0
+
+    return [
+        _gauge(
+            "itgraph_telegram_rising_offers_computed_timestamp_seconds",
+            (
+                "When the newest day's selection of rising channels was "
+                "computed, an empty one included; 0 when none."
+            ),
+            _timestamp(computed),
+        ),
+        _gauge(
+            "itgraph_telegram_rising_offers_oldest_undelivered_seconds",
+            (
+                "How long the oldest rising offer not yet delivered has "
+                "waited since it was offered; 0 when none."
+            ),
+            waited(undelivered),
+        ),
+        _gauge(
+            "itgraph_telegram_rising_decisions_oldest_unapplied_seconds",
+            (
+                "How long the oldest decision on a rising offer has waited "
+                "to be applied since it was taken; 0 when none."
+            ),
+            waited(unapplied),
+        ),
+    ]
+
+
 async def read_families(
     session: AsyncSession, *, now: datetime
 ) -> list[Family]:
@@ -433,6 +485,7 @@ async def read_families(
         *await _baselines(session),
         *await _weekly_lists(session),
         *await _telegram_weekly_list(session),
+        *await _rising_offers(session, now),
     ]
 
 

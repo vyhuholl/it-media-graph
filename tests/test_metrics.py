@@ -80,6 +80,9 @@ EXPECTED = {
     "itgraph_youtube_weekly_list_delivered_timestamp_seconds",
     "itgraph_telegram_weekly_list_computed_timestamp_seconds",
     "itgraph_telegram_weekly_list_delivered_timestamp_seconds",
+    "itgraph_telegram_rising_offers_computed_timestamp_seconds",
+    "itgraph_telegram_rising_offers_oldest_undelivered_seconds",
+    "itgraph_telegram_rising_decisions_oldest_unapplied_seconds",
 }
 
 
@@ -247,6 +250,12 @@ async def test_every_series_is_declared_on_an_empty_database(
             value(read, "itgraph_telegram_resolutions_24h", command=command)
             == 0
         )
+    for name in (
+        "itgraph_telegram_rising_offers_computed_timestamp_seconds",
+        "itgraph_telegram_rising_offers_oldest_undelivered_seconds",
+        "itgraph_telegram_rising_decisions_oldest_unapplied_seconds",
+    ):
+        assert value(read, name) == 0, name
     for platform in ("telegram", "youtube"):
         assert (
             value(
@@ -919,3 +928,68 @@ async def test_resolutions_by_command(database: Database) -> None:
     assert value(read, name, command="resolve") == 3
     assert value(read, name, command="watch") == 2
     assert value(read, name, command="add") == 0
+
+
+async def test_the_rising_selection_and_its_decisions(
+    database: Database,
+) -> None:
+    today = NOW.replace(hour=8)  # 11:00 in Moscow
+    yesterday = today - timedelta(days=1)
+    async with database.session() as session:
+        await session.execute(
+            text(
+                "INSERT INTO tg_channels (tg_id, username, discovered_via) "
+                "VALUES (2000000001, 'fake_one', 'forward'), "
+                "(2000000002, 'fake_two', 'forward')"
+            )
+        )
+        await session.execute(
+            text(
+                "INSERT INTO tg_rising_offer_days (day, computed_at, size) "
+                "VALUES (:yesterday_day, :yesterday, 5), "
+                "(:today_day, :today, 5)"
+            ),
+            {
+                "yesterday_day": yesterday.date(),
+                "yesterday": yesterday,
+                "today_day": today.date(),
+                "today": today,
+            },
+        )
+        await session.execute(
+            text(
+                "INSERT INTO tg_rising_offers (day, channel_id, rank, "
+                "families, families_before, offered_at, delivered_at, "
+                "decision, decided_at) VALUES "
+                "(:day, 2000000001, 1, 2, 0, :offered, NULL, NULL, NULL), "
+                "(:day, 2000000002, 2, 2, 0, :offered, :offered, 'maybe', "
+                ":decided)"
+            ),
+            {
+                "day": yesterday.date(),
+                "offered": yesterday,
+                "decided": NOW - timedelta(hours=1),
+            },
+        )
+        await session.commit()
+
+    read = await families(database)
+
+    assert (
+        value(
+            read, "itgraph_telegram_rising_offers_computed_timestamp_seconds"
+        )
+        == today.timestamp()
+    )
+    assert (
+        value(
+            read, "itgraph_telegram_rising_offers_oldest_undelivered_seconds"
+        )
+        == (NOW - yesterday).total_seconds()
+    )
+    assert (
+        value(
+            read, "itgraph_telegram_rising_decisions_oldest_unapplied_seconds"
+        )
+        == 3600
+    )
