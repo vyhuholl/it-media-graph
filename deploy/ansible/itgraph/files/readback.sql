@@ -11,17 +11,17 @@ DECLARE
   found text[] := '{}';
   checks constant text[][] := ARRAY[
     ['channels from the operator''s subscriptions',
-     $q$SELECT count(*) FROM channels WHERE discovered_via = 'own_subscriptions'$q$],
+     $q$SELECT count(*) FROM tg_channels WHERE discovered_via = 'own_subscriptions'$q$],
     ['notes on channels',
-     $q$SELECT count(*) FROM channels WHERE kind_note IS NOT NULL OR reject_note IS NOT NULL$q$],
+     $q$SELECT count(*) FROM tg_channels WHERE kind_note IS NOT NULL OR reject_note IS NOT NULL$q$],
     ['notes on YouTube channels',
      $q$SELECT count(*) FROM yt_channels WHERE kind_note IS NOT NULL OR reject_note IS NOT NULL$q$],
     ['notes on affiliation decisions',
-     $q$SELECT count(*) FROM affiliation_candidates WHERE decision_note IS NOT NULL$q$],
+     $q$SELECT count(*) FROM tg_affiliation_candidates WHERE decision_note IS NOT NULL$q$],
     ['pending mentions',
-     $q$SELECT count(*) FROM pending_mentions$q$],
+     $q$SELECT count(*) FROM tg_pending_mentions$q$],
     ['undelivered alerts',
-     $q$SELECT count(*) FROM alerts WHERE delivered_at IS NULL$q$],
+     $q$SELECT count(*) FROM tg_alerts WHERE delivered_at IS NULL$q$],
     ['undelivered YouTube alerts',
      $q$SELECT count(*) FROM yt_alerts WHERE delivered_at IS NULL$q$],
     ['undelivered weekly lists',
@@ -29,11 +29,11 @@ DECLARE
     ['undelivered weekly list entries',
      $q$SELECT count(*) FROM yt_weekly_entries WHERE delivered_at IS NULL$q$],
     ['undelivered Telegram weekly lists',
-     $q$SELECT count(*) FROM weekly_lists WHERE delivered_at IS NULL$q$],
+     $q$SELECT count(*) FROM tg_weekly_lists WHERE delivered_at IS NULL$q$],
     ['undelivered Telegram weekly list entries',
-     $q$SELECT count(*) FROM weekly_entries WHERE delivered_at IS NULL$q$],
+     $q$SELECT count(*) FROM tg_weekly_entries WHERE delivered_at IS NULL$q$],
     ['undelivered Telegram second wind entries',
-     $q$SELECT count(*) FROM weekly_revivals WHERE delivered_at IS NULL$q$],
+     $q$SELECT count(*) FROM tg_weekly_revivals WHERE delivered_at IS NULL$q$],
     ['undelivered YouTube second wind entries',
      $q$SELECT count(*) FROM yt_weekly_revivals WHERE delivered_at IS NULL$q$]
   ];
@@ -51,7 +51,7 @@ DECLARE
      $p$$.** ? ((@.winners.type() == "array" && exists(@.winners[0]))
         || (@.recent_requesters.type() == "array" && exists(@.recent_requesters[0])))$p$]
   ];
-  payloads constant text[][] := ARRAY[['posts', 'raw_messages'], ['channel payloads', 'raw_channels']];
+  payloads constant text[][] := ARRAY[['posts', 'tg_raw_messages'], ['channel payloads', 'tg_raw_channels']];
   counted bigint;
 BEGIN
   FOR i IN 1 .. array_length(checks, 1) LOOP

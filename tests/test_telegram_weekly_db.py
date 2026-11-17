@@ -34,7 +34,7 @@ async def two_channels(database: Database) -> None:
         for channel, username in ((FIRST, "fake_weekly_one"), (SECOND, None)):
             await session.execute(
                 text(
-                    "INSERT INTO channels (tg_id, username, title, "
+                    "INSERT INTO tg_channels (tg_id, username, title, "
                     "discovered_via, status, kind) VALUES "
                     "(:id, :name, :title, 'manual', 'seed', 'personal')"
                 ),
@@ -42,7 +42,7 @@ async def two_channels(database: Database) -> None:
             )
             await session.execute(
                 text(
-                    "INSERT INTO raw_messages (channel_id, msg_id, payload) "
+                    "INSERT INTO tg_raw_messages (channel_id, msg_id, payload) "
                     "VALUES (:c, 10, CAST(:p AS jsonb))"
                 ),
                 {
@@ -57,7 +57,7 @@ async def two_channels(database: Database) -> None:
             for hours in (2, 8):
                 await session.execute(
                     text(
-                        "INSERT INTO message_metrics (channel_id, msg_id, "
+                        "INSERT INTO tg_message_metrics (channel_id, msg_id, "
                         "observed_at, views) VALUES (:c, 10, :at, 100)"
                     ),
                     {"c": channel, "at": read_at(hours)},
@@ -105,8 +105,8 @@ async def test_a_week_is_stored_whole_and_once(database: Database) -> None:
     async with database.session() as session:
         assert not await store_week(session, week)
 
-    assert await count(database, "weekly_lists") == 1
-    assert await count(database, "weekly_entries") == 2
+    assert await count(database, "tg_weekly_lists") == 1
+    assert await count(database, "tg_weekly_entries") == 2
 
 
 async def test_lists_are_claimed_oldest_week_first_with_entries_in_rank(
@@ -165,7 +165,7 @@ async def test_an_entry_whose_reading_is_gone_is_not_claimed(
         )
     async with database.session() as session:
         await session.execute(
-            text("DELETE FROM channels WHERE tg_id = :c"), {"c": FIRST}
+            text("DELETE FROM tg_channels WHERE tg_id = :c"), {"c": FIRST}
         )
 
     async with database.session() as session:
@@ -190,8 +190,8 @@ async def test_a_second_run_at_once_is_told_the_week_is_stored(
     async with database.session() as session:
         assert not await store_week(session, week)
 
-    assert await count(database, "weekly_lists") == 1
-    assert await count(database, "weekly_entries") == 1
+    assert await count(database, "tg_weekly_lists") == 1
+    assert await count(database, "tg_weekly_entries") == 1
 
 
 async def test_any_other_refusal_is_raised(database: Database) -> None:
@@ -203,4 +203,4 @@ async def test_any_other_refusal_is_raised(database: Database) -> None:
         async with database.session() as session:
             await store_week(session, broken)
 
-    assert await count(database, "weekly_lists") == 0
+    assert await count(database, "tg_weekly_lists") == 0

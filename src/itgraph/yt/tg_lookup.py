@@ -8,7 +8,7 @@ on what matters most. The asking itself, its spending and its logging
 are ``yt/lookup_pass.py``'s, shared with ``yt mention-lookup``.
 
 No Telegram session and no Telegram request: the posts are already in
-``raw_messages``.
+``tg_raw_messages``.
 """
 
 from itgraph.db.session import Database

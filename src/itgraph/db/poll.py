@@ -96,7 +96,7 @@ async def due_channels(
 ) -> Sequence[DueChannel]:
     """Channels that are due, most overdue first.
 
-    A channel with no ``poll_state`` row is due: that is what makes the
+    A channel with no ``tg_poll_state`` row is due: that is what makes the
     table seed itself, so the first pass over the inventory is the
     seeding pass and nothing has to backfill it.
 
@@ -173,7 +173,7 @@ async def measure_posts_per_day(
     and a counter kept anywhere else would drift from them.
 
     Costs a query and no request, which is why it can be re-measured
-    freely — but it is cached on ``poll_state`` all the same, because the
+    freely — but it is cached on ``tg_poll_state`` all the same, because the
     loop would otherwise ask this of every channel on every tick.
     """
     since = now - timedelta(days=RATE_WINDOW_DAYS)

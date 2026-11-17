@@ -32,7 +32,7 @@ them to. ``families`` and ``sources`` count over the whole album: a
 channel that carried any part carried the album.
 
 The grouping is the referenced post's own ``grouped_id``, read from
-``raw_messages`` — and the asymmetry is worth stopping at, because
+``tg_raw_messages`` — and the asymmetry is worth stopping at, because
 ``edges.grouped_id`` looks like the column to use and is not: it
 describes the *referencing* message, the repost, and says nothing about
 the album being carried. It also means the merge reaches only channels
@@ -107,13 +107,13 @@ ALBUMS = """
                 PARTITION BY r.channel_id,
                              (r.payload->>'grouped_id')::bigint
             ) AS first_part
-        FROM raw_messages r
+        FROM tg_raw_messages r
         WHERE r.payload->>'_' = 'Message'
           AND r.payload->>'grouped_id' IS NOT NULL
     )
 """
 
-# The ranking itself. `channel_families` gives the family of each
+# The ranking itself. `tg_channel_families` gives the family of each
 # endpoint; a channel missing from the view is a family of one, hence the
 # COALESCE — the same expression `export_graph.py` and the scorecard use.
 #
@@ -130,11 +130,11 @@ TOP = f"""
             e.dst_published_at,
             COALESCE(sf.family_key, e.src_channel_id) AS src_family,
             COALESCE(df.family_key, e.dst_channel_id) AS dst_family
-        FROM edges e
+        FROM tg_edges e
         LEFT JOIN albums a
             ON a.channel_id = e.dst_channel_id AND a.msg_id = e.dst_msg_id
-        LEFT JOIN channel_families sf ON sf.channel_id = e.src_channel_id
-        LEFT JOIN channel_families df ON df.channel_id = e.dst_channel_id
+        LEFT JOIN tg_channel_families sf ON sf.channel_id = e.src_channel_id
+        LEFT JOIN tg_channel_families df ON df.channel_id = e.dst_channel_id
         WHERE e.kind = 'forward' AND e.dst_msg_id IS NOT NULL
     ),
     cited AS (
@@ -163,9 +163,9 @@ TOP = f"""
 # Reposts that never entered the ranking, for the report line.
 DROPPED = """
     SELECT COUNT(*)
-    FROM edges e
-    LEFT JOIN channel_families sf ON sf.channel_id = e.src_channel_id
-    LEFT JOIN channel_families df ON df.channel_id = e.dst_channel_id
+    FROM tg_edges e
+    LEFT JOIN tg_channel_families sf ON sf.channel_id = e.src_channel_id
+    LEFT JOIN tg_channel_families df ON df.channel_id = e.dst_channel_id
     WHERE e.kind = 'forward' AND e.dst_msg_id IS NOT NULL
       AND COALESCE(sf.family_key, e.src_channel_id)
           = COALESCE(df.family_key, e.dst_channel_id)
@@ -173,7 +173,7 @@ DROPPED = """
 
 CHANNELS = """
     SELECT tg_id, title, username, status::text, kind::text
-    FROM channels
+    FROM tg_channels
     WHERE tg_id = ANY(%(ids)s)
 """
 
@@ -217,7 +217,7 @@ POSTS = f"""
             (r.payload->'replies'->>'replies')::bigint AS comments,
             (r.payload->>'forwards')::bigint AS forwards,
             r.payload->>'message' AS text
-        FROM raw_messages r
+        FROM tg_raw_messages r
         LEFT JOIN albums a
             ON a.channel_id = r.channel_id AND a.msg_id = r.msg_id
         WHERE r.payload->>'_' = 'Message'

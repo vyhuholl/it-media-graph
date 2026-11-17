@@ -375,9 +375,9 @@ async def test_nothing_derived_is_written(
         # History did arrive — otherwise this passes vacuously.
         assert (await session.execute(select(RawMessage).limit(1))).first()
 
-        edges = await session.scalar(text("SELECT count(*) FROM edges"))
+        edges = await session.scalar(text("SELECT count(*) FROM tg_edges"))
         pending = await session.scalar(
-            text("SELECT count(*) FROM pending_mentions")
+            text("SELECT count(*) FROM tg_pending_mentions")
         )
 
     assert edges == 0

@@ -659,7 +659,7 @@ class YoutubeLists(WeeklySource[PendingList]):
 
 
 class TelegramLists(WeeklySource[tg_weekly.PendingList]):
-    """``weekly_lists``: one list a week, to Telegram's chat.
+    """``tg_weekly_lists``: one list a week, to Telegram's chat.
 
     An entry's post is read at sending as an alert's is, by
     ``alert_evidence``; who carried it is not this message's subject.

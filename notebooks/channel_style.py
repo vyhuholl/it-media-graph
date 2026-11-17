@@ -80,13 +80,13 @@ EMOJI = "[\U0001f300-\U0001faff☀-➿]"
 
 CHANNELS = """
     SELECT c.tg_id, c.title, c.username, c.kind::text
-    FROM channels c
+    FROM tg_channels c
     WHERE c.status = 'seed' AND NOT c.is_chat
 """
 
 FAMILIES = """
     SELECT channel_id, family_key
-    FROM channel_families
+    FROM tg_channel_families
 """
 
 # What the channel published, all posts, forwards included. Service
@@ -99,8 +99,8 @@ VOLUME = """
             AS fwd_share,
         AVG((COALESCE(r.payload->>'message', '') <> '')::int)::float8
             AS text_share
-    FROM raw_messages r
-    JOIN channels c ON c.tg_id = r.channel_id
+    FROM tg_raw_messages r
+    JOIN tg_channels c ON c.tg_id = r.channel_id
                    AND c.status = 'seed' AND NOT c.is_chat
     WHERE r.payload->>'_' = 'Message'
     GROUP BY r.channel_id
@@ -126,8 +126,8 @@ STYLE = """
             length(r.payload->>'message') AS chars,
             CASE WHEN jsonb_typeof(r.payload->'entities') = 'array'
                  THEN r.payload->'entities' ELSE '[]'::jsonb END AS ents
-        FROM raw_messages r
-        JOIN channels c ON c.tg_id = r.channel_id
+        FROM tg_raw_messages r
+        JOIN tg_channels c ON c.tg_id = r.channel_id
                        AND c.status = 'seed' AND NOT c.is_chat
         WHERE r.payload->>'_' = 'Message'
           AND jsonb_typeof(r.payload->'fwd_from') <> 'object'

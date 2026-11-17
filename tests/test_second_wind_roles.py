@@ -30,22 +30,22 @@ P, A, Z = (
 )
 
 SEED = f"""
-INSERT INTO channels (tg_id, username, title, discovered_via, status)
+INSERT INTO tg_channels (tg_id, username, title, discovered_via, status)
 VALUES ({CHANNEL}, 'fake_wind_channel', 'Fake', 'manual', 'seed');
-INSERT INTO raw_messages (channel_id, msg_id, payload)
+INSERT INTO tg_raw_messages (channel_id, msg_id, payload)
 VALUES ({CHANNEL}, 10, '{{"_": "Message", "id": 10}}');
-INSERT INTO message_metrics (channel_id, msg_id, observed_at, views)
+INSERT INTO tg_message_metrics (channel_id, msg_id, observed_at, views)
 VALUES ({CHANNEL}, 10, '{P}', 100), ({CHANNEL}, 10, '{A}', 200),
        ({CHANNEL}, 10, '{Z}', 3000);
-INSERT INTO weekly_lists
+INSERT INTO tg_weekly_lists
     (week_start, computed_at, threshold, size, comments_min,
      posts_scored, channels_above)
 VALUES ('2026-11-16', '2026-11-23 07:00+00', 3.7, 10, 10, 50, 0);
-INSERT INTO weekly_revivals
+INSERT INTO tg_weekly_revivals
     (list_id, rank, channel_id, msg_id, before_at, start_at, end_at,
      previous_pace, pace, norm, others)
 SELECT id, 1, {CHANNEL}, 10, '{P}', '{A}', '{Z}', 14, 466, 1000, 0
-FROM weekly_lists WHERE week_start = '2026-11-16';
+FROM tg_weekly_lists WHERE week_start = '2026-11-16';
 
 INSERT INTO yt_channels (channel_id, status, kind, lang, discovered_via)
 VALUES ('{YT_CHANNEL}', 'seed', 'personal', 'en', 'manual');
@@ -132,11 +132,11 @@ async def scalar(url: URL, query: str) -> object:
 @pytest.mark.parametrize(
     "statement",
     [
-        "SELECT * FROM weekly_revivals",
+        "SELECT * FROM tg_weekly_revivals",
         "SELECT * FROM yt_weekly_revivals",
-        "UPDATE weekly_revivals SET delivered_at = now()",
+        "UPDATE tg_weekly_revivals SET delivered_at = now()",
         "UPDATE yt_weekly_revivals SET delivered_at = now()",
-        "SELECT second_wind_shown FROM weekly_lists",
+        "SELECT second_wind_shown FROM tg_weekly_lists",
         "SELECT second_wind_shown FROM yt_weekly_lists",
     ],
 )
@@ -150,21 +150,21 @@ def test_the_bot_reads_and_records_a_revival_s_delivery(
     "statement",
     [
         (
-            "INSERT INTO weekly_revivals (list_id, rank, channel_id, msg_id, "
+            "INSERT INTO tg_weekly_revivals (list_id, rank, channel_id, msg_id, "
             "before_at, start_at, end_at, pace, norm, others) "
             f"SELECT id, 2, {CHANNEL}, 10, '{P}', '{A}', '{Z}', 1, 1, 0 "
-            "FROM weekly_lists"
+            "FROM tg_weekly_lists"
         ),
-        "UPDATE weekly_revivals SET rank = 3",
-        "UPDATE weekly_revivals SET pace = 1",
-        "UPDATE weekly_revivals SET norm = 1",
-        "UPDATE weekly_revivals SET msg_id = 11",
+        "UPDATE tg_weekly_revivals SET rank = 3",
+        "UPDATE tg_weekly_revivals SET pace = 1",
+        "UPDATE tg_weekly_revivals SET norm = 1",
+        "UPDATE tg_weekly_revivals SET msg_id = 11",
         "UPDATE yt_weekly_revivals SET share = 9",
         "UPDATE yt_weekly_revivals SET acceleration = 9",
         "UPDATE yt_weekly_revivals SET start_at = end_at",
-        "UPDATE weekly_lists SET second_wind_shown = true",
+        "UPDATE tg_weekly_lists SET second_wind_shown = true",
         "UPDATE yt_weekly_lists SET second_wind_shown = true",
-        "DELETE FROM weekly_revivals",
+        "DELETE FROM tg_weekly_revivals",
         "DELETE FROM yt_weekly_revivals",
     ],
 )
@@ -176,11 +176,11 @@ def test_the_bot_cannot_write_a_revival(migrated: URL, statement: str) -> None:
 @pytest.mark.parametrize(
     "statement",
     [
-        "SELECT count(*) FROM weekly_revivals",
-        "SELECT delivered_at FROM weekly_revivals",
+        "SELECT count(*) FROM tg_weekly_revivals",
+        "SELECT delivered_at FROM tg_weekly_revivals",
         "SELECT count(*) FROM yt_weekly_revivals",
         "SELECT delivered_at FROM yt_weekly_revivals",
-        "SELECT second_wind_shown FROM weekly_lists",
+        "SELECT second_wind_shown FROM tg_weekly_lists",
     ],
 )
 def test_the_exporter_reads_nothing_of_a_revival(
@@ -196,14 +196,16 @@ def test_a_revival_goes_with_the_reading_that_ends_its_week(
     asyncio.run(
         run(
             migrated,
-            "DELETE FROM message_metrics "
+            "DELETE FROM tg_message_metrics "
             f"WHERE channel_id = {CHANNEL} AND observed_at = '{Z}'",
         )
     )
     revivals = asyncio.run(
-        scalar(migrated, "SELECT count(*) FROM weekly_revivals")
+        scalar(migrated, "SELECT count(*) FROM tg_weekly_revivals")
     )
-    lists = asyncio.run(scalar(migrated, "SELECT count(*) FROM weekly_lists"))
+    lists = asyncio.run(
+        scalar(migrated, "SELECT count(*) FROM tg_weekly_lists")
+    )
     assert (revivals, lists) == (0, 1)
 
 

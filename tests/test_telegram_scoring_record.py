@@ -263,7 +263,7 @@ async def _seed(database: Database) -> None:
         for channel in channels:
             await session.execute(
                 text(
-                    "INSERT INTO channels (tg_id, username, title, "
+                    "INSERT INTO tg_channels (tg_id, username, title, "
                     "discovered_via, status, kind) VALUES "
                     "(:id, :name, 'Example', 'manual', 'seed', :kind)"
                 ),
@@ -271,14 +271,14 @@ async def _seed(database: Database) -> None:
             )
         await session.execute(
             text(
-                "INSERT INTO raw_messages (channel_id, msg_id, payload, "
+                "INSERT INTO tg_raw_messages (channel_id, msg_id, payload, "
                 "fetched_at) VALUES (:c, :m, CAST(:p AS jsonb), :f)"
             ),
             [{**row, "p": json.dumps(row["p"])} for row in messages],
         )
         await session.execute(
             text(
-                "INSERT INTO message_metrics (channel_id, msg_id, observed_at, "
+                "INSERT INTO tg_message_metrics (channel_id, msg_id, observed_at, "
                 "views, forwards, reactions, comments) VALUES "
                 "(:c, :m, :at, :v, :f, CAST(:r AS jsonb), :n)"
             ),
@@ -374,23 +374,23 @@ async def _record(database: Database) -> dict[str, Any]:
             "SELECT mature_days, min_channel_posts, min_band_samples, "
             "min_band_spread_posts, recent_posts, recent_min_posts, "
             "recent_max_days, channels_in_scope, channels_with_baseline "
-            "FROM baseline_runs",
+            "FROM tg_baseline_runs",
         ),
         "channel_baselines": await _rows(
             database,
             "SELECT channel_id, metric::text, median, samples, "
-            "reference::text FROM channel_baselines "
+            "reference::text FROM tg_channel_baselines "
             "ORDER BY channel_id, metric",
         ),
         "metric_baselines": await _rows(
             database,
             "SELECT kind::text, metric::text, factor, spread, samples, "
-            "dispersion, borrowed FROM metric_baselines ORDER BY kind, metric",
+            "dispersion, borrowed FROM tg_metric_baselines ORDER BY kind, metric",
         ),
         "curve_points": await _rows(
             database,
             "SELECT kind::text, metric::text, band, fraction, spread, "
-            "samples FROM curve_points ORDER BY kind, metric, band",
+            "samples FROM tg_curve_points ORDER BY kind, metric, band",
         ),
         "replay": _replay(replayed),
         "live": {"raised": live.raised, "folded": live.folded},
@@ -398,7 +398,7 @@ async def _record(database: Database) -> dict[str, Any]:
             database,
             "SELECT a.kind::text, a.channel_id, a.msg_id, a.band, a.value, "
             "a.observed, a.expected, h.channel_id, h.msg_id "
-            "FROM alerts a LEFT JOIN alerts h ON h.id = a.folded_into "
+            "FROM tg_alerts a LEFT JOIN tg_alerts h ON h.id = a.folded_into "
             "ORDER BY a.channel_id, a.msg_id, a.kind",
         ),
     }

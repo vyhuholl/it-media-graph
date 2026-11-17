@@ -88,7 +88,7 @@ async def undelivered_revivals(database: Database) -> int:
         return int(
             await session.scalar(
                 text(
-                    "SELECT count(*) FROM weekly_revivals "
+                    "SELECT count(*) FROM tg_weekly_revivals "
                     "WHERE delivered_at IS NULL"
                 )
             )
@@ -144,7 +144,7 @@ async def test_computed_in_the_shadow_no_section_is_sent(
     assert await undelivered_revivals(database) == 1
     async with database.session() as session:
         assert await session.scalar(
-            text("SELECT delivered_at IS NOT NULL FROM weekly_lists")
+            text("SELECT delivered_at IS NOT NULL FROM tg_weekly_lists")
         )
 
 
@@ -170,7 +170,7 @@ async def test_a_revival_gone_before_sending_closes_the_ranks(
     )
     async with database.session() as session:
         await session.execute(
-            text("DELETE FROM channels WHERE tg_id = :c"), {"c": SECOND}
+            text("DELETE FROM tg_channels WHERE tg_id = :c"), {"c": SECOND}
         )
     sender = ListRecorder()
 

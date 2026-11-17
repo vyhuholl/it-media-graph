@@ -182,9 +182,9 @@ def test_the_inventory_dump_names_its_tables(
 
     dump_command = fake_run[0]
     assert "--table" in dump_command
-    assert "channels" in dump_command
+    assert "tg_channels" in dump_command
     # The cursor table rides along; losing it costs a re-walk of history.
-    assert "backfill_state" in dump_command
+    assert "tg_backfill_state" in dump_command
 
 
 def test_the_full_dump_names_no_tables(

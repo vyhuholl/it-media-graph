@@ -6,7 +6,7 @@ point of the whole module: a collector that stopped, or that is stuck
 holding everything it should and using none of it, cannot report its own
 absence, and the table it stopped writing to can.
 
-Nothing here reads `raw_messages` or `message_metrics`, which would cost a
+Nothing here reads `tg_raw_messages` or `tg_message_metrics`, which would cost a
 scan per scrape; the poll queue says the same thing cheaply. And nothing
 here reads what YouTube said about a channel or a video. Label values are
 this module's own constants and the enums', never a table's data, so no

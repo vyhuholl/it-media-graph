@@ -86,9 +86,9 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `db/session.py` | `Database`: engine + session factory |
 | `db/models.py` | SQLAlchemy models, `Base` |
 | `db/channels.py` | The channel inventory: upsert, review, listing, resolution state, and the only place a family is confirmed, rejected or withdrawn |
-| `db/affiliation.py` | The affiliation tables: detection runs, candidate pairs and their evidence; reads families out of the `channel_families` view |
-| `db/views.py` | Views. `channel_families` — which channels share an author, as the connected components of the confirmed pairs |
-| `db/edges.py` | The derived tables: `edges`, `pending_mentions` and the sources that order them |
+| `db/affiliation.py` | The affiliation tables: detection runs, candidate pairs and their evidence; reads families out of the `tg_channel_families` view |
+| `db/views.py` | Views. `tg_channel_families` — which channels share an author, as the connected components of the confirmed pairs |
+| `db/edges.py` | The derived tables: `tg_edges`, `tg_pending_mentions` and the sources that order them |
 | `db/raw.py` | Writes into the raw layer; nothing here reads a payload |
 | `db/metrics.py` | Writes into the snapshot layer: append-only readings of a post's counters; and when each of a channel's posts was last read, one grouped query on the primary key |
 | `db/alerts.py` | Telegram's alert queue: raising, claiming, holding, delivering. A held alert is the digest's alone; one that failed is claimed after those never tried. A comment spike keeps its count and the expectation it was scored against |
@@ -104,7 +104,7 @@ Module map and local conventions. Project-wide rules live in the root `CLAUDE.md
 | `db/yt_refresh.py` | The refresh's own record: one row per run of `yt refresh` — its outcome and how many late readings were due and taken — written at the run's end |
 | `db/yt_watch.py` | The poll loop's own records: listings owed, made and failed, one row per pass, and the lock — an advisory `bigint` key that never meets Telegram's session lease |
 | `db/yt_references.py` | The mention graph read out of the stored payloads in one `REPEATABLE READ` transaction: seeds' videos and seeds' featured lists in date as sources, every payload's handle, every record's id and every stored video's channel as what is known. Reads and writes nothing — a handle from a description lives only in its payload, so the graph is never stored |
-| `db/yt_telegram_links.py` | The Telegram seeds' YouTube links read in one `REPEATABLE READ` transaction: own posts of seeds that are not chats, streamed through `PREFILTER`, with their families from `channel_families`; the totals over every own post; and what names a channel without a request — the inventory, stored payloads' handles, stored videos, lookups in date. Reads and writes nothing — which families link a channel is never stored |
+| `db/yt_telegram_links.py` | The Telegram seeds' YouTube links read in one `REPEATABLE READ` transaction: own posts of seeds that are not chats, streamed through `PREFILTER`, with their families from `tg_channel_families`; the totals over every own post; and what names a channel without a request — the inventory, stored payloads' handles, stored videos, lookups in date. Reads and writes nothing — which families link a channel is never stored |
 | `db/yt_lookups.py` | The lookups: which channel YouTube said a linked name belongs to, found or not, keyed by `YtLookupKind` and name; replaced, never added to; read only while younger than `youtube_answers_fresh_days`, then asked again |
 | `db/yt_search.py` | Searches: the operator's queries (kept, dumped daily), runs and results; whether a query is due read from the runs in date (`youtube_answers_fresh_days`), never from the query's dates |
 | `db/yt_sections.py` | The seeds' featured lists in `yt_raw_channel_sections`: stored or replaced per seed, the seeds due (no list, or older than the refresh age), the lists in date of seeds not gone, how many seeds lack one |

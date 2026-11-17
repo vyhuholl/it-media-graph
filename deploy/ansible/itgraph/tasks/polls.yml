@@ -26,7 +26,7 @@
     - name: Wait for a poll newer than its start
       ansible.builtin.command:
         argv: >-
-          {{ __itgraph_psql_query + ["SELECT count(*) FROM poll_state WHERE last_polled_at > '"
+          {{ __itgraph_psql_query + ["SELECT count(*) FROM tg_poll_state WHERE last_polled_at > '"
              ~ __itgraph_watch_started.stdout | trim ~ "'::timestamptz"] }}
       register: __itgraph_polls_newer
       until: __itgraph_polls_newer.stdout | trim | int > 0

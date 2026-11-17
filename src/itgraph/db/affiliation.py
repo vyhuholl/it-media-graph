@@ -1,8 +1,8 @@
 """Reads and writes of the affiliation tables: runs and candidate pairs.
 
-Two tables, and the split between them is the point. ``affiliation_runs``
+Two tables, and the split between them is the point. ``tg_affiliation_runs``
 holds one row per detection run with the thresholds it used;
-``affiliation_candidates`` holds the pairs, their evidence, and the
+``tg_affiliation_candidates`` holds the pairs, their evidence, and the
 operator's decision about each. A candidate points back at the run that
 last measured it, which is what makes "under which thresholds was this
 proposed" answerable without re-running anything.
@@ -80,7 +80,7 @@ class CandidateRow:
 async def family_keys(session: AsyncSession) -> dict[int, int]:
     """Which family each channel belongs to, for the channels in one.
 
-    Read from the ``channel_families`` view — the connected components of
+    Read from the ``tg_channel_families`` view — the connected components of
     the confirmed pairs, computed rather than stored, so it cannot
     disagree with the pairs it comes from. A channel absent from the
     result is its own family of one; callers wanting that spelled out use
@@ -93,7 +93,7 @@ async def family_keys(session: AsyncSession) -> dict[int, int]:
     rows = await session.execute(
         select(
             column("channel_id", BigInteger), column("family_key", BigInteger)
-        ).select_from(table("channel_families"))
+        ).select_from(table("tg_channel_families"))
     )
     return {channel_id: key for channel_id, key in rows.all()}
 

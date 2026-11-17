@@ -48,7 +48,7 @@ async def seed_channel(
     async with database.session() as session:
         await session.execute(
             text(
-                "INSERT INTO channels (tg_id, username, title, "
+                "INSERT INTO tg_channels (tg_id, username, title, "
                 "discovered_via, status, kind, is_chat) VALUES "
                 "(:id, :name, 'Example', 'manual', 'seed', :kind, :chat)"
             ),
@@ -62,7 +62,7 @@ async def seed_channel(
         for index in range(mature_posts):
             await session.execute(
                 text(
-                    "INSERT INTO raw_messages "
+                    "INSERT INTO tg_raw_messages "
                     "(channel_id, msg_id, payload, fetched_at) "
                     "VALUES (:c, :m, CAST(:p AS jsonb), :f)"
                 ),
@@ -153,7 +153,7 @@ async def test_maturity_is_measured_per_row(database: Database) -> None:
         # Same publication date, read only a day later: not settled.
         await session.execute(
             text(
-                "UPDATE raw_messages SET fetched_at = "
+                "UPDATE tg_raw_messages SET fetched_at = "
                 "(payload->>'date')::timestamptz + interval '1 day'"
             )
         )
@@ -194,14 +194,14 @@ async def test_observations_carry_the_age_they_were_read_at(
     async with database.session() as session:
         await session.execute(
             text(
-                "UPDATE raw_messages SET payload = "
+                "UPDATE tg_raw_messages SET payload = "
                 "jsonb_set(payload, '{date}', to_jsonb(CAST(:d AS text)))"
             ),
             {"d": published.isoformat()},
         )
         await session.execute(
             text(
-                "INSERT INTO message_metrics "
+                "INSERT INTO tg_message_metrics "
                 "(channel_id, msg_id, observed_at, views) "
                 "VALUES (:c, 1, :at, 500)"
             ),
@@ -227,14 +227,14 @@ async def test_a_reading_predating_its_post_is_dropped(
     async with database.session() as session:
         await session.execute(
             text(
-                "UPDATE raw_messages SET payload = "
+                "UPDATE tg_raw_messages SET payload = "
                 "jsonb_set(payload, '{date}', to_jsonb(CAST(:d AS text)))"
             ),
             {"d": published.isoformat()},
         )
         await session.execute(
             text(
-                "INSERT INTO message_metrics "
+                "INSERT INTO tg_message_metrics "
                 "(channel_id, msg_id, observed_at, views) "
                 "VALUES (:c, 1, :at, 500)"
             ),
@@ -323,7 +323,9 @@ async def test_an_unfinished_refresh_is_invisible(
 async def _completed_at(database: Database, run_id: int, at: datetime) -> None:
     async with database.session() as session:
         await session.execute(
-            text("UPDATE baseline_runs SET completed_at = :at WHERE id = :id"),
+            text(
+                "UPDATE tg_baseline_runs SET completed_at = :at WHERE id = :id"
+            ),
             {"at": at, "id": run_id},
         )
 
@@ -466,7 +468,7 @@ async def seed_history(
             published = NOW - timedelta(hours=12)
             await session.execute(
                 text(
-                    "INSERT INTO raw_messages "
+                    "INSERT INTO tg_raw_messages "
                     "(channel_id, msg_id, payload, fetched_at) VALUES "
                     "(:c, :m, CAST(:p AS jsonb), :f)"
                 ),
@@ -490,7 +492,7 @@ async def seed_history(
             ):
                 await session.execute(
                     text(
-                        "INSERT INTO message_metrics "
+                        "INSERT INTO tg_message_metrics "
                         "(channel_id, msg_id, observed_at, views) "
                         "VALUES (:c, :m, :at, :v)"
                     ),
@@ -589,7 +591,7 @@ async def test_a_post_older_than_the_window_does_not_count(
         # Half the history is from a year ago, when the channel was small.
         await session.execute(
             text(
-                "UPDATE raw_messages SET fetched_at = "
+                "UPDATE tg_raw_messages SET fetched_at = "
                 "(payload->>'date')::timestamptz + interval '300 days', "
                 "payload = jsonb_set(payload, '{views}', '100') "
                 "WHERE msg_id <= 20"
@@ -617,7 +619,7 @@ async def test_a_channel_with_history_only_outside_the_window_is_excluded(
     async with database.session() as session:
         await session.execute(
             text(
-                "UPDATE raw_messages SET fetched_at = "
+                "UPDATE tg_raw_messages SET fetched_at = "
                 "(payload->>'date')::timestamptz + interval '400 days'"
             )
         )
@@ -651,7 +653,7 @@ async def test_a_kind_too_thin_to_fit_borrows_the_pooled_curve(
     async with database.session() as session:
         await session.execute(
             text(
-                "UPDATE raw_messages SET fetched_at = "
+                "UPDATE tg_raw_messages SET fetched_at = "
                 "(payload->>'date')::timestamptz + interval '60 days' "
                 "WHERE channel_id = :c"
             ),
@@ -659,7 +661,7 @@ async def test_a_kind_too_thin_to_fit_borrows_the_pooled_curve(
         )
         await session.execute(
             text(
-                "INSERT INTO raw_messages "
+                "INSERT INTO tg_raw_messages "
                 "(channel_id, msg_id, payload, fetched_at) VALUES "
                 "(:c, 900, CAST(:p AS jsonb), :f)"
             ),
@@ -677,7 +679,7 @@ async def test_a_kind_too_thin_to_fit_borrows_the_pooled_curve(
         )
         await session.execute(
             text(
-                "INSERT INTO message_metrics "
+                "INSERT INTO tg_message_metrics "
                 "(channel_id, msg_id, observed_at, views) "
                 "VALUES (:c, 900, :at, 500)"
             ),
@@ -693,7 +695,7 @@ async def test_a_kind_too_thin_to_fit_borrows_the_pooled_curve(
     async with database.session() as session:
         rows = await session.execute(
             text(
-                "SELECT borrowed FROM metric_baselines "
+                "SELECT borrowed FROM tg_metric_baselines "
                 "WHERE kind = 'event' AND metric = 'views'"
             )
         )
@@ -730,7 +732,7 @@ async def test_a_band_spread_is_stored_where_it_could_be_measured(
     async with database.session() as session:
         rows = await session.execute(
             text(
-                "SELECT band, spread FROM curve_points "
+                "SELECT band, spread FROM tg_curve_points "
                 "WHERE kind = 'personal' AND metric = 'views'"
             )
         )
@@ -758,13 +760,13 @@ async def test_a_band_seen_on_too_few_posts_keeps_no_spread(
     async with database.session() as session:
         rows = await session.execute(
             text(
-                "SELECT band, spread FROM curve_points "
+                "SELECT band, spread FROM tg_curve_points "
                 "WHERE kind = 'personal' AND metric = 'views'"
             )
         )
         spreads = dict(rows.all())
         recorded = await session.scalar(
-            text("SELECT min_band_spread_posts FROM baseline_runs")
+            text("SELECT min_band_spread_posts FROM tg_baseline_runs")
         )
         loaded = await load_baselines(session)
 
@@ -802,7 +804,7 @@ async def seed_recent(
             published = moment - newest_ago - timedelta(days=posts - 1 - index)
             await session.execute(
                 text(
-                    "INSERT INTO raw_messages "
+                    "INSERT INTO tg_raw_messages "
                     "(channel_id, msg_id, payload, fetched_at) VALUES "
                     "(:c, :m, CAST(:p AS jsonb), :f)"
                 ),
@@ -821,7 +823,7 @@ async def seed_recent(
             )
             await session.execute(
                 text(
-                    "INSERT INTO message_metrics "
+                    "INSERT INTO tg_message_metrics "
                     "(channel_id, msg_id, observed_at, views) "
                     "VALUES (:c, :m, :at, :v)"
                 ),
@@ -842,8 +844,8 @@ async def stored_views(
         rows = await session.execute(
             text(
                 "SELECT channel_id, median, samples, reference::text "
-                "FROM channel_baselines WHERE metric = 'views' AND run_id = "
-                "(SELECT max(id) FROM baseline_runs)"
+                "FROM tg_channel_baselines WHERE metric = 'views' AND run_id = "
+                "(SELECT max(id) FROM tg_baseline_runs)"
             )
         )
     return {channel: (value, n, ref) for channel, value, n, ref in rows}
@@ -921,7 +923,7 @@ async def test_the_run_records_how_references_were_taken(
             await session.execute(
                 text(
                     "SELECT recent_posts, recent_min_posts, recent_max_days "
-                    "FROM baseline_runs"
+                    "FROM tg_baseline_runs"
                 )
             )
         ).one()
@@ -973,7 +975,7 @@ async def seed_comment_posts(
             published = NOW - timedelta(days=len(counts) - index)
             await session.execute(
                 text(
-                    "INSERT INTO raw_messages "
+                    "INSERT INTO tg_raw_messages "
                     "(channel_id, msg_id, payload, fetched_at) VALUES "
                     "(:c, :m, CAST(:p AS jsonb), :f)"
                 ),
@@ -996,7 +998,7 @@ async def seed_comment_posts(
             ):
                 await session.execute(
                     text(
-                        "INSERT INTO message_metrics "
+                        "INSERT INTO tg_message_metrics "
                         "(channel_id, msg_id, observed_at, views, comments) "
                         "VALUES (:c, :m, :at, 0, :n)"
                     ),
@@ -1078,7 +1080,7 @@ async def test_a_refresh_measures_comments_as_counts(
             (
                 await session.execute(
                     text(
-                        "SELECT channel_id, median FROM channel_baselines "
+                        "SELECT channel_id, median FROM tg_channel_baselines "
                         "WHERE metric = 'comments'"
                     )
                 )
@@ -1088,7 +1090,7 @@ async def test_a_refresh_measures_comments_as_counts(
             kind: (dispersion, borrowed)
             for kind, dispersion, borrowed in await session.execute(
                 text(
-                    "SELECT kind::text, dispersion, borrowed FROM metric_baselines "
+                    "SELECT kind::text, dispersion, borrowed FROM tg_metric_baselines "
                     "WHERE metric = 'comments'"
                 )
             )
@@ -1127,17 +1129,17 @@ async def comment_rulers(database: Database) -> tuple[float, dict[str, float]]:
     async with database.session() as session:
         dispersion = await session.scalar(
             text(
-                "SELECT dispersion FROM metric_baselines WHERE metric = 'comments' "
-                "AND kind = 'personal' AND run_id = (SELECT max(id) FROM baseline_runs)"
+                "SELECT dispersion FROM tg_metric_baselines WHERE metric = 'comments' "
+                "AND kind = 'personal' AND run_id = (SELECT max(id) FROM tg_baseline_runs)"
             )
         )
         curve = dict(
             (
                 await session.execute(
                     text(
-                        "SELECT band, fraction FROM curve_points "
+                        "SELECT band, fraction FROM tg_curve_points "
                         "WHERE metric = 'comments' AND kind = 'personal' "
-                        "AND run_id = (SELECT max(id) FROM baseline_runs)"
+                        "AND run_id = (SELECT max(id) FROM tg_baseline_runs)"
                     )
                 )
             ).all()
@@ -1166,7 +1168,7 @@ async def test_parts_of_an_album_and_of_a_burst_do_not_shape_comments(
             # a message twenty seconds later is the rest of a burst.
             await session.execute(
                 text(
-                    "UPDATE raw_messages SET payload = payload || "
+                    "UPDATE tg_raw_messages SET payload = payload || "
                     "jsonb_build_object('grouped_id', CAST(:album AS bigint)) "
                     "WHERE channel_id = :c AND msg_id = :m"
                 ),
@@ -1185,7 +1187,7 @@ async def test_parts_of_an_album_and_of_a_burst_do_not_shape_comments(
                     payload["grouped_id"] = album
                 await session.execute(
                     text(
-                        "INSERT INTO raw_messages (channel_id, msg_id, payload, fetched_at) "
+                        "INSERT INTO tg_raw_messages (channel_id, msg_id, payload, fetched_at) "
                         "VALUES (:c, :m, CAST(:p AS jsonb), :f)"
                     ),
                     {
@@ -1198,7 +1200,7 @@ async def test_parts_of_an_album_and_of_a_burst_do_not_shape_comments(
                 for age in (timedelta(hours=1), timedelta(hours=8)):
                     await session.execute(
                         text(
-                            "INSERT INTO message_metrics "
+                            "INSERT INTO tg_message_metrics "
                             "(channel_id, msg_id, observed_at, views, comments) "
                             "VALUES (:c, :m, :at, 0, 0)"
                         ),

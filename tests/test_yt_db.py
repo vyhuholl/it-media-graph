@@ -95,12 +95,12 @@ async def test_the_status_is_telegrams_own_type(database: Database) -> None:
             text(
                 "SELECT table_name, udt_name FROM information_schema.columns "
                 "WHERE column_name = 'status' "
-                "AND table_name IN ('channels', 'yt_channels') "
+                "AND table_name IN ('tg_channels', 'yt_channels') "
                 "ORDER BY table_name"
             )
         )
         assert types.all() == [
-            ("channels", "channel_status"),
+            ("tg_channels", "channel_status"),
             ("yt_channels", "channel_status"),
         ]
 

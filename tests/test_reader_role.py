@@ -134,7 +134,9 @@ def test_every_table_and_view_is_readable(migrated: URL) -> None:
     readable = relations(migrated, ("BASE TABLE", "VIEW"))
     # The tables that hold API data, the operator's notes and the view of
     # families are read like any other.
-    assert {"yt_raw_channels", "channels", "channel_families"} <= set(readable)
+    assert {"yt_raw_channels", "tg_channels", "tg_channel_families"} <= set(
+        readable
+    )
 
     outcome = as_reader(
         migrated, [f'SELECT * FROM "{t}" LIMIT 1' for t in readable]
@@ -211,7 +213,7 @@ def test_no_sequence_and_no_new_table(migrated: URL) -> None:
             "WHERE sequence_schema = 'public'",
         )
     ]
-    assert "alerts_id_seq" in sequences
+    assert "tg_alerts_id_seq" in sequences
     statements = [f"SELECT nextval('\"{s}\"')" for s in sequences]
     statements.append("CREATE TABLE made_by_the_reader (id integer)")
 
@@ -296,6 +298,6 @@ def test_a_downgrade_leaves_nothing_and_keeps_a_role_still_used() -> None:
         assert rows(
             down, f"SELECT 1 FROM pg_roles WHERE rolname = '{ROLE}'"
         ) == [(1,)]
-        assert as_reader(kept, ["SELECT * FROM channels"]) == {
-            "SELECT * FROM channels": None
+        assert as_reader(kept, ["SELECT * FROM tg_channels"]) == {
+            "SELECT * FROM tg_channels": None
         }

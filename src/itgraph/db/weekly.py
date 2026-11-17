@@ -14,7 +14,7 @@ came from; what a message shows of a post — its text, its channel's name
 — is read at sending, by ``db.alerts.alert_evidence``, as an alert's is.
 
 **The second wind** (`add-second-wind`) is stored with its list: its
-entries in ``weekly_revivals``, whether it was switched on and the
+entries in ``tg_weekly_revivals``, whether it was switched on and the
 thresholds on the list. The posts it judges come with their three
 readings around the week, each the last at or before a moment, read by
 probes on the snapshots' primary key.
@@ -114,7 +114,7 @@ async def week_has_list(session: AsyncSession, week_start: date) -> bool:
 
 
 # The unique key on a list's week, as the revision names it.
-WEEK_KEY = "uq_weekly_lists_week"
+WEEK_KEY = "uq_tg_weekly_lists_week"
 
 
 async def store_week(session: AsyncSession, found: NewList) -> bool:
@@ -373,11 +373,11 @@ class PostMarks:
     end: Mark | None
 
 
-# Three probes per post on `message_metrics`' primary key, each the last
+# Three probes per post on `tg_message_metrics`' primary key, each the last
 # reading with views at or before a moment.
 _PROBE = """
     LEFT JOIN LATERAL (
-        SELECT m.observed_at, m.views FROM message_metrics m
+        SELECT m.observed_at, m.views FROM tg_message_metrics m
         WHERE m.channel_id = r.channel_id AND m.msg_id = r.msg_id
           AND m.observed_at <= :{moment} AND m.views IS NOT NULL
         ORDER BY m.observed_at DESC LIMIT 1
@@ -390,8 +390,8 @@ POSTS_WITH_MARKS = f"""
            (r.payload->>'date')::timestamptz AS published,
            p.observed_at, p.views, a.observed_at, a.views,
            z.observed_at, z.views
-    FROM raw_messages r
-    JOIN channels c ON c.tg_id = r.channel_id
+    FROM tg_raw_messages r
+    JOIN tg_channels c ON c.tg_id = r.channel_id
     {_PROBE.format(moment="before", name="p")}
     {_PROBE.format(moment="start", name="a")}
     {_PROBE.format(moment="end", name="z")}

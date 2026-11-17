@@ -51,7 +51,7 @@ _USERNAME = re.compile(r"^[a-z][a-z0-9_]{3,31}$")
 # `t.me/addstickers/<pack>` a sticker pack, `t.me/share/url?url=...`
 # opens the share sheet. Each is a plausible-looking username by the
 # regex above, so without this list every such link invented a channel
-# named `addlist` or `addstickers` and parked it in `pending_mentions`,
+# named `addlist` or `addstickers` and parked it in `tg_pending_mentions`,
 # where resolution could only ever fail. Some of these are also written
 # with the payload in the query string (`t.me/addlist?slug=...`), which
 # leaves the reserved word alone in the path and reaches here the same
@@ -136,7 +136,7 @@ def normalize_username(raw: str) -> str | None:
     """Lowercase, drop a leading ``@``, validate. ``None`` if implausible.
 
     Every username crosses this boundary — from a mention entity, from a
-    link path — so a lookup and a ``pending_mentions`` key computed from
+    link path — so a lookup and a ``tg_pending_mentions`` key computed from
     the same handle always agree. A value that is not a plausible username
     is dropped rather than stored: a bad key resolves to nothing and only
     wastes a request.
@@ -149,7 +149,7 @@ def peer_channel_id(from_id: Any) -> int | None:
     """The channel id a ``Peer`` names, or ``None`` if it names no channel.
 
     ``PeerChannel`` carries a ``channel_id`` — a bare id, the primary key
-    of ``channels``. ``PeerUser`` and ``PeerChat`` name a person or a
+    of ``tg_channels``. ``PeerUser`` and ``PeerChat`` name a person or a
     legacy group and have no place in a channel-to-channel graph. A
     missing peer — a forward whose origin the author's privacy settings
     withhold — is likewise nothing.
@@ -225,7 +225,7 @@ def parse_tme_link(url: str) -> Reference | None:
         return _username_reference(segments[1]) if len(segments) > 1 else None
     if first.lower() == "c":
         # t.me/c/<id>/<msg> — the bare id, no `-100` prefix, exactly the
-        # form `channels.tg_id` stores. The message id, when present, is
+        # form `tg_channels.tg_id` stores. The message id, when present, is
         # the third segment.
         if len(segments) > 1 and segments[1].isdigit():
             msg_id = _post_id(segments[2]) if len(segments) > 2 else None
@@ -279,7 +279,7 @@ def extract_text_references(text: str) -> list[Reference]:
     The counterpart to :func:`extract_references`, and the two are not
     interchangeable. That one reads Telegram *entities* — offsets the
     server computed over a message — and is what a caller wants for
-    anything out of ``raw_messages``. This one reads text that carries no
+    anything out of ``tg_raw_messages``. This one reads text that carries no
     entities at all, which is what ``ChannelFull.about`` is: a plain
     string. Applying the entity reader to a description would find
     nothing, every time, and look like an absence of links rather than

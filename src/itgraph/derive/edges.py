@@ -10,7 +10,7 @@ channel by id, which is a primary key, so the endpoint row is created and
 the edge written in the same batch. A mention names a channel by
 ``@username``, which is no id at all: if the inventory already knows the
 username the edge is written now; if not, the username waits in
-``pending_mentions`` for ``resolve`` to turn it into a channel, and the
+``tg_pending_mentions`` for ``resolve`` to turn it into a channel, and the
 *next* derivation run writes the edge. Mention edges therefore lag one
 cycle behind forward edges, by construction.
 
@@ -93,7 +93,7 @@ async def derive_graph(
 ) -> DeriveSummary:
     """Rebuild the edge graph from the raw layer.
 
-    Streams ``raw_messages`` from one connection and writes edges on
+    Streams ``tg_raw_messages`` from one connection and writes edges on
     another, committing per batch. Two connections rather than one because
     a server-side cursor and the inserts it feeds cannot share a
     connection — and per batch so an interrupted run leaves a consistent

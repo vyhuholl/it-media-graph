@@ -73,7 +73,7 @@ async def a_channel(database: Database, channel: int = CHANNEL) -> None:
     async with database.session() as session:
         await session.execute(
             text(
-                "INSERT INTO channels (tg_id, username, title, "
+                "INSERT INTO tg_channels (tg_id, username, title, "
                 "discovered_via, status, kind) VALUES "
                 "(:id, :name, 'Example', 'manual', 'seed', 'personal') "
                 "ON CONFLICT DO NOTHING"
@@ -102,7 +102,7 @@ async def a_post(
     async with database.session() as session:
         await session.execute(
             text(
-                "INSERT INTO raw_messages (channel_id, msg_id, payload) "
+                "INSERT INTO tg_raw_messages (channel_id, msg_id, payload) "
                 "VALUES (:c, :m, CAST(:p AS jsonb))"
             ),
             {"c": channel, "m": msg_id, "p": json.dumps(payload)},
@@ -122,7 +122,7 @@ async def read(
     async with database.session() as session:
         await session.execute(
             text(
-                "INSERT INTO message_metrics (channel_id, msg_id, "
+                "INSERT INTO tg_message_metrics (channel_id, msg_id, "
                 "observed_at, views, forwards, comments) "
                 "VALUES (:c, :m, :at, :v, :f, :n)"
             ),
@@ -217,7 +217,7 @@ async def a_run(
 async def lists(database: Database) -> int:
     async with database.session() as session:
         return int(
-            await session.scalar(text("SELECT count(*) FROM weekly_lists"))
+            await session.scalar(text("SELECT count(*) FROM tg_weekly_lists"))
         )
 
 
@@ -478,7 +478,7 @@ async def test_an_empty_week_is_stored(database: Database) -> None:
             await session.execute(
                 text(
                     "SELECT posts_scored, channels_above, threshold "
-                    "FROM weekly_lists"
+                    "FROM tg_weekly_lists"
                 )
             )
         ).one()
@@ -506,14 +506,14 @@ async def everything_else(database: Database) -> tuple[int, ...]:
         row = (
             await session.execute(
                 text(
-                    "SELECT (SELECT count(*) FROM channels), "
-                    "(SELECT count(*) FROM raw_messages), "
-                    "(SELECT count(*) FROM message_metrics), "
-                    "(SELECT count(*) FROM baseline_runs), "
-                    "(SELECT count(*) FROM channel_baselines), "
-                    "(SELECT count(*) FROM alerts), "
+                    "SELECT (SELECT count(*) FROM tg_channels), "
+                    "(SELECT count(*) FROM tg_raw_messages), "
+                    "(SELECT count(*) FROM tg_message_metrics), "
+                    "(SELECT count(*) FROM tg_baseline_runs), "
+                    "(SELECT count(*) FROM tg_channel_baselines), "
+                    "(SELECT count(*) FROM tg_alerts), "
                     "(SELECT count(*) FROM yt_weekly_lists), "
-                    "(SELECT count(*) FROM poll_state)"
+                    "(SELECT count(*) FROM tg_poll_state)"
                 )
             )
         ).one()

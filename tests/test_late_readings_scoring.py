@@ -4,7 +4,7 @@ The poll loop now keeps readings of posts past the tracking horizon, at
 3 to 30 days of age (`add-late-readings`). Every fit and score finds a
 reading's band by its age, and the bands end at the alerting window, so
 none of them should see those readings — and the mature medians read
-`raw_messages`, not `message_metrics`. This holds the claim to the
+`tg_raw_messages`, not `tg_message_metrics`. This holds the claim to the
 characterisation inventory of `test_telegram_scoring_record`: the same
 refresh, replay and live pass, with and without late readings, agree.
 """
@@ -30,11 +30,11 @@ LATE_DAYS = (3, 4, 5, 7, 10, 14)
 
 # What Telegram's scoring writes; emptied between the two records.
 DERIVED = (
-    "alerts",
-    "channel_baselines",
-    "metric_baselines",
-    "curve_points",
-    "baseline_runs",
+    "tg_alerts",
+    "tg_channel_baselines",
+    "tg_metric_baselines",
+    "tg_curve_points",
+    "tg_baseline_runs",
 )
 
 
@@ -56,7 +56,7 @@ async def _add_late_readings(database: Database) -> int:
         for days in LATE_DAYS:
             result = await session.execute(
                 text(
-                    "INSERT INTO message_metrics (channel_id, msg_id, "
+                    "INSERT INTO tg_message_metrics (channel_id, msg_id, "
                     "observed_at, views, forwards, reactions, comments) "
                     "SELECT m.channel_id, m.msg_id, "
                     "  (r.payload->>'date')::timestamptz "
@@ -65,8 +65,8 @@ async def _add_late_readings(database: Database) -> int:
                     "  CASE WHEN bool_and(m.reactions IS NULL) THEN NULL "
                     "       ELSE jsonb_build_object('👍', 9999) END, "
                     "  max(m.comments) + 50 "
-                    "FROM message_metrics m "
-                    "JOIN raw_messages r "
+                    "FROM tg_message_metrics m "
+                    "JOIN tg_raw_messages r "
                     "  ON r.channel_id = m.channel_id AND r.msg_id = m.msg_id "
                     "WHERE (r.payload->>'date')::timestamptz "
                     "      + make_interval(days => :days) <= :now "
@@ -112,7 +112,7 @@ async def test_late_readings_are_where_the_test_puts_them(
         youngest = await session.scalar(
             text(
                 "SELECT min(m.observed_at - (r.payload->>'date')::timestamptz)"
-                " FROM message_metrics m JOIN raw_messages r "
+                " FROM tg_message_metrics m JOIN tg_raw_messages r "
                 "  ON r.channel_id = m.channel_id AND r.msg_id = m.msg_id "
                 "WHERE m.observed_at - (r.payload->>'date')::timestamptz "
                 "      >= interval '49 hours'"

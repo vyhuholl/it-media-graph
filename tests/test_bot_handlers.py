@@ -497,7 +497,7 @@ async def raise_one(database_url: str, *, ago: timedelta) -> None:
         async with database.session() as session:
             await session.execute(
                 text(
-                    "INSERT INTO channels (tg_id, username, title, "
+                    "INSERT INTO tg_channels (tg_id, username, title, "
                     "discovered_via, status) VALUES "
                     "(1, 'example', 'Example', 'manual', 'seed') "
                     "ON CONFLICT DO NOTHING"
@@ -505,14 +505,14 @@ async def raise_one(database_url: str, *, ago: timedelta) -> None:
             )
             await session.execute(
                 text(
-                    "INSERT INTO raw_messages (channel_id, msg_id, payload) "
+                    "INSERT INTO tg_raw_messages (channel_id, msg_id, payload) "
                     'VALUES (1, 1, \'{"_": "Message"}\'::jsonb) '
                     "ON CONFLICT DO NOTHING"
                 )
             )
             await session.execute(
                 text(
-                    "INSERT INTO alerts (kind, channel_id, msg_id, band, "
+                    "INSERT INTO tg_alerts (kind, channel_id, msg_id, band, "
                     "value, raised_at) VALUES "
                     "('repost_cascade', 1, 1, 2, 2, :at)"
                 ),
@@ -591,7 +591,7 @@ async def test_held_alerts_do_not_read_as_broken(database_url: str) -> None:
     database = Database(database_url)
     try:
         async with database.session() as session:
-            await session.execute(text("UPDATE alerts SET held_at = now()"))
+            await session.execute(text("UPDATE tg_alerts SET held_at = now()"))
     finally:
         await database.dispose()
 
@@ -621,27 +621,27 @@ async def test_status_counts_what_was_folded(database_url: str) -> None:
         async with database.session() as session:
             await session.execute(
                 text(
-                    "INSERT INTO channels (tg_id, username, title, "
+                    "INSERT INTO tg_channels (tg_id, username, title, "
                     "discovered_via, status) VALUES "
                     "(1, 'example', 'Example', 'manual', 'seed')"
                 )
             )
             await session.execute(
                 text(
-                    "INSERT INTO raw_messages (channel_id, msg_id, payload) "
+                    "INSERT INTO tg_raw_messages (channel_id, msg_id, payload) "
                     'VALUES (1, 1, \'{"_": "Message"}\'::jsonb), '
                     '(1, 2, \'{"_": "Message"}\'::jsonb)'
                 )
             )
             head = await session.scalar(
                 text(
-                    "INSERT INTO alerts (kind, channel_id, msg_id, band, "
+                    "INSERT INTO tg_alerts (kind, channel_id, msg_id, band, "
                     "value) VALUES ('views_spike', 1, 1, 1, 6) RETURNING id"
                 )
             )
             await session.execute(
                 text(
-                    "INSERT INTO alerts (kind, channel_id, msg_id, band, "
+                    "INSERT INTO tg_alerts (kind, channel_id, msg_id, band, "
                     "value, folded_into) "
                     "VALUES ('views_spike', 1, 2, 1, 5, :h)"
                 ),

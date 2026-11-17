@@ -221,9 +221,9 @@ async def mature_medians(
                    count(*) AS samples
             FROM (
               SELECT r.channel_id, {MATURE_VALUE[metric]} AS v
-              FROM raw_messages r
-              JOIN channels c ON c.tg_id = r.channel_id
-              LEFT JOIN backfill_state b ON b.channel_id = c.tg_id
+              FROM tg_raw_messages r
+              JOIN tg_channels c ON c.tg_id = r.channel_id
+              LEFT JOIN tg_backfill_state b ON b.channel_id = c.tg_id
               WHERE r.payload->>'_' = 'Message'
                 AND c.status = 'seed'
                 AND c.is_chat = false
@@ -292,9 +292,9 @@ async def recent_values(
                            coalesce(r.payload->>'grouped_id', r.msg_id::text)
                          ORDER BY r.msg_id
                        ) AS part
-                FROM raw_messages r
-                JOIN channels c ON c.tg_id = r.channel_id
-                LEFT JOIN backfill_state b ON b.channel_id = c.tg_id
+                FROM tg_raw_messages r
+                JOIN tg_channels c ON c.tg_id = r.channel_id
+                LEFT JOIN tg_backfill_state b ON b.channel_id = c.tg_id
                 WHERE r.payload->>'_' = 'Message'
                   AND c.status = 'seed'
                   AND c.is_chat = false
@@ -311,7 +311,7 @@ async def recent_values(
                        AND m.observed_at <= :until
                    ) AS v
             FROM posts p
-            LEFT JOIN message_metrics m
+            LEFT JOIN tg_message_metrics m
               ON m.channel_id = p.channel_id AND m.msg_id = p.msg_id
             GROUP BY p.channel_id, p.msg_id, p.published
         """),
@@ -386,8 +386,8 @@ async def observations(
                            coalesce(r.payload->>'grouped_id', r.msg_id::text)
                          ORDER BY r.msg_id
                        ) AS part
-                FROM raw_messages r
-                JOIN channels c ON c.tg_id = r.channel_id
+                FROM tg_raw_messages r
+                JOIN tg_channels c ON c.tg_id = r.channel_id
                 WHERE (r.payload->>'date')::timestamptz >= :since
                   AND c.kind IS NOT NULL
               ) t
@@ -399,7 +399,7 @@ async def observations(
                    {SNAPSHOT_VALUE[metric]} AS v,
                    p.published
             FROM posts p
-            LEFT JOIN message_metrics m
+            LEFT JOIN tg_message_metrics m
               ON m.channel_id = p.channel_id AND m.msg_id = p.msg_id
              AND (CAST(:horizon AS interval) IS NULL
                   OR m.observed_at - p.published < :horizon)
@@ -412,10 +412,10 @@ async def observations(
                    )) AS age_seconds,
                    {SNAPSHOT_VALUE[metric]} AS v,
                    (r.payload->>'date')::timestamptz AS published
-            FROM message_metrics m
-            JOIN raw_messages r
+            FROM tg_message_metrics m
+            JOIN tg_raw_messages r
               ON r.channel_id = m.channel_id AND r.msg_id = m.msg_id
-            JOIN channels c ON c.tg_id = m.channel_id
+            JOIN tg_channels c ON c.tg_id = m.channel_id
             WHERE (r.payload->>'date')::timestamptz >= :since
               AND c.kind IS NOT NULL
               AND (CAST(:horizon AS interval) IS NULL

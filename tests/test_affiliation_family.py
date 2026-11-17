@@ -60,7 +60,7 @@ async def confirmed_pairs(database: Database) -> set[tuple[int, int]]:
     async with database.session() as session:
         rows = await session.execute(
             text(
-                "SELECT channel_a, channel_b FROM affiliation_candidates "
+                "SELECT channel_a, channel_b FROM tg_affiliation_candidates "
                 "WHERE decision = 'confirmed' ORDER BY 1, 2"
             )
         )
@@ -248,7 +248,7 @@ async def test_a_withdrawn_pair_returns_to_pending(
             await session.execute(
                 text(
                     "SELECT decision::text, decided_at, decision_note "
-                    "FROM affiliation_candidates"
+                    "FROM tg_affiliation_candidates"
                 )
             )
         ).one()
@@ -273,7 +273,7 @@ async def test_rejecting_records_the_pair_and_no_family(
             await session.execute(
                 text(
                     "SELECT decision::text, decision_note "
-                    "FROM affiliation_candidates"
+                    "FROM tg_affiliation_candidates"
                 )
             )
         ).one()
@@ -326,7 +326,7 @@ async def test_a_confirmation_is_recorded_as_the_operator_s(
             await session.execute(
                 text(
                     "SELECT origin::text, decision::text, decision_note "
-                    "FROM affiliation_candidates"
+                    "FROM tg_affiliation_candidates"
                 )
             )
         ).one()
@@ -384,7 +384,7 @@ async def test_confirming_a_family_leaves_every_edge_in_place(
         for index in range(5):
             await session.execute(
                 text(
-                    "INSERT INTO edges (src_channel_id, dst_channel_id, "
+                    "INSERT INTO tg_edges (src_channel_id, dst_channel_id, "
                     "kind, msg_id, published_at) "
                     "VALUES (:a, :b, 'forward', :msg, now())"
                 ),
@@ -395,15 +395,15 @@ async def test_confirming_a_family_leaves_every_edge_in_place(
         await confirm_affiliation(session, [A, B])
 
     async with database.session() as session:
-        remaining = await session.scalar(text("SELECT count(*) FROM edges"))
+        remaining = await session.scalar(text("SELECT count(*) FROM tg_edges"))
         # The family key is what lets analysis tell the edge apart.
         intra = await session.scalar(
             text(
-                "SELECT count(*) FROM edges e "
-                "JOIN channels s ON s.tg_id = e.src_channel_id "
-                "JOIN channels d ON d.tg_id = e.dst_channel_id "
-                "LEFT JOIN channel_families fs ON fs.channel_id = s.tg_id "
-                "LEFT JOIN channel_families fd ON fd.channel_id = d.tg_id "
+                "SELECT count(*) FROM tg_edges e "
+                "JOIN tg_channels s ON s.tg_id = e.src_channel_id "
+                "JOIN tg_channels d ON d.tg_id = e.dst_channel_id "
+                "LEFT JOIN tg_channel_families fs ON fs.channel_id = s.tg_id "
+                "LEFT JOIN tg_channel_families fd ON fd.channel_id = d.tg_id "
                 "WHERE COALESCE(fs.family_key, s.tg_id) "
                 "= COALESCE(fd.family_key, d.tg_id)"
             )

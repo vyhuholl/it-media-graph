@@ -219,7 +219,7 @@ async def poll_channel(
     """Read one channel once: new posts and fresh counters, one request.
 
     Payloads are written before snapshots and in the same transaction.
-    The foreign key from ``message_metrics`` onto ``raw_messages``
+    The foreign key from ``tg_message_metrics`` onto ``tg_raw_messages``
     enforces that, so getting it wrong is a database error rather than a
     silent inconsistency — but the ordering is deliberate here and not an
     accident of how the code happens to read.

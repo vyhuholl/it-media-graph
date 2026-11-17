@@ -102,7 +102,7 @@ class AddSummary:
 async def _warn_about_recent_floods(session: AsyncSession) -> None:
     """Say whether this method was recently limited. Never refuse over it.
 
-    ``flood_events`` records which run was limited, not which account was
+    ``tg_flood_events`` records which run was limited, not which account was
     behind it — and this command is expected to run from a different
     account than the collection passes, which is the whole reason it
     exists. A guard that refused would be deciding on the one fact the

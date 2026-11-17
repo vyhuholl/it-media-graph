@@ -118,7 +118,7 @@ class Queue[P: Pending](ABC):
 
 
 class TelegramQueue(Queue[tg.PendingAlert]):
-    """``alerts``: one destination, the chat Telegram's alerts always had."""
+    """``tg_alerts``: one destination, the chat Telegram's alerts always had."""
 
     platform = Platform.TELEGRAM
 

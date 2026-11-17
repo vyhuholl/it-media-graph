@@ -48,7 +48,7 @@ from itgraph.config import settings
 
 # Imported for its side effect: it attaches the view DDL to
 # `Base.metadata`, so `create_all` below builds it the way a migration
-# would. Without this the test schema is missing `channel_families` and
+# would. Without this the test schema is missing `tg_channel_families` and
 # every family query fails on a database that looks otherwise complete.
 from itgraph.db import session_lease as session_lease_module
 from itgraph.db import views as _views  # noqa: F401

@@ -47,14 +47,14 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-# Everything the operator decided by hand. `backfill_state` rides along
+# Everything the operator decided by hand. `tg_backfill_state` rides along
 # because losing the cursors means walking every channel's history again
 # — the one operation this project treats as expensive. The YouTube
 # search queries are the operator's words too, and which were tried is
 # what steers the next round of candidates.
 INVENTORY_TABLES = (
-    "channels",
-    "backfill_state",
+    "tg_channels",
+    "tg_backfill_state",
     "yt_channels",
     "yt_search_queries",
 )

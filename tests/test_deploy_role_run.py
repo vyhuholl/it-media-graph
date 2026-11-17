@@ -6,6 +6,7 @@ whole run takes the longest of anything here.
 """
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -603,9 +604,14 @@ def test_a_schedule_since_deleted_is_no_failure(tmp_path: Path) -> None:
     assert not run.failed, run.output
 
 
+CHANNELS_PROBE = "to_regclass\\('public.tg_channels'\\)"
+COUNTED = r"count\(\*\) FROM (tg_)?channels$"
+
+
 def state_rules(
     *,
     channels: str = "12",
+    table: str = "tg_channels",
     dangling: str = "0",
     version: str = OLD,
     history: str = HISTORY,
@@ -615,8 +621,8 @@ def state_rules(
             "get statefulset itgraph-postgres",
             "statefulset.apps/itgraph-postgres",
         ),
-        rule("to_regclass\\('public.channels'\\)", "f\n"),
-        rule("count\\(\\*\\) FROM channels", channels + "\n"),
+        rule(CHANNELS_PROBE, table + "\n"),
+        rule(f"count\\(\\*\\) FROM {table}$", channels + "\n"),
         rule("pg_attribute", dangling + "\n"),
         rule("to_regclass\\('public.alembic_version'\\)", "f\n"),
         # Read once before the run changes anything: at head from then on, as
@@ -675,8 +681,10 @@ def test_a_failed_count_is_not_read_as_empty(tmp_path: Path) -> None:
         "database_state",
         rules=[
             rule("get statefulset", "statefulset.apps/itgraph-postgres"),
-            rule("to_regclass\\('public.channels'\\)", "f\n"),
-            rule("count\\(\\*\\) FROM channels", rc=2, stderr="no such thing"),
+            rule(CHANNELS_PROBE, "tg_channels\n"),
+            rule(
+                "count\\(\\*\\) FROM tg_channels", rc=2, stderr="no such thing"
+            ),
         ],
     )
 
@@ -690,11 +698,59 @@ def test_a_probe_that_could_not_answer_stops_a_run(tmp_path: Path) -> None:
         "database_state",
         rules=[
             rule("get statefulset", "statefulset.apps/itgraph-postgres"),
-            rule("to_regclass\\('public.channels'\\)", "", rc=1),
+            rule(CHANNELS_PROBE, "", rc=1),
         ],
     )
 
     assert run.failed
+
+
+def test_a_probe_answering_nothing_it_knows_stops_a_run(
+    tmp_path: Path,
+) -> None:
+    run = run_role(
+        tmp_path,
+        "database_state",
+        rules=[
+            rule("get statefulset", "statefulset.apps/itgraph-postgres"),
+            rule(CHANNELS_PROBE, "\n"),
+        ],
+    )
+
+    assert run.failed
+    assert run.called("create") == []
+
+
+@pytest.mark.parametrize("table", ["tg_channels", "channels"])
+def test_the_channels_are_counted_under_either_name(
+    tmp_path: Path, table: str
+) -> None:
+    """The first deploy of the prefixed tables still finds `channels`.
+
+    So does a database left at an older revision. Under either name the
+    channels are counted, and a broken database stops the run.
+    """
+    run = run_role(
+        tmp_path,
+        "database_state",
+        rules=state_rules(table=table, channels="12", dangling="3"),
+    )
+
+    assert run.failed
+    assert "in a database holding 12 channels" in run.output.replace("\n", " ")
+    [counted] = [c for c in run.joined() if re.search(COUNTED, c)]
+    assert counted.endswith(f"FROM {table}")
+
+
+def test_no_channels_table_counts_none(tmp_path: Path) -> None:
+    run = run_role(
+        tmp_path,
+        "database_state",
+        rules=state_rules(table="-", dangling="3", version=HEAD),
+    )
+
+    assert not run.failed, run.output
+    assert [c for c in run.joined() if re.search(COUNTED, c)] == []
 
 
 def test_a_schema_ahead_of_the_image_names_both(tmp_path: Path) -> None:
@@ -1173,7 +1229,7 @@ def test_polls_that_advance_pass(tmp_path: Path) -> None:
         "polls",
         rules=[
             rule("startedAt", "2026-11-06T09:00:00Z"),
-            rule("count\\(\\*\\) FROM poll_state", "3\n"),
+            rule("count\\(\\*\\) FROM tg_poll_state", "3\n"),
         ],
         extra={"__itgraph_now_hour": 12},
     )
@@ -1187,7 +1243,7 @@ def test_polls_that_never_come_fail(tmp_path: Path) -> None:
         "polls",
         rules=[
             rule("startedAt", "2026-11-06T09:00:00Z"),
-            rule("count\\(\\*\\) FROM poll_state", "0\n"),
+            rule("count\\(\\*\\) FROM tg_poll_state", "0\n"),
         ],
         extra={"__itgraph_now_hour": 12, "__itgraph_polls_retries": 1},
     )
@@ -1203,6 +1259,17 @@ def test_inside_quiet_hours_polls_are_not_asked_about(tmp_path: Path) -> None:
     assert run.calls == []
 
 
+@pytest.mark.parametrize(
+    ("bounds", "hour", "asked"),
+    [
+        # Past midnight: 22:00 to 06:00 holds at 23:00 and at 03:00.
+        ((22, 6), 23, False),
+        ((22, 6), 3, False),
+        ((22, 6), 12, True),
+        # Equal bounds are no quiet hours at all, as the code reads them.
+        ((2, 2), 2, True),
+    ],
+)
 def deployments(*items: tuple[str, int, bool]) -> str:
     return json.dumps(
         {
@@ -1257,7 +1324,7 @@ def whole_run_rules(
         rule("get pods -l app=itgraph", running_collector()),
         rule("logs deployment/itgraph-watch", ROUTE),
         rule("startedAt", "2026-11-06T09:00:00Z"),
-        rule("count\\(\\*\\) FROM poll_state", "3\n"),
+        rule("count\\(\\*\\) FROM tg_poll_state", "3\n"),
     ]
 
 
@@ -1687,12 +1754,12 @@ def restore_rules() -> list[dict[str, Any]]:
             "itgraph-trial-backup",
             logs="/backups/weekly/full-20261106T090000Z.dump",
         ),
-        rule("count\\(\\*\\) FROM baseline_runs", "1\n", times=1),
-        rule("count\\(\\*\\) FROM baseline_runs", "2\n"),
+        rule("count\\(\\*\\) FROM tg_baseline_runs", "1\n", times=1),
+        rule("count\\(\\*\\) FROM tg_baseline_runs", "2\n"),
         rule("count\\(\\*\\) FROM yt_baseline_runs", "0\n", times=1),
         rule("count\\(\\*\\) FROM yt_baseline_runs", "1\n"),
         rule("count\\(\\*\\) FROM yt_weekly_lists", "3\n"),
-        rule("count\\(\\*\\) FROM weekly_lists", "2\n"),
+        rule("count\\(\\*\\) FROM tg_weekly_lists", "2\n"),
         rule("yt_alerts WHERE band = 2147483647", "2|0|en,ru\n"),
         rule("band = 2147483647", "1\n"),
         rule("pg_restore", "public.channels 12\n"),
@@ -1784,12 +1851,14 @@ def test_a_restore_in_order(tmp_path: Path) -> None:
     assert "the weekly list computed by preview" in run.output
     assert "Telegram's weekly list computed by preview" in run.output
     # The alert is raised on a restored post, and read back as delivered.
-    assert first("get pod itgraph-trial-backup") < first("INSERT INTO alerts")
-    [raised] = [call for call in joined if "INSERT INTO alerts" in call]
-    assert "FROM raw_messages" in raised
+    assert first("get pod itgraph-trial-backup") < first(
+        "INSERT INTO tg_alerts"
+    )
+    [raised] = [call for call in joined if "INSERT INTO tg_alerts" in call]
+    assert "FROM tg_raw_messages" in raised
     # Neutralise before read-back, each as one script on stdin.
     scripts = [call["stdin"] for call in run.calls if call["stdin"]]
-    assert any("DELETE FROM channels" in script for script in scripts)
+    assert any("DELETE FROM tg_channels" in script for script in scripts)
     assert any("still holds" in script for script in scripts)
     # The migration takes no dump of what is not yet neutralised.
     [migrate] = [
@@ -1805,7 +1874,7 @@ def test_a_restore_in_order(tmp_path: Path) -> None:
     assert "Delivered through the bot: an alert" in run.output
     # A synthetic video per language after Telegram's, delivered to both
     # topics, and removed whatever came of it.
-    assert first("INSERT INTO alerts") < first("INSERT INTO yt_raw_videos")
+    assert first("INSERT INTO tg_alerts") < first("INSERT INTO yt_raw_videos")
     [youtube] = [call for call in joined if "INSERT INTO yt_alerts" in call]
     assert "lang IN ('en', 'ru')" in youtube
     assert first("INSERT INTO yt_raw_videos") < first(
@@ -1952,7 +2021,7 @@ def test_a_telegram_list_written_by_the_trial_fails_the_restore(
         "restore",
         inputs="b",
         rules=[
-            rule("count\\(\\*\\) FROM weekly_lists", "0\n", times=1),
+            rule("count\\(\\*\\) FROM tg_weekly_lists", "0\n", times=1),
             *restore_rules(),
         ],
         extra={**RESTORE, "itgraph_restore_from": str(dump)},
@@ -2003,7 +2072,7 @@ def test_a_trial_that_writes_nothing_fails_the_restore(tmp_path: Path) -> None:
         "restore",
         inputs="b",
         rules=[
-            rule("count\\(\\*\\) FROM baseline_runs", "1\n"),
+            rule("count\\(\\*\\) FROM tg_baseline_runs", "1\n"),
             *restore_rules(),
         ],
         extra={**RESTORE, "itgraph_restore_from": str(dump)},
@@ -2036,6 +2105,6 @@ def test_inside_quiet_hours_the_alert_is_reported_as_not_proven(
 
     assert not run.failed, run.output
     assert "could not be proven" in run.output
-    assert [c for c in run.joined() if "INSERT INTO alerts" in c] == []
+    assert [c for c in run.joined() if "INSERT INTO tg_alerts" in c] == []
     assert "YouTube: could not be proven" in run.output
     assert [c for c in run.joined() if "INSERT INTO yt_raw_videos" in c] == []

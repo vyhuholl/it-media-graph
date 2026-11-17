@@ -34,7 +34,7 @@ LONELY_PEER = FakeInputPeer(LONELY)
 async def inventory(database: Database) -> AsyncIterator[Database]:
     """The channels the pass will run over, already reviewed.
 
-    `raw_channels` has a foreign key onto `channels`, so a payload
+    `tg_raw_channels` has a foreign key onto `tg_channels`, so a payload
     cannot arrive for a channel the inventory has never heard of. The
     walker only ever selects in-scope channels, so this is the state it
     always finds.

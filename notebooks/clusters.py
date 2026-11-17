@@ -125,24 +125,24 @@ NODES = """
         c.username,
         c.kind::text,
         rc.payload->'full_chat'->>'about'
-    FROM channels c
-    LEFT JOIN raw_channels rc ON rc.channel_id = c.tg_id
+    FROM tg_channels c
+    LEFT JOIN tg_raw_channels rc ON rc.channel_id = c.tg_id
     WHERE c.status = 'seed' AND NOT c.is_chat
 """
 
 EDGES = """
     SELECT e.src_channel_id, e.dst_channel_id, e.kind::text, e.published_at
-    FROM edges e
-    JOIN channels s ON s.tg_id = e.src_channel_id
+    FROM tg_edges e
+    JOIN tg_channels s ON s.tg_id = e.src_channel_id
                    AND s.status = 'seed' AND NOT s.is_chat
-    JOIN channels d ON d.tg_id = e.dst_channel_id
+    JOIN tg_channels d ON d.tg_id = e.dst_channel_id
                    AND d.status = 'seed' AND NOT d.is_chat
     WHERE e.src_channel_id <> e.dst_channel_id
 """
 
 FAMILIES = """
     SELECT channel_id, family_key
-    FROM channel_families
+    FROM tg_channel_families
 """
 
 KINDS = ("forward", "mention")
@@ -1176,7 +1176,7 @@ def write_gexf(
     """The same graph for Gephi, carrying the cluster it was given.
 
     Only channels and their references — no ids from the raw layer, no
-    text. What `edges` holds is what this exports, which is what makes it
+    text. What `tg_edges` holds is what this exports, which is what makes it
     safe to open in a tool that was not written for this project.
     """
     graph = nx.Graph()

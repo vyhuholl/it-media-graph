@@ -4,7 +4,7 @@ The most important assertion in this file is the dullest one: a poll
 issues no ``resolveUsername`` and no ``getFullChannel``. That is the
 invariant the loop is likeliest to break by accident — one convenience
 call to ``get_entity`` and the tightest daily quota in the project is
-gone every day until somebody reads `flood_events`.
+gone every day until somebody reads `tg_flood_events`.
 """
 
 import asyncio
@@ -81,7 +81,7 @@ async def seed(database: Database, *tg_ids: int) -> None:
         )
         await session.execute(
             text(
-                "UPDATE channels SET status = 'seed' WHERE tg_id = ANY(:ids)"
+                "UPDATE tg_channels SET status = 'seed' WHERE tg_id = ANY(:ids)"
             ),
             {"ids": list(tg_ids)},
         )
@@ -111,7 +111,7 @@ async def snapshots(database: Database) -> list[tuple[Any, ...]]:
         result = await session.execute(
             text(
                 "SELECT channel_id, msg_id, views, forwards, reactions, "
-                "comments FROM message_metrics ORDER BY msg_id, observed_at"
+                "comments FROM tg_message_metrics ORDER BY msg_id, observed_at"
             )
         )
         return [tuple(row) for row in result.all()]
@@ -149,7 +149,7 @@ async def test_a_polled_post_is_stored_naming_nobody(
     async with database.session() as session:
         payload = await session.scalar(
             text(
-                "SELECT payload FROM raw_messages "
+                "SELECT payload FROM tg_raw_messages "
                 "WHERE channel_id = :c AND msg_id = 10"
             ),
             {"c": FIRST},
@@ -213,7 +213,7 @@ async def test_counters_that_move_are_two_readings(
     # Due again immediately, as it would be after its next sample.
     async with database.session() as session:
         await session.execute(
-            text("UPDATE poll_state SET due_at = now() - interval '1 hour'")
+            text("UPDATE tg_poll_state SET due_at = now() - interval '1 hour'")
         )
     await watch(client, database, max_cycles=1)
 
@@ -234,7 +234,7 @@ async def test_a_poll_that_finds_nothing_new_still_snapshots(
     await watch(client, database, max_cycles=1)
     async with database.session() as session:
         await session.execute(
-            text("UPDATE poll_state SET due_at = now() - interval '1 hour'")
+            text("UPDATE tg_poll_state SET due_at = now() - interval '1 hour'")
         )
     post.views = 150
     stats = await watch(client, database, max_cycles=1)
@@ -260,7 +260,7 @@ async def test_a_post_past_the_late_horizon_is_not_snapshotted(
     # ...but both are stored, because the request already returned them.
     async with database.session() as session:
         stored = await session.scalar(
-            text("SELECT count(*) FROM raw_messages")
+            text("SELECT count(*) FROM tg_raw_messages")
         )
     assert stored == 3
 
@@ -272,7 +272,7 @@ async def readings_of(database: Database, msg_id: int) -> list[datetime]:
     async with database.session() as session:
         result = await session.execute(
             text(
-                "SELECT observed_at FROM message_metrics "
+                "SELECT observed_at FROM tg_message_metrics "
                 "WHERE msg_id = :m ORDER BY observed_at"
             ),
             {"m": msg_id},
@@ -301,7 +301,7 @@ async def read_at(
 async def due_again(database: Database) -> None:
     async with database.session() as session:
         await session.execute(
-            text("UPDATE poll_state SET due_at = now() - interval '1 hour'")
+            text("UPDATE tg_poll_state SET due_at = now() - interval '1 hour'")
         )
 
 
@@ -400,7 +400,7 @@ async def test_late_readings_cost_no_request(
             row = (
                 await session.execute(
                     text(
-                        "SELECT due_at - last_polled_at FROM poll_state "
+                        "SELECT due_at - last_polled_at FROM tg_poll_state "
                         "WHERE channel_id = :c"
                     ),
                     {"c": tg_id},
@@ -447,7 +447,7 @@ async def test_a_service_message_is_stored_but_not_measured(
     assert [row[1] for row in await snapshots(database)] == [10]
     async with database.session() as session:
         assert (
-            await session.scalar(text("SELECT count(*) FROM raw_messages"))
+            await session.scalar(text("SELECT count(*) FROM tg_raw_messages"))
             == 2
         )
 
@@ -481,7 +481,7 @@ async def test_the_forward_cursor_advances(database: Database) -> None:
 
     async with database.session() as session:
         newest = await session.scalar(
-            text("SELECT newest_fetched_id FROM backfill_state")
+            text("SELECT newest_fetched_id FROM tg_backfill_state")
         )
     assert newest == 42
 
@@ -494,7 +494,7 @@ async def test_the_cursor_never_moves_backwards(
     async with database.session() as session:
         await session.execute(
             text(
-                "INSERT INTO backfill_state (channel_id, newest_fetched_id) "
+                "INSERT INTO tg_backfill_state (channel_id, newest_fetched_id) "
                 "VALUES (:id, 9999)"
             ),
             {"id": FIRST},
@@ -505,7 +505,7 @@ async def test_the_cursor_never_moves_backwards(
 
     async with database.session() as session:
         newest = await session.scalar(
-            text("SELECT newest_fetched_id FROM backfill_state")
+            text("SELECT newest_fetched_id FROM tg_backfill_state")
         )
     assert newest == 9999
 
@@ -575,7 +575,9 @@ async def test_a_failure_is_recorded_against_the_channel(
     async with database.session() as session:
         error, failures = (
             await session.execute(
-                text("SELECT last_error, consecutive_failures FROM poll_state")
+                text(
+                    "SELECT last_error, consecutive_failures FROM tg_poll_state"
+                )
             )
         ).one()
     assert "ChannelPrivateError" in error
@@ -610,8 +612,8 @@ async def test_a_long_flood_postpones_instead_of_exiting(
     async with database.session() as session:
         await session.execute(
             text(
-                "INSERT INTO poll_state (channel_id, due_at) "
-                "SELECT tg_id, now() - interval '1 hour' FROM channels"
+                "INSERT INTO tg_poll_state (channel_id, due_at) "
+                "SELECT tg_id, now() - interval '1 hour' FROM tg_channels"
             )
         )
 
@@ -621,7 +623,7 @@ async def test_a_long_flood_postpones_instead_of_exiting(
     assert stats.failed == 0
     async with database.session() as session:
         soonest = await session.scalar(
-            text("SELECT min(due_at) FROM poll_state")
+            text("SELECT min(due_at) FROM tg_poll_state")
         )
     assert soonest > datetime.now(UTC) + timedelta(seconds=seconds - 120)
 
@@ -640,7 +642,7 @@ async def test_a_long_flood_is_not_a_channel_failure(
     async with database.session() as session:
         failures = await session.scalar(
             text(
-                "SELECT coalesce(max(consecutive_failures), 0) FROM poll_state"
+                "SELECT coalesce(max(consecutive_failures), 0) FROM tg_poll_state"
             )
         )
     assert failures == 0
@@ -658,7 +660,7 @@ async def test_the_flood_is_recorded_against_the_watch_command(
 
     async with database.session() as session:
         commands = (
-            await session.scalars(text("SELECT command FROM flood_events"))
+            await session.scalars(text("SELECT command FROM tg_flood_events"))
         ).all()
     assert list(commands) == ["watch"]
 
@@ -722,9 +724,11 @@ async def test_the_loop_derives_nothing(database: Database) -> None:
     await watch(client, database, max_cycles=1)
 
     async with database.session() as session:
-        assert await session.scalar(text("SELECT count(*) FROM edges")) == 0
+        assert await session.scalar(text("SELECT count(*) FROM tg_edges")) == 0
         assert (
-            await session.scalar(text("SELECT count(*) FROM pending_mentions"))
+            await session.scalar(
+                text("SELECT count(*) FROM tg_pending_mentions")
+            )
             == 0
         )
 
@@ -739,7 +743,7 @@ async def test_the_review_state_is_untouched(database: Database) -> None:
         status, reviewed = (
             await session.execute(
                 text(
-                    "SELECT status, reviewed_at FROM channels WHERE tg_id=:id"
+                    "SELECT status, reviewed_at FROM tg_channels WHERE tg_id=:id"
                 ),
                 {"id": FIRST},
             )
@@ -757,7 +761,7 @@ async def test_the_newest_post_date_is_recorded(database: Database) -> None:
 
     async with database.session() as session:
         last = await session.scalar(
-            text("SELECT last_post_at FROM channels WHERE tg_id = :id"),
+            text("SELECT last_post_at FROM tg_channels WHERE tg_id = :id"),
             {"id": FIRST},
         )
     assert last == post.date
@@ -775,7 +779,7 @@ async def test_a_capped_channel_is_still_polled_forward(
     async with database.session() as session:
         await session.execute(
             text(
-                "INSERT INTO backfill_state "
+                "INSERT INTO tg_backfill_state "
                 "(channel_id, status, cutoff_at, oldest_fetched_id) "
                 "VALUES (:id, 'complete', now() - interval '30 days', 1)"
             ),
@@ -842,7 +846,7 @@ async def test_a_disconnected_client_is_not_polled_over(
     async with database.session() as session:
         failures = await session.scalar(
             text(
-                "SELECT coalesce(max(consecutive_failures), 0) FROM poll_state"
+                "SELECT coalesce(max(consecutive_failures), 0) FROM tg_poll_state"
             )
         )
     assert failures == 0

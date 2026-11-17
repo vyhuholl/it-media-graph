@@ -4,7 +4,7 @@
 
 - name: Count the baseline runs
   ansible.builtin.command:
-    argv: "{{ __itgraph_psql_query + ['SELECT count(*) FROM baseline_runs WHERE completed_at IS NOT NULL'] }}"
+    argv: "{{ __itgraph_psql_query + ['SELECT count(*) FROM tg_baseline_runs WHERE completed_at IS NOT NULL'] }}"
   register: __itgraph_runs_before
   changed_when: false
 
@@ -37,7 +37,7 @@
 
 - name: Count the baseline runs again
   ansible.builtin.command:
-    argv: "{{ __itgraph_psql_query + ['SELECT count(*) FROM baseline_runs WHERE completed_at IS NOT NULL'] }}"
+    argv: "{{ __itgraph_psql_query + ['SELECT count(*) FROM tg_baseline_runs WHERE completed_at IS NOT NULL'] }}"
   register: __itgraph_runs_after
   changed_when: false
 
@@ -153,7 +153,7 @@
 
 - name: Count Telegram's weekly lists
   ansible.builtin.command:
-    argv: "{{ __itgraph_psql_query + ['SELECT count(*) FROM weekly_lists'] }}"
+    argv: "{{ __itgraph_psql_query + ['SELECT count(*) FROM tg_weekly_lists'] }}"
   register: __itgraph_tg_lists_before
   changed_when: false
 
@@ -188,7 +188,7 @@
 
 - name: Count Telegram's weekly lists again
   ansible.builtin.command:
-    argv: "{{ __itgraph_psql_query + ['SELECT count(*) FROM weekly_lists'] }}"
+    argv: "{{ __itgraph_psql_query + ['SELECT count(*) FROM tg_weekly_lists'] }}"
   register: __itgraph_tg_lists_after
   changed_when: false
 
@@ -255,9 +255,9 @@
         argv: "{{ __itgraph_psql_query + [__itgraph_raise_alert] }}"
       vars:
         __itgraph_raise_alert: >-
-          INSERT INTO alerts (kind, channel_id, msg_id, band, value, raised_at)
+          INSERT INTO tg_alerts (kind, channel_id, msg_id, band, value, raised_at)
           SELECT 'views_spike', r.channel_id, r.msg_id, 2147483647, 9.9, now()
-          FROM raw_messages r JOIN channels c ON c.tg_id = r.channel_id
+          FROM tg_raw_messages r JOIN tg_channels c ON c.tg_id = r.channel_id
           WHERE c.status = 'seed' AND c.username IS NOT NULL
           ORDER BY r.fetched_at DESC LIMIT 1
           ON CONFLICT DO NOTHING RETURNING id
@@ -267,7 +267,7 @@
     - name: Wait for the bot to deliver it
       ansible.builtin.command:
         argv: >-
-          {{ __itgraph_psql_query + ['SELECT count(*) FROM alerts WHERE band = 2147483647 AND delivered_at IS NOT NULL'] }}
+          {{ __itgraph_psql_query + ['SELECT count(*) FROM tg_alerts WHERE band = 2147483647 AND delivered_at IS NOT NULL'] }}
       register: __itgraph_trial_delivered
       until: __itgraph_trial_delivered.stdout | trim | int > 0
       retries: "{{ __itgraph_trial_retries | default(30) }}"

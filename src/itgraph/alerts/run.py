@@ -39,10 +39,10 @@ __all__ = ["CascadeSummary", "run_cascades"]
 logger = logging.getLogger(__name__)
 
 # The referenced post's album, out of the raw layer — and the asymmetry
-# worth stopping at. `edges.grouped_id` describes the *referencing*
+# worth stopping at. `tg_edges.grouped_id` describes the *referencing*
 # message, the repost, and says nothing about the album being referenced.
 # The post being alerted about is the destination, so its grouping is
-# read from `raw_messages` joined on the destination key — the same join
+# read from `tg_raw_messages` joined on the destination key — the same join
 # `notebooks/cited_posts.py` collapses its albums on. Confusing the two
 # columns is the easiest mistake available in this file.
 ALBUM = RawMessage.payload["grouped_id"].astext.cast(BigInteger)

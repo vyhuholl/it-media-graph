@@ -13,19 +13,28 @@
 - name: Read the database's state
   when: __itgraph_database_found.stdout | length > 0
   block:
-    - name: Is there a channels table
+    # The channels are `tg_channels` since the revision that prefixed Telegram's
+    # tables, and `channels` before it: on the first deploy of that revision, and
+    # in any database still at an older one — a restore stopped before its
+    # migration. Knowing only the new name, this probe would read no table there,
+    # count nothing, and the check below would pass without looking.
+    - name: Which channels table is here
       ansible.builtin.command:
-        argv: "{{ __itgraph_psql_query + [\"SELECT to_regclass('public.channels') IS NULL\"] }}"
-      register: __itgraph_channels_missing
+        argv: >-
+          {{ __itgraph_psql_query + ["SELECT coalesce(to_regclass('public.tg_channels')::text,
+          to_regclass('public.channels')::text, '-')"] }}
+      register: __itgraph_channels_table
       changed_when: false
-      failed_when: __itgraph_channels_missing.rc != 0 or __itgraph_channels_missing.stdout | trim not in ['t', 'f']
+      failed_when: >-
+        __itgraph_channels_table.rc != 0
+        or __itgraph_channels_table.stdout | trim not in ['tg_channels', 'channels', '-']
 
     - name: How many channels are here
       ansible.builtin.command:
-        argv: "{{ __itgraph_psql_query + ['SELECT count(*) FROM channels'] }}"
+        argv: "{{ __itgraph_psql_query + ['SELECT count(*) FROM ' ~ (__itgraph_channels_table.stdout | trim)] }}"
       register: __itgraph_channels_counted
       changed_when: false
-      when: __itgraph_channels_missing.stdout | trim == 'f'
+      when: __itgraph_channels_table.stdout | trim != '-'
 
     # An interrupted restore leaves columns pointing at types that no longer exist,
     # and every query touching one fails with a message naming nothing useful.
@@ -45,7 +54,7 @@
     - name: Keep how many channels are here
       ansible.builtin.set_fact:
         __itgraph_channel_count: >-
-          {{ 0 if __itgraph_channels_missing.stdout | trim == 't'
+          {{ 0 if __itgraph_channels_table.stdout | trim == '-'
              else __itgraph_channels_counted.stdout | trim | int }}
 
     - name: Assert the database is whole

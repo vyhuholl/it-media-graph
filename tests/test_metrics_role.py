@@ -135,10 +135,10 @@ def test_the_role_reads_when_and_nothing_else_of_api_data(
 @pytest.mark.parametrize(
     "statement",
     [
-        "SELECT title FROM channels",
-        "SELECT username FROM channels",
-        "SELECT discovered_via FROM channels",
-        "SELECT payload FROM raw_messages",
+        "SELECT title FROM tg_channels",
+        "SELECT username FROM tg_channels",
+        "SELECT discovered_via FROM tg_channels",
+        "SELECT payload FROM tg_raw_messages",
         "SELECT reject_note FROM yt_channels",
         "SELECT query FROM yt_search_queries",
     ],
@@ -150,7 +150,7 @@ def test_the_role_cannot_read_what_it_has_no_use_for(
         asyncio.run(as_role(migrated, statement))
 
 
-@pytest.mark.parametrize("table", ["baseline_runs", "yt_baseline_runs"])
+@pytest.mark.parametrize("table", ["tg_baseline_runs", "yt_baseline_runs"])
 def test_the_role_reads_when_a_run_completed_and_what_it_counted(
     migrated: URL, table: str
 ) -> None:
@@ -166,14 +166,14 @@ def test_the_role_reads_when_a_run_completed_and_what_it_counted(
 @pytest.mark.parametrize(
     "statement",
     [
-        "SELECT median FROM channel_baselines",
+        "SELECT median FROM tg_channel_baselines",
         "SELECT median FROM yt_channel_baselines",
         "SELECT channel_id FROM yt_channel_baselines",
-        "SELECT factor FROM metric_baselines",
+        "SELECT factor FROM tg_metric_baselines",
         "SELECT factor FROM yt_metric_baselines",
-        "SELECT fraction FROM curve_points",
+        "SELECT fraction FROM tg_curve_points",
         "SELECT fraction FROM yt_curve_points",
-        "SELECT mature_days FROM baseline_runs",
+        "SELECT mature_days FROM tg_baseline_runs",
         "SELECT channels_on_fallback FROM yt_baseline_runs",
     ],
 )
@@ -224,11 +224,11 @@ def test_the_role_cannot_read_a_refresh_s_counts(
 @pytest.mark.parametrize(
     "statement",
     [
-        "DELETE FROM alerts",
-        "UPDATE poll_state SET consecutive_failures = 0",
+        "DELETE FROM tg_alerts",
+        "UPDATE tg_poll_state SET consecutive_failures = 0",
         "INSERT INTO yt_quota_days (day, pool, spent) VALUES (now(), 'watch', 1)",
-        "UPDATE channels SET is_chat = false",
-        "TRUNCATE flood_events",
+        "UPDATE tg_channels SET is_chat = false",
+        "TRUNCATE tg_flood_events",
     ],
 )
 def test_the_role_can_write_nothing(migrated: URL, statement: str) -> None:
@@ -246,4 +246,4 @@ def test_the_migration_goes_down_and_up_again(migrated: URL) -> None:
 
     up = alembic(migrated, "upgrade", "head")
     assert up.returncode == 0, up.stdout + up.stderr
-    asyncio.run(as_role(migrated, "SELECT count(*) FROM poll_state"))
+    asyncio.run(as_role(migrated, "SELECT count(*) FROM tg_poll_state"))

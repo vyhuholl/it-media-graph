@@ -30,7 +30,7 @@ async def _confirm(database: Database, pairs: list[tuple[int, int]]) -> None:
         for first, second in pairs:
             await session.execute(
                 text(
-                    "INSERT INTO affiliation_candidates "
+                    "INSERT INTO tg_affiliation_candidates "
                     "(channel_a, channel_b, score, decision, decided_at) "
                     "VALUES (:a, :b, 1.0, 'confirmed', now())"
                 ),
@@ -44,8 +44,8 @@ async def _families(database: Database) -> dict[int, int]:
         rows = await session.execute(
             text(
                 "SELECT c.tg_id, COALESCE(f.family_key, c.tg_id) "
-                "FROM channels c "
-                "LEFT JOIN channel_families f ON f.channel_id = c.tg_id "
+                "FROM tg_channels c "
+                "LEFT JOIN tg_channel_families f ON f.channel_id = c.tg_id "
                 "ORDER BY 1"
             )
         )
@@ -92,7 +92,7 @@ async def test_every_member_answers_with_the_same_key(
 
     async with database.session() as session:
         keys = await session.execute(
-            text("SELECT DISTINCT family_key FROM channel_families")
+            text("SELECT DISTINCT family_key FROM tg_channel_families")
         )
 
     assert keys.scalars().all() == [KNOWN]
@@ -116,7 +116,7 @@ async def test_a_channel_with_no_confirmed_pair_is_its_own_family(
     await _channels(database, 2)
 
     async with database.session() as session:
-        rows = await session.execute(text("SELECT * FROM channel_families"))
+        rows = await session.execute(text("SELECT * FROM tg_channel_families"))
         assert rows.all() == []
 
     assert await _families(database) == {KNOWN: KNOWN, KNOWN + 1: KNOWN + 1}
@@ -128,7 +128,7 @@ async def test_a_pending_pair_makes_no_family(database: Database) -> None:
     async with database.session() as session:
         await session.execute(
             text(
-                "INSERT INTO affiliation_candidates "
+                "INSERT INTO tg_affiliation_candidates "
                 "(channel_a, channel_b, score) VALUES (:a, :b, 1.0)"
             ),
             {"a": KNOWN, "b": KNOWN + 1},

@@ -7,7 +7,7 @@ rows.
 
 The ordering constraint this module participates in is worth stating
 where it is easy to break: **payloads first, snapshots second, one
-transaction.** The foreign key onto ``raw_messages`` enforces it, so
+transaction.** The foreign key onto ``tg_raw_messages`` enforces it, so
 getting it wrong is a database error rather than a silent inconsistency —
 but the error arrives at the write, and the reason for it lives here.
 """

@@ -73,7 +73,7 @@ __all__ = [
 # The two patterns answer different questions and have different failure
 # modes, which is why this one may never migrate over there. That one
 # asks "is this a channel I can look up?", and every match becomes a
-# `pending_mentions` key, a row in the resolve queue and eventually a
+# `tg_pending_mentions` key, a row in the resolve queue and eventually a
 # request — so a handle that cannot resolve costs quota. This one asks
 # "is this string a username token my inventory already carries?", and
 # every match is joined against a closed set of some two thousand

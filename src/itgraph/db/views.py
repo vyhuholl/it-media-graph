@@ -43,13 +43,13 @@ __all__ = ["CHANNEL_FAMILIES_VIEW"]
 # under a new name — that distinction was removed on purpose, because a
 # family is a set and none of an author's channels is the main one.
 CHANNEL_FAMILIES_VIEW = """
-CREATE VIEW channel_families AS
+CREATE VIEW tg_channel_families AS
 WITH RECURSIVE linked AS (
     SELECT channel_a AS channel_id, channel_b AS reached
-      FROM affiliation_candidates WHERE decision = 'confirmed'
+      FROM tg_affiliation_candidates WHERE decision = 'confirmed'
     UNION
     SELECT channel_b AS channel_id, channel_a AS reached
-      FROM affiliation_candidates WHERE decision = 'confirmed'
+      FROM tg_affiliation_candidates WHERE decision = 'confirmed'
 ),
 reach AS (
     SELECT channel_id, reached FROM linked
@@ -68,7 +68,7 @@ def _create_view(_target: Any, connection: Connection, **_kw: Any) -> None:
 
 
 def _drop_view(_target: Any, connection: Connection, **_kw: Any) -> None:
-    connection.execute(text("DROP VIEW IF EXISTS channel_families"))
+    connection.execute(text("DROP VIEW IF EXISTS tg_channel_families"))
 
 
 # Plain functions rather than `DDL(...)`: SQLAlchemy's `DDL` is untyped,

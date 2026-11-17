@@ -59,7 +59,7 @@ async def rows(database: Database) -> list[tuple[int, int, int, int]]:
         result = await session.execute(
             text(
                 "SELECT msg_id, views, forwards, comments "
-                "FROM message_metrics ORDER BY msg_id, observed_at"
+                "FROM tg_message_metrics ORDER BY msg_id, observed_at"
             )
         )
         return [tuple(row) for row in result.all()]  # type: ignore[misc]
@@ -87,7 +87,7 @@ async def test_a_batch_is_stored_at_one_moment(database: Database) -> None:
     assert written == 2
     async with database.session() as session:
         moments = await session.execute(
-            text("SELECT DISTINCT observed_at FROM message_metrics")
+            text("SELECT DISTINCT observed_at FROM tg_message_metrics")
         )
         assert len(moments.all()) == 1
 
@@ -188,7 +188,7 @@ async def test_absent_and_zero_survive_the_round_trip(
         result = await session.execute(
             text(
                 "SELECT msg_id, reactions, comments "
-                "FROM message_metrics ORDER BY msg_id"
+                "FROM tg_message_metrics ORDER BY msg_id"
             )
         )
         assert [tuple(row) for row in result.all()] == [
@@ -210,7 +210,7 @@ async def test_reactions_keep_their_emoji(database: Database) -> None:
 
     async with database.session() as session:
         stored = await session.scalar(
-            text("SELECT reactions FROM message_metrics")
+            text("SELECT reactions FROM tg_message_metrics")
         )
     assert stored == {"👍": 30, "🤡": 9}
 

@@ -89,7 +89,7 @@ async def seed_post(
     async with database.session() as session:
         await session.execute(
             text(
-                "INSERT INTO channels (tg_id, username, title, "
+                "INSERT INTO tg_channels (tg_id, username, title, "
                 "discovered_via, status, kind) VALUES "
                 "(:id, :name, 'Example', 'manual', 'seed', 'personal') "
                 "ON CONFLICT DO NOTHING"
@@ -98,7 +98,7 @@ async def seed_post(
         )
         await session.execute(
             text(
-                "INSERT INTO raw_messages (channel_id, msg_id, payload) "
+                "INSERT INTO tg_raw_messages (channel_id, msg_id, payload) "
                 "VALUES (:c, :m, CAST(:p AS jsonb))"
             ),
             {"c": channel, "m": msg_id, "p": json.dumps(payload)},
@@ -122,7 +122,7 @@ async def snapshot(
     async with database.session() as session:
         await session.execute(
             text(
-                "INSERT INTO message_metrics (channel_id, msg_id, "
+                "INSERT INTO tg_message_metrics (channel_id, msg_id, "
                 "observed_at, views, forwards, reactions, comments) VALUES "
                 "(:c, :m, :at, :v, :f, CAST(:r AS jsonb), :n)"
             ),
@@ -222,7 +222,7 @@ async def alerts(database: Database) -> list[tuple[str, int, int, float]]:
         rows = await session.execute(
             text(
                 "SELECT kind::text, channel_id, msg_id, value "
-                "FROM alerts ORDER BY id"
+                "FROM tg_alerts ORDER BY id"
             )
         )
     return [(kind, channel, msg, value) for kind, channel, msg, value in rows]
@@ -258,7 +258,7 @@ async def folds(database: Database) -> list[tuple[str, int, str, int]]:
         rows = await session.execute(
             text(
                 "SELECT f.kind::text, f.msg_id, h.kind::text, h.msg_id "
-                "FROM alerts f JOIN alerts h ON h.id = f.folded_into "
+                "FROM tg_alerts f JOIN tg_alerts h ON h.id = f.folded_into "
                 "ORDER BY f.id"
             )
         )
@@ -270,7 +270,7 @@ async def heads(database: Database) -> list[int]:
     async with database.session() as session:
         rows = await session.execute(
             text(
-                "SELECT msg_id FROM alerts WHERE folded_into IS NULL "
+                "SELECT msg_id FROM tg_alerts WHERE folded_into IS NULL "
                 "ORDER BY id"
             )
         )
@@ -285,7 +285,7 @@ async def raised_at(database: Database, moment: datetime) -> None:
     """
     async with database.session() as session:
         await session.execute(
-            text("UPDATE alerts SET raised_at = :at"), {"at": moment}
+            text("UPDATE tg_alerts SET raised_at = :at"), {"at": moment}
         )
 
 
@@ -691,10 +691,10 @@ async def test_nothing_collected_is_modified(database: Database) -> None:
     async def fingerprint() -> tuple[int, int]:
         async with database.session() as session:
             raw = await session.scalar(
-                text("SELECT count(*) FROM raw_messages")
+                text("SELECT count(*) FROM tg_raw_messages")
             )
             metrics = await session.scalar(
-                text("SELECT count(*) FROM message_metrics")
+                text("SELECT count(*) FROM tg_message_metrics")
             )
         return int(raw or 0), int(metrics or 0)
 
@@ -966,7 +966,7 @@ async def test_a_comment_alert_keeps_its_count_and_expectation(
     async with database.session() as session:
         stored = (
             await session.execute(
-                text("SELECT kind::text, observed, expected FROM alerts")
+                text("SELECT kind::text, observed, expected FROM tg_alerts")
             )
         ).one()
         [pending] = await claim_undelivered(session, limit=10)
@@ -984,7 +984,7 @@ async def test_a_views_alert_keeps_no_count(database: Database) -> None:
     async with database.session() as session:
         stored = (
             await session.execute(
-                text("SELECT observed, expected FROM alerts")
+                text("SELECT observed, expected FROM tg_alerts")
             )
         ).one()
 

@@ -64,7 +64,9 @@ async def seed(database: Database, *, in_scope: bool = True) -> None:
             discovered_via=DiscoverySource.OWN_SUBSCRIPTIONS,
         )
         if in_scope:
-            await session.execute(text("UPDATE channels SET status = 'seed'"))
+            await session.execute(
+                text("UPDATE tg_channels SET status = 'seed'")
+            )
 
 
 def a_detection(refs_outside: int = 0) -> Detection:
@@ -111,7 +113,7 @@ async def test_a_run_records_its_parameters_and_coverage(
             await session.execute(
                 text(
                     "SELECT max_share_min, weight_about, edge_kinds, "
-                    "refs_outside_inventory FROM affiliation_runs"
+                    "refs_outside_inventory FROM tg_affiliation_runs"
                 )
             )
         ).one()
@@ -158,7 +160,7 @@ async def test_a_second_identical_run_writes_no_second_row(
         rows = await list_candidates(session)
         run_id = (
             await session.execute(
-                text("SELECT run_id FROM affiliation_candidates")
+                text("SELECT run_id FROM tg_affiliation_candidates")
             )
         ).scalar_one()
 
@@ -202,7 +204,7 @@ async def test_a_recorded_decision_survives_a_rerun(
     async with database.session() as session:
         await session.execute(
             text(
-                "UPDATE affiliation_candidates SET decision = 'confirmed', "
+                "UPDATE tg_affiliation_candidates SET decision = 'confirmed', "
                 "decided_at = :now, decision_note = 'same author'"
             ),
             {"now": datetime.now(UTC)},
@@ -215,7 +217,7 @@ async def test_a_recorded_decision_survives_a_rerun(
             await session.execute(
                 text(
                     "SELECT decision::text, decision_note, score "
-                    "FROM affiliation_candidates"
+                    "FROM tg_affiliation_candidates"
                 )
             )
         ).one()
@@ -235,7 +237,7 @@ async def test_a_decided_pair_leaves_the_review_list_but_stays_readable(
     async with database.session() as session:
         await session.execute(
             text(
-                "UPDATE affiliation_candidates SET decision = 'rejected', "
+                "UPDATE tg_affiliation_candidates SET decision = 'rejected', "
                 "decided_at = :now WHERE channel_b = :b"
             ),
             {"now": datetime.now(UTC), "b": B},
@@ -278,7 +280,7 @@ async def test_a_pair_stored_the_wrong_way_round_is_refused(
         async with database.session() as session:
             await session.execute(
                 text(
-                    "INSERT INTO affiliation_candidates "
+                    "INSERT INTO tg_affiliation_candidates "
                     "(channel_a, channel_b, score, run_id) "
                     "VALUES (:b, :a, 1.0, :run)"
                 ),
@@ -324,7 +326,7 @@ async def test_the_inventory_load_lowercases_usernames(
     async with database.session() as session:
         await session.execute(
             text(
-                "UPDATE channels SET username = 'MixedCase' WHERE tg_id = :a"
+                "UPDATE tg_channels SET username = 'MixedCase' WHERE tg_id = :a"
             ),
             {"a": A},
         )
@@ -355,7 +357,7 @@ async def test_one_seed_is_enough_to_show_a_pair(database: Database) -> None:
 
     async with database.session() as session:
         await session.execute(
-            text("UPDATE channels SET status = 'seed' WHERE tg_id = :a"),
+            text("UPDATE tg_channels SET status = 'seed' WHERE tg_id = :a"),
             {"a": A},
         )
 
@@ -394,7 +396,7 @@ async def test_a_run_from_before_the_handle_signal_reads_back(
     async with database.session() as session:
         await session.execute(
             text(
-                "INSERT INTO affiliation_runs ("
+                "INSERT INTO tg_affiliation_runs ("
                 "min_out_edges, max_share_min, min_token_length, "
                 "max_token_channels, min_mutual_edges, edge_kinds, "
                 "weight_about, weight_token, weight_share, weight_mutual, "

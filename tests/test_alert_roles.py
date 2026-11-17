@@ -115,7 +115,7 @@ def test_the_verdict_table_and_its_type_are_gone(migrated: URL) -> None:
         )
         == 0
     )
-    asyncio.run(run(migrated, "SELECT held_at FROM alerts"))
+    asyncio.run(run(migrated, "SELECT held_at FROM tg_alerts"))
 
 
 @pytest.mark.parametrize(

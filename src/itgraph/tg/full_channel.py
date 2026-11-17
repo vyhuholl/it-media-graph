@@ -112,7 +112,7 @@ async def fetch_full_channel(
     assumed from the peer, because a peer is a pair of numbers and the
     response is Telegram's own answer to who that pair belongs to.
 
-    The channel must already be in ``channels``; ``raw_channels`` has a
+    The channel must already be in ``tg_channels``; ``tg_raw_channels`` has a
     foreign key onto it. That is not a burden in practice — the metadata
     pass runs only over reviewed, in-scope channels — and it is what
     stops a payload arriving for a channel nothing ever decided about.

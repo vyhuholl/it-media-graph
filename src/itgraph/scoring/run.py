@@ -64,10 +64,10 @@ READINGS = """
                   (SELECT sum(entry.value::bigint)
                    FROM jsonb_each_text(m.reactions) AS entry), 0
                 )::float8 END AS reactions
-    FROM message_metrics m
-    JOIN raw_messages r
+    FROM tg_message_metrics m
+    JOIN tg_raw_messages r
       ON r.channel_id = m.channel_id AND r.msg_id = m.msg_id
-    JOIN channels c ON c.tg_id = m.channel_id
+    JOIN tg_channels c ON c.tg_id = m.channel_id
     WHERE (r.payload->>'date')::timestamptz >= :since
       AND (r.payload->>'date')::timestamptz <= :now
       AND m.observed_at <= :now

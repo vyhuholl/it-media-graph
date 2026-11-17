@@ -92,7 +92,7 @@ SNIPPET = 70
 
 CHANNEL = """
     SELECT tg_id, title, username, status::text, kind::text
-    FROM channels
+    FROM tg_channels
     WHERE lower(username) = lower(%(username)s)
 """
 
@@ -100,9 +100,9 @@ CHANNEL = """
 # family of one, so the channel's own id is always added by the caller.
 FAMILY = """
     SELECT channel_id
-    FROM channel_families
+    FROM tg_channel_families
     WHERE family_key = (
-        SELECT family_key FROM channel_families WHERE channel_id = %(id)s
+        SELECT family_key FROM tg_channel_families WHERE channel_id = %(id)s
     )
 """
 
@@ -111,7 +111,7 @@ COLLECTED = """
         COUNT(*),
         MIN((payload->>'date')::timestamptz),
         MAX((payload->>'date')::timestamptz)
-    FROM raw_messages
+    FROM tg_raw_messages
     WHERE channel_id = %(id)s AND payload->>'_' = 'Message'
 """
 
@@ -124,8 +124,8 @@ INCOMING = """
         COUNT(*) FILTER (WHERE e.kind::text = 'forward') AS forwards,
         COUNT(*) FILTER (WHERE e.kind::text = 'mention') AS mentions,
         MAX(e.published_at) AS last_seen
-    FROM edges e
-    JOIN channels s ON s.tg_id = e.src_channel_id
+    FROM tg_edges e
+    JOIN tg_channels s ON s.tg_id = e.src_channel_id
     WHERE e.dst_channel_id = %(id)s
       AND s.status = 'seed'
       AND NOT (s.tg_id = ANY(%(family)s))
@@ -140,7 +140,7 @@ OUTGOING = """
         e.kind::text,
         COUNT(*) AS refs,
         COUNT(DISTINCT e.dst_channel_id) AS targets
-    FROM edges e
+    FROM tg_edges e
     WHERE e.src_channel_id = %(id)s
       AND NOT (e.dst_channel_id = ANY(%(family)s))
     GROUP BY 1
@@ -156,9 +156,9 @@ TRAVELLED = """
         MIN(e.dst_published_at) AS published_at,
         COUNT(DISTINCT COALESCE(f.family_key, s.tg_id)) AS families,
         COUNT(DISTINCT s.tg_id) AS sources
-    FROM edges e
-    JOIN channels s ON s.tg_id = e.src_channel_id
-    LEFT JOIN channel_families f ON f.channel_id = s.tg_id
+    FROM tg_edges e
+    JOIN tg_channels s ON s.tg_id = e.src_channel_id
+    LEFT JOIN tg_channel_families f ON f.channel_id = s.tg_id
     WHERE e.dst_channel_id = %(id)s
       AND e.kind::text = 'forward'
       AND e.dst_msg_id IS NOT NULL
@@ -170,7 +170,7 @@ TRAVELLED = """
 
 TEXTS = """
     SELECT msg_id, payload->>'message'
-    FROM raw_messages
+    FROM tg_raw_messages
     WHERE channel_id = %(id)s AND msg_id = ANY(%(ids)s)
 """
 
@@ -184,13 +184,13 @@ AFFILIATED = """
         c.is_chat,
         (
             SELECT COUNT(*)
-            FROM raw_messages r
+            FROM tg_raw_messages r
             WHERE r.channel_id = c.tg_id AND r.payload->>'_' = 'Message'
         ) AS posts
-    FROM channel_families f
-    JOIN channels c ON c.tg_id = f.channel_id
+    FROM tg_channel_families f
+    JOIN tg_channels c ON c.tg_id = f.channel_id
     WHERE f.family_key = (
-        SELECT family_key FROM channel_families WHERE channel_id = %(id)s
+        SELECT family_key FROM tg_channel_families WHERE channel_id = %(id)s
     )
       AND c.tg_id <> %(id)s
     ORDER BY posts DESC, c.title
@@ -205,7 +205,7 @@ WATCHED = """
         COUNT(DISTINCT msg_id),
         MIN(observed_at),
         MAX(observed_at)
-    FROM message_metrics
+    FROM tg_message_metrics
     WHERE channel_id = %(id)s
 """
 
@@ -214,7 +214,7 @@ WATCHED = """
 # the bot's plumbing — operator settings, not facts about the channel.
 ALERTS = """
     SELECT a.kind::text, a.msg_id, a.value, a.raised_at
-    FROM alerts a
+    FROM tg_alerts a
     WHERE a.channel_id = %(id)s
     ORDER BY a.raised_at DESC
 """

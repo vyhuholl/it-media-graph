@@ -76,7 +76,7 @@ async def stored(database: Database) -> list[tuple[int, int, bool]]:
         rows = await session.execute(
             text(
                 "SELECT r.msg_id, r.others, l.second_wind_shown "
-                "FROM weekly_revivals r JOIN weekly_lists l ON l.id = r.list_id "
+                "FROM tg_weekly_revivals r JOIN tg_weekly_lists l ON l.id = r.list_id "
                 "ORDER BY r.rank"
             )
         )
@@ -215,7 +215,7 @@ async def test_switched_on_the_list_records_it(
             await session.execute(
                 text(
                     "SELECT second_wind_acceleration, second_wind_norm_share, "
-                    "second_wind_size FROM weekly_lists"
+                    "second_wind_size FROM tg_weekly_lists"
                 )
             )
         ).one()

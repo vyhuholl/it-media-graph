@@ -81,7 +81,7 @@ async def a_post(
     async with database.session() as session:
         await session.execute(
             text(
-                "INSERT INTO channels (tg_id, username, title, "
+                "INSERT INTO tg_channels (tg_id, username, title, "
                 "discovered_via, status, kind) VALUES "
                 "(:id, :name, :title, 'manual', 'seed', 'personal') "
                 "ON CONFLICT DO NOTHING"
@@ -90,7 +90,7 @@ async def a_post(
         )
         await session.execute(
             text(
-                "INSERT INTO raw_messages (channel_id, msg_id, payload) "
+                "INSERT INTO tg_raw_messages (channel_id, msg_id, payload) "
                 "VALUES (:c, :m, CAST(:p AS jsonb))"
             ),
             {
@@ -108,7 +108,7 @@ async def a_post(
         )
         await session.execute(
             text(
-                "INSERT INTO message_metrics (channel_id, msg_id, "
+                "INSERT INTO tg_message_metrics (channel_id, msg_id, "
                 "observed_at, views) VALUES (:c, :m, :at, 900)"
             ),
             {"c": channel, "m": msg_id, "at": SCORED_AT},
@@ -159,9 +159,9 @@ async def undelivered(database: Database) -> tuple[int, int]:
         row = (
             await session.execute(
                 text(
-                    "SELECT (SELECT count(*) FROM weekly_lists "
+                    "SELECT (SELECT count(*) FROM tg_weekly_lists "
                     "WHERE delivered_at IS NULL), "
-                    "(SELECT count(*) FROM weekly_entries "
+                    "(SELECT count(*) FROM tg_weekly_entries "
                     "WHERE delivered_at IS NULL)"
                 )
             )
@@ -173,7 +173,7 @@ async def attempts(database: Database) -> tuple[int, str | None]:
     async with database.session() as session:
         row = (
             await session.execute(
-                text("SELECT attempts, last_error FROM weekly_lists")
+                text("SELECT attempts, last_error FROM tg_weekly_lists")
             )
         ).one()
     return (row[0], row[1])
@@ -301,7 +301,7 @@ async def test_a_post_gone_before_sending_closes_the_ranks(
     await a_list(database, [FIRST, second])
     async with database.session() as session:
         await session.execute(
-            text("DELETE FROM channels WHERE tg_id = :c"), {"c": FIRST}
+            text("DELETE FROM tg_channels WHERE tg_id = :c"), {"c": FIRST}
         )
     sender = ListRecorder()
 
@@ -336,7 +336,7 @@ async def test_a_list_whose_posts_all_went_says_so(
         assert (
             await session.scalar(
                 text(
-                    "SELECT count(*) FROM weekly_lists "
+                    "SELECT count(*) FROM tg_weekly_lists "
                     "WHERE delivered_at IS NULL"
                 )
             )
@@ -356,7 +356,7 @@ async def test_the_cap_does_not_count_a_list(
         for msg_id in (11, 12):
             await session.execute(
                 text(
-                    "INSERT INTO raw_messages (channel_id, msg_id, payload) "
+                    "INSERT INTO tg_raw_messages (channel_id, msg_id, payload) "
                     "VALUES (:c, :m, CAST(:p AS jsonb))"
                 ),
                 {
@@ -374,7 +374,7 @@ async def test_the_cap_does_not_count_a_list(
             )
             await session.execute(
                 text(
-                    "INSERT INTO alerts (kind, channel_id, msg_id, band, "
+                    "INSERT INTO tg_alerts (kind, channel_id, msg_id, band, "
                     "value, raised_at) VALUES "
                     "('views_spike', :c, :m, 1, 5.0, :at)"
                 ),
@@ -390,7 +390,7 @@ async def test_the_cap_does_not_count_a_list(
     assert len(texts) == 2  # one alert under the cap, and the list
     async with database.session() as session:
         held = await session.scalar(
-            text("SELECT count(*) FROM alerts WHERE delivered_at IS NULL")
+            text("SELECT count(*) FROM tg_alerts WHERE delivered_at IS NULL")
         )
     assert held == 1
 

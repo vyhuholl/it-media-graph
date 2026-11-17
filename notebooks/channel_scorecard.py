@@ -72,8 +72,8 @@ CHANNELS = """
         c.username,
         c.kind::text,
         (rc.payload->'full_chat'->>'participants_count')::bigint
-    FROM channels c
-    LEFT JOIN raw_channels rc ON rc.channel_id = c.tg_id
+    FROM tg_channels c
+    LEFT JOIN tg_raw_channels rc ON rc.channel_id = c.tg_id
     WHERE c.status = 'seed'
 """
 
@@ -81,7 +81,7 @@ CHANNELS = """
 # missing from the view is a family of one, hence the fallback below.
 FAMILIES = """
     SELECT channel_id, family_key
-    FROM channel_families
+    FROM tg_channel_families
 """
 
 # Per-post metrics, aggregated in Postgres because `percentile_cont` is
@@ -117,8 +117,8 @@ POSTS = """
                 ELSE 0
             END AS reactions,
             (r.payload->'replies'->>'replies')::bigint AS comments
-        FROM raw_messages r
-        JOIN channels c ON c.tg_id = r.channel_id AND c.status = 'seed'
+        FROM tg_raw_messages r
+        JOIN tg_channels c ON c.tg_id = r.channel_id AND c.status = 'seed'
         WHERE r.payload->>'_' = 'Message'
     )
     SELECT
@@ -142,7 +142,7 @@ POSTS = """
 
 EDGES = """
     SELECT src_channel_id, dst_channel_id
-    FROM edges
+    FROM tg_edges
     WHERE kind::text = ANY(%(kinds)s)
 """
 
@@ -151,7 +151,7 @@ EDGES = """
 # reciprocate would measure collection coverage, not reciprocity.
 COLLECTED = """
     SELECT DISTINCT channel_id
-    FROM raw_messages
+    FROM tg_raw_messages
 """
 
 COLUMNS = [

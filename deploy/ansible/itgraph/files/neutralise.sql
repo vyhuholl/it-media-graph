@@ -11,25 +11,25 @@
 -- removes each statement here in turn and expects that read-back to fail.
 BEGIN;
 
-DELETE FROM channels WHERE discovered_via = 'own_subscriptions' AND status <> 'seed';
-UPDATE channels SET discovered_via = 'manual' WHERE discovered_via = 'own_subscriptions' AND status = 'seed';
-UPDATE channels SET kind_note = NULL WHERE kind_note IS NOT NULL;
-UPDATE channels SET reject_note = NULL WHERE reject_note IS NOT NULL;
+DELETE FROM tg_channels WHERE discovered_via = 'own_subscriptions' AND status <> 'seed';
+UPDATE tg_channels SET discovered_via = 'manual' WHERE discovered_via = 'own_subscriptions' AND status = 'seed';
+UPDATE tg_channels SET kind_note = NULL WHERE kind_note IS NOT NULL;
+UPDATE tg_channels SET reject_note = NULL WHERE reject_note IS NOT NULL;
 UPDATE yt_channels SET kind_note = NULL WHERE kind_note IS NOT NULL;
 UPDATE yt_channels SET reject_note = NULL WHERE reject_note IS NOT NULL;
-UPDATE affiliation_candidates SET decision_note = NULL WHERE decision_note IS NOT NULL;
+UPDATE tg_affiliation_candidates SET decision_note = NULL WHERE decision_note IS NOT NULL;
 
 -- Handles, many of them people's. Only `resolve` reads them, and it cannot run here.
-DELETE FROM pending_mentions WHERE true;
+DELETE FROM tg_pending_mentions WHERE true;
 
 -- Whatever was on its way out in production stays there.
-UPDATE alerts SET delivered_at = now(), delivery = 'digest' WHERE delivered_at IS NULL;
+UPDATE tg_alerts SET delivered_at = now(), delivery = 'digest' WHERE delivered_at IS NULL;
 UPDATE yt_alerts SET delivered_at = now(), delivery = 'digest' WHERE delivered_at IS NULL;
 UPDATE yt_weekly_lists SET delivered_at = now() WHERE delivered_at IS NULL;
 UPDATE yt_weekly_entries SET delivered_at = now() WHERE delivered_at IS NULL;
-UPDATE weekly_lists SET delivered_at = now() WHERE delivered_at IS NULL;
-UPDATE weekly_entries SET delivered_at = now() WHERE delivered_at IS NULL;
-UPDATE weekly_revivals SET delivered_at = now() WHERE delivered_at IS NULL;
+UPDATE tg_weekly_lists SET delivered_at = now() WHERE delivered_at IS NULL;
+UPDATE tg_weekly_entries SET delivered_at = now() WHERE delivered_at IS NULL;
+UPDATE tg_weekly_revivals SET delivered_at = now() WHERE delivered_at IS NULL;
 UPDATE yt_weekly_revivals SET delivered_at = now() WHERE delivered_at IS NULL;
 
 COMMIT;

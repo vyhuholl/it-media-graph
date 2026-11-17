@@ -432,17 +432,17 @@ say 'the reader with a password'
 reader_run "$work/reader-set.log" -e itgraph_reader_postgres_password="$first"
 ok 'setting the reader'\''s password restarts nothing'
 started="$(as_reader "$first" 'SHOW transaction_read_only' 'SHOW work_mem' 'SHOW statement_timeout' \
-	'SHOW idle_in_transaction_session_timeout' 'SELECT count(*) >= 0 FROM channels')" ||
+	'SHOW idle_in_transaction_session_timeout' 'SELECT count(*) >= 0 FROM tg_channels')" ||
 	fail "the reader could not log in: $started"
 # kubectl names the container it read the logs of, since the probe has an init one.
 [ "$(printf '%s\n' "$started" | grep -v '^Defaulted container' | tr '\n' ' ')" = 'on 16MB 10min 5min t ' ] ||
 	fail "the reader's session started as: $started"
 ok 'the reader logs in through the tunnel, reads, and starts read-only with its guards'
-if refused="$(as_reader "$first" 'INSERT INTO channels DEFAULT VALUES')"; then
+if refused="$(as_reader "$first" 'INSERT INTO tg_channels DEFAULT VALUES')"; then
 	fail 'the reader wrote'
 fi
 case "$refused" in *'read-only transaction'*) ;; *) fail "a write was not refused as read-only: $refused" ;; esac
-if refused="$(as_reader "$first" 'SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE' 'INSERT INTO channels DEFAULT VALUES')"; then
+if refused="$(as_reader "$first" 'SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE' 'INSERT INTO tg_channels DEFAULT VALUES')"; then
 	fail 'the reader wrote once read-only was lifted'
 fi
 case "$refused" in *'permission denied'*) ;; *) fail "a write after lifting read-only was not refused for privilege: $refused" ;; esac
@@ -595,14 +595,14 @@ dump_from_claim "$work/seeded.dump"
 ok 'a backup made a dump of the seeded rows'
 
 say 'bad files are refused, and touch nothing'
-counts_before="$(psql_in "$namespace" 'SELECT count(*) FROM channels')"
+counts_before="$(psql_in "$namespace" 'SELECT count(*) FROM tg_channels')"
 role restore -e itgraph_restore_from="$work/no-such-file.dump" >"$work/missing.log" 2>&1 && fail 'a missing file was restored'
 printf 'not a dump\n' >"$work/text.dump"
 role restore -e itgraph_restore_from="$work/text.dump" >"$work/text.log" 2>&1 && fail 'a text file was restored'
 grep -q 'is not a dump pg_restore can read' "$work/text.log" || fail 'a text file was not named as such'
 head -c 400 "$work/seeded.dump" >"$work/cut-toc.dump"
 role restore -e itgraph_restore_from="$work/cut-toc.dump" >"$work/cut-toc.log" 2>&1 && fail 'a dump cut in its table of contents was restored'
-[ "$(psql_in "$namespace" 'SELECT count(*) FROM channels')" = "$counts_before" ] || fail 'a refused file changed the database'
+[ "$(psql_in "$namespace" 'SELECT count(*) FROM tg_channels')" = "$counts_before" ] || fail 'a refused file changed the database'
 ok 'a missing file, a text file and a dump cut in its table of contents touch nothing'
 
 say 'a dump cut short past its table of contents reads as a dump, and fails in the load'
@@ -613,7 +613,7 @@ size="$(wc -c <"$work/seeded.dump" | tr -d ' ')"
 head -c $((size / 2)) "$work/seeded.dump" >"$work/cut-data.dump"
 role restore -e itgraph_restore_from="$work/cut-data.dump" >"$work/cut-data.log" 2>&1 && fail 'a dump cut in its data was restored'
 grep -q 'emptied' "$work/cut-data.log" || fail 'the failure did not say the database was emptied'
-[ "$(psql_in "$namespace" "SELECT to_regclass('public.channels') IS NULL")" = t ] || fail 'a partial load was kept'
+[ "$(psql_in "$namespace" "SELECT coalesce(to_regclass('public.tg_channels'), to_regclass('public.channels')) IS NULL")" = t ] || fail 'a partial load was kept'
 [ "$(kubectl -n "$namespace" get cronjob itgraph-detect -o jsonpath='{.spec.suspend}')" = false ] || fail 'a failed restore left a schedule suspended'
 [ -z "$(kubectl -n "$namespace" get lease itgraph-deploy -o name --ignore-not-found)" ] || fail 'a failed restore left the lock held'
 ok 'a dump cut past its table of contents leaves the database empty, the schedules back and the lock free'
@@ -636,21 +636,21 @@ kubectl -n "$namespace" patch cronjob itgraph-baselines --type=merge -p '{"spec"
 ok 'the schedules are as they were found'
 
 read_rows() { psql_in "$namespace" "$1"; }
-[ "$(read_rows "SELECT count(*) FROM channels WHERE discovered_via = 'own_subscriptions'")" = 0 ] || fail 'subscriptions in the copy'
-[ "$(read_rows 'SELECT count(*) FROM channels')" = 3 ] || fail "channels in the copy: $(read_rows 'SELECT count(*) FROM channels')"
-[ "$(read_rows 'SELECT count(*) FROM pending_mentions')" = 0 ] || fail 'pending mentions in the copy'
+[ "$(read_rows "SELECT count(*) FROM tg_channels WHERE discovered_via = 'own_subscriptions'")" = 0 ] || fail 'subscriptions in the copy'
+[ "$(read_rows 'SELECT count(*) FROM tg_channels')" = 3 ] || fail "channels in the copy: $(read_rows 'SELECT count(*) FROM tg_channels')"
+[ "$(read_rows 'SELECT count(*) FROM tg_pending_mentions')" = 0 ] || fail 'pending mentions in the copy'
 [ "$(read_rows "SELECT count(*) FROM yt_channels WHERE reject_note IS NOT NULL OR kind_note IS NOT NULL")" = 0 ] || fail 'notes in the copy'
-[ "$(read_rows 'SELECT count(*) FROM affiliation_candidates WHERE decision_note IS NOT NULL')" = 0 ] || fail 'a note on a pair in the copy'
-[ "$(read_rows 'SELECT count(*) FROM affiliation_candidates')" = 1 ] || fail 'the decision on a pair did not come across'
+[ "$(read_rows 'SELECT count(*) FROM tg_affiliation_candidates WHERE decision_note IS NOT NULL')" = 0 ] || fail 'a note on a pair in the copy'
+[ "$(read_rows 'SELECT count(*) FROM tg_affiliation_candidates')" = 1 ] || fail 'the decision on a pair did not come across'
 [ "$(read_rows 'SELECT count(*) FROM yt_channels')" = 3 ] || fail 'the YouTube records did not come across'
 [ "$(read_rows 'SELECT count(*) FROM yt_raw_channels')" = 1 ] || fail 'the YouTube data did not come across'
-payload="$(read_rows "SELECT payload FROM raw_messages WHERE msg_id = 10")"
+payload="$(read_rows "SELECT payload FROM tg_raw_messages WHERE msg_id = 10")"
 case "$payload" in *777000111* | *"A Fake"* | *"Another Fake"*) fail "a person in the copy: $payload" ;; esac
 case "$payload" in *"a public post"*) ;; *) fail 'the text did not come across' ;; esac
-[ "$(read_rows "SELECT payload->'fwd_from'->'from_id'->>'channel_id' FROM raw_messages WHERE msg_id = 11")" = 4 ] || fail 'the graph did not come across'
-[ "$(read_rows "SELECT payload->'reactions'->'top_reactors'->0->'peer_id'->>'channel_id' FROM raw_messages WHERE msg_id = 10")" = 4 ] ||
+[ "$(read_rows "SELECT payload->'fwd_from'->'from_id'->>'channel_id' FROM tg_raw_messages WHERE msg_id = 11")" = 4 ] || fail 'the graph did not come across'
+[ "$(read_rows "SELECT payload->'reactions'->'top_reactors'->0->'peer_id'->>'channel_id' FROM tg_raw_messages WHERE msg_id = 10")" = 4 ] ||
 	fail 'the paid reactors did not come across as the channel alone'
-[ "$(read_rows "SELECT jsonb_array_length(payload->'reactions'->'top_reactors') FROM raw_messages WHERE msg_id = 10")" = 1 ] ||
+[ "$(read_rows "SELECT jsonb_array_length(payload->'reactions'->'top_reactors') FROM tg_raw_messages WHERE msg_id = 10")" = 1 ] ||
 	fail 'a paid reactor who is a person came across'
 ok 'on the real rows, the copy names nobody, and the YouTube data and the graph are there'
 
@@ -665,19 +665,19 @@ reader_reads_the_copy() {
 	[ "$(read_rows "SELECT count(*) FROM pg_default_acl d, aclexplode(d.defaclacl) a
 		WHERE a.grantee = 'itgraph_reader'::regrole AND a.privilege_type = 'SELECT'")" = 1 ] ||
 		fail 'the copy grants the reader no default privilege'
-	[ "$(read_rows 'SET ROLE itgraph_reader; SELECT count(*) FROM channels' | tail -n 1)" = 3 ] || fail 'the reader does not read the copy'
+	[ "$(read_rows 'SET ROLE itgraph_reader; SELECT count(*) FROM tg_channels' | tail -n 1)" = 3 ] || fail 'the reader does not read the copy'
 }
 reader_reads_the_copy
 ok 'a dump older than the reader comes out readable by it, and by nothing more'
 
-trial_alerts="$(read_rows 'SELECT count(*) FROM alerts WHERE band = 2147483647')"
+trial_alerts="$(read_rows 'SELECT count(*) FROM tg_alerts WHERE band = 2147483647')"
 if grep -q 'Delivered through the bot: could not be proven' "$work/restore.log"; then
 	[ "$trial_alerts" = 0 ] || fail 'an alert raised in quiet hours'
 	grep -q 'YouTube: could not be proven' "$work/restore.log" || fail 'the YouTube trial was not reported as not proven'
 	[ "$(read_rows 'SELECT count(*) FROM yt_alerts')" = 0 ] || fail 'a YouTube alert raised in quiet hours'
 	ok 'inside quiet hours, the alerts are reported as not proven'
 else
-	[ "$(read_rows 'SELECT count(*) FROM alerts WHERE band = 2147483647 AND delivered_at IS NOT NULL')" = 1 ] ||
+	[ "$(read_rows 'SELECT count(*) FROM tg_alerts WHERE band = 2147483647 AND delivered_at IS NOT NULL')" = 1 ] ||
 		fail 'the bot did not deliver the synthetic alert'
 	telegram_calls >"$work/telegram.txt"
 	grep -q '"method": "sendMessage"' "$work/telegram.txt" || fail 'the stand-in saw no message'
@@ -689,7 +689,7 @@ else
 	[ "$(read_rows "SELECT count(*) FROM yt_raw_videos")" = 0 ] || fail 'the synthetic videos were left behind'
 	ok 'a synthetic YouTube alert reaches each topic of the YouTube chat, and is removed after'
 fi
-[ "$(read_rows 'SELECT count(*) FROM baseline_runs WHERE completed_at IS NOT NULL')" -ge 1 ] || fail 'no baseline run on the copy'
+[ "$(read_rows 'SELECT count(*) FROM tg_baseline_runs WHERE completed_at IS NOT NULL')" -ge 1 ] || fail 'no baseline run on the copy'
 [ "$(read_rows 'SELECT count(*) FROM yt_baseline_runs WHERE completed_at IS NOT NULL')" -ge 1 ] || fail 'no YouTube baseline run on the copy'
 grep -q 'A baseline run of each platform' "$work/restore.log" || fail 'the restore did not report a run of each platform'
 ok 'a baseline run of each platform was written on the copy'
@@ -698,7 +698,7 @@ grep -q 'the weekly list computed by preview' "$work/restore.log" || fail 'the r
 	fail 'a weekly list of the copy is left to send'
 ok 'the weekly list is computed on the copy by preview, and nothing of it is left to send'
 grep -q "Telegram's weekly list computed by preview" "$work/restore.log" || fail "the restore did not report Telegram's weekly list"
-[ "$(read_rows 'SELECT count(*) FROM weekly_lists')" = 0 ] || fail "the trial wrote a Telegram weekly list"
+[ "$(read_rows 'SELECT count(*) FROM tg_weekly_lists')" = 0 ] || fail "the trial wrote a Telegram weekly list"
 ok "Telegram's weekly list is computed on the copy by preview, and writes nothing"
 
 say 'the passes on a copy that receives nothing new'
@@ -726,7 +726,7 @@ dump_from_claim "$work/neutralised.dump"
 # rather than leaving them to a migration. Read to its end, as the role reads a dump.
 kubectl -n "$namespace" exec -i statefulset/itgraph-postgres -c postgres -- \
 	bash -c 'pg_restore --schema-only -f -; cat >/dev/null' <"$work/neutralised.dump" >"$work/neutralised.sql"
-grep -q 'GRANT SELECT ON TABLE public.channels TO itgraph_reader;' "$work/neutralised.sql" ||
+grep -q 'GRANT SELECT ON TABLE public.tg_channels TO itgraph_reader;' "$work/neutralised.sql" ||
 	fail "the dump at head carries no grant to the reader"
 grep -q 'ALTER DEFAULT PRIVILEGES FOR ROLE itgraph IN SCHEMA public GRANT SELECT ON TABLES TO itgraph_reader;' \
 	"$work/neutralised.sql" || fail "the dump at head carries no default privilege for the reader"
@@ -734,7 +734,7 @@ role restore -e itgraph_restore_from="$work/neutralised.dump" >"$work/restore2.l
 	tail -40 "$work/restore2.log" >&2
 	fail 'a second restore failed'
 }
-[ "$(read_rows 'SELECT count(*) FROM channels')" = 3 ] || fail 'the second restore lost channels'
+[ "$(read_rows 'SELECT count(*) FROM tg_channels')" = 3 ] || fail 'the second restore lost channels'
 ok 'a dump of the neutralised copy restores'
 reader_reads_the_copy
 ok "a dump that carries the reader's grants restores whole, and the reader reads the copy"
@@ -761,14 +761,14 @@ ok 'a copy through age restores as any other dump'
 say 'a person at head empties the database rather than keeping it'
 # A person at head means production holds one: the collector's rule missed a shape,
 # at a path no statement ever named. Dumped while the copy is whole, then taken out.
-psql_in "$namespace" "INSERT INTO raw_messages (channel_id, msg_id, payload) VALUES (4, 12, '{\"_\": \"Message\", \"id\": 12, \"reply_to\": {\"_\": \"MessageReplyHeader\", \"reply_to_peer_id\": {\"_\": \"PeerUser\", \"user_id\": 777000111}}}')" >/dev/null
+psql_in "$namespace" "INSERT INTO tg_raw_messages (channel_id, msg_id, payload) VALUES (4, 12, '{\"_\": \"Message\", \"id\": 12, \"reply_to\": {\"_\": \"MessageReplyHeader\", \"reply_to_peer_id\": {\"_\": \"PeerUser\", \"user_id\": 777000111}}}')" >/dev/null
 kubectl -n "$namespace" exec statefulset/itgraph-postgres -c postgres -- \
 	pg_dump -U itgraph -d itgraph --format=custom >"$work/with-a-person.dump"
-psql_in "$namespace" "DELETE FROM raw_messages WHERE msg_id = 12" >/dev/null
+psql_in "$namespace" "DELETE FROM tg_raw_messages WHERE msg_id = 12" >/dev/null
 role restore -e itgraph_restore_from="$work/with-a-person.dump" >"$work/restore5.log" 2>&1 && fail 'a dump naming a person at head was restored'
 grep -q 'users in posts: 1' "$work/restore5.log" || fail 'the failure did not name the person it found'
 grep -q 'emptied' "$work/restore5.log" || fail 'the failure did not say the database was emptied'
-[ "$(read_rows "SELECT to_regclass('public.channels') IS NULL")" = t ] || fail 'the database was not emptied'
+[ "$(read_rows "SELECT coalesce(to_regclass('public.tg_channels'), to_regclass('public.channels')) IS NULL")" = t ] || fail 'the database was not emptied'
 ok 'a dump at head naming a person is refused, and leaves the database empty'
 role main >"$work/after.log" 2>&1 || {
 	tail -40 "$work/after.log" >&2
@@ -989,14 +989,14 @@ tg_week="$(read_rows "SELECT to_char(date_trunc('week', now() AT TIME ZONE 'Euro
 tg_noon="((DATE '$tg_week' + 2)::timestamp + interval '12 hours') AT TIME ZONE 'Europe/Moscow'"
 tg_start="((DATE '$tg_week')::timestamp AT TIME ZONE 'Europe/Moscow')"
 psql_in "$namespace" "
-	INSERT INTO channels (tg_id, username, title, discovered_via, status, kind)
+	INSERT INTO tg_channels (tg_id, username, title, discovered_via, status, kind)
 	VALUES (9900000001, 'fake_e2e_weekly', 'A synthetic channel', 'manual', 'seed', 'personal');
-	INSERT INTO raw_messages (channel_id, msg_id, payload)
+	INSERT INTO tg_raw_messages (channel_id, msg_id, payload)
 	SELECT 9900000001, msg, jsonb_build_object('_', 'Message', 'id', msg, 'message', 'A synthetic post ' || msg,
 	         'date', to_char(published AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"+00:00\"'))
 	FROM (VALUES (9001, $tg_noon), (9002, $tg_noon + interval '3 hours'),
 	             (9003, $tg_start - interval '12 days')) v(msg, published);
-	INSERT INTO message_metrics (channel_id, msg_id, observed_at, views)
+	INSERT INTO tg_message_metrics (channel_id, msg_id, observed_at, views)
 	VALUES (9900000001, 9001, $tg_noon + interval '110 minutes', 2000),
 	       (9900000001, 9002, $tg_noon + interval '3 hours 110 minutes', 1000),
 	       (9900000001, 9003, $tg_start - interval '8 days', 1000),
@@ -1005,14 +1005,14 @@ psql_in "$namespace" "
 tg_suite_run() { # <completed at>: a run of the suite's own, for its channel alone
 	read_rows "
 	WITH run AS (
-	  INSERT INTO baseline_runs (completed_at, mature_days, min_channel_posts, min_band_samples,
+	  INSERT INTO tg_baseline_runs (completed_at, mature_days, min_channel_posts, min_band_samples,
 	    channels_in_scope, channels_with_baseline)
 	  VALUES ($1, 28, 30, 20, 1, 1) RETURNING id),
-	ref AS (INSERT INTO channel_baselines (run_id, channel_id, metric, median, samples, reference)
+	ref AS (INSERT INTO tg_channel_baselines (run_id, channel_id, metric, median, samples, reference)
 	  SELECT id, 9900000001, 'views', 100, 40, 'mature' FROM run),
-	ruler AS (INSERT INTO metric_baselines (run_id, kind, metric, factor, spread, samples)
+	ruler AS (INSERT INTO tg_metric_baselines (run_id, kind, metric, factor, spread, samples)
 	  SELECT id, 'personal', 'views', 1, 0.5, 500 FROM run),
-	point AS (INSERT INTO curve_points (run_id, kind, metric, band, fraction, samples)
+	point AS (INSERT INTO tg_curve_points (run_id, kind, metric, band, fraction, samples)
 	  SELECT id, 'personal', 'views', band, 1, 500 FROM run, (VALUES ('105m'), ('420m')) b(band))
 	SELECT id FROM run"
 }
@@ -1021,7 +1021,7 @@ tg_run="$(tg_suite_run "$tg_noon - interval '1 hour'")"
 # could otherwise be: the same run again, completed now.
 tg_newest="$(tg_suite_run 'now()')"
 tg_monday="$(read_rows "SELECT to_char((DATE '$tg_week' + 7)::timestamp + interval '10 hours', 'YYYY-MM-DD\"T\"HH24:MI:SS') || '+03:00'")"
-psql_in "$namespace" "DELETE FROM weekly_lists WHERE week_start = '$tg_week'" >/dev/null
+psql_in "$namespace" "DELETE FROM tg_weekly_lists WHERE week_start = '$tg_week'" >/dev/null
 kubectl -n "$namespace" create job e2e-weekly --from=cronjob/itgraph-weekly --dry-run=client -o json |
 	jq --arg week "$tg_week" --arg now "$tg_monday" '.spec.template.spec.containers[0].args = ["weekly", "--week", $week, "--now", $now]
 		| .spec.template.spec.containers[0].env = (.spec.template.spec.containers[0].env // [])
@@ -1029,10 +1029,10 @@ kubectl -n "$namespace" create job e2e-weekly --from=cronjob/itgraph-weekly --dr
 	kubectl -n "$namespace" create -f - >/dev/null
 kubectl -n "$namespace" wait --for=condition=complete job/e2e-weekly --timeout=180s >/dev/null || fail "Telegram's weekly list failed"
 kubectl -n "$namespace" delete job e2e-weekly >/dev/null
-tg_listed="$(read_rows "SELECT e.msg_id || ':' || e.others FROM weekly_entries e JOIN weekly_lists l ON l.id = e.list_id
+tg_listed="$(read_rows "SELECT e.msg_id || ':' || e.others FROM tg_weekly_entries e JOIN tg_weekly_lists l ON l.id = e.list_id
 	WHERE l.week_start = '$tg_week' AND e.channel_id = 9900000001")"
 [ "$tg_listed" = 9001:1 ] || fail "the channel is not listed once, by its best post: $tg_listed"
-tg_revived="$(read_rows "SELECT r.msg_id || ':' || l.second_wind_shown FROM weekly_revivals r JOIN weekly_lists l ON l.id = r.list_id
+tg_revived="$(read_rows "SELECT r.msg_id || ':' || l.second_wind_shown FROM tg_weekly_revivals r JOIN tg_weekly_lists l ON l.id = r.list_id
 	WHERE l.week_start = '$tg_week' AND r.channel_id = 9900000001")"
 [ "$tg_revived" = 9003:true ] || fail "the older post is not the list's second wind, shown: $tg_revived"
 tg_list_sent() {
@@ -1045,9 +1045,9 @@ tg_list_sent() {
 		and ((.fields.link_preview_options // "") | test("\"is_disabled\": ?true")))] | length == 1' >/dev/null
 }
 until_true 120 "Telegram's weekly list did not reach its chat with its second wind, once and without a preview" tg_list_sent
-[ "$(read_rows "SELECT count(*) FROM weekly_revivals WHERE channel_id = 9900000001 AND delivered_at IS NULL")" = 0 ] ||
+[ "$(read_rows "SELECT count(*) FROM tg_weekly_revivals WHERE channel_id = 9900000001 AND delivered_at IS NULL")" = 0 ] ||
 	fail 'the second wind went and is not marked delivered'
-psql_in "$namespace" "DELETE FROM baseline_runs WHERE id IN ($tg_run, $tg_newest); DELETE FROM channels WHERE tg_id = 9900000001" >/dev/null
+psql_in "$namespace" "DELETE FROM tg_baseline_runs WHERE id IN ($tg_run, $tg_newest); DELETE FROM tg_channels WHERE tg_id = 9900000001" >/dev/null
 ok "Telegram's weekly list names the channel once, by its best post, then its older post that sped up, in its chat without a preview"
 
 telegram_control enqueue "$(jq -n --argjson at "$(date +%s)" '{message: {message_id: 5, date: $at,
@@ -1126,6 +1126,7 @@ checksum_of() { # <namespace>: the session's checksum, read by a pod of its own
 }
 session_before="$(checksum_of "$takeover")"
 volumes_before="$(kubectl -n "$takeover" get pvc -o jsonpath='{range .items[*]}{.metadata.name}={.spec.volumeName}{"\n"}{end}' | sort)"
+# Counted at the old schema, before Telegram's tables took `tg_`; the takeover migrates it.
 rows_before="$(psql_in "$takeover" 'SELECT count(*) FROM raw_messages')"
 allow_stub "$takeover"
 
@@ -1139,7 +1140,7 @@ ok 'the role takes over a namespace the previous path made'
 
 [ "$(kubectl -n "$takeover" exec statefulset/itgraph-postgres -c postgres -- id -u)" = 999 ] || fail 'the database is not uid 999'
 ok 'Postgres runs as uid 999 on files a root-started image wrote'
-[ "$(psql_in "$takeover" 'SELECT count(*) FROM raw_messages')" = "$rows_before" ] || fail 'rows were lost in the takeover'
+[ "$(psql_in "$takeover" 'SELECT count(*) FROM tg_raw_messages')" = "$rows_before" ] || fail 'rows were lost in the takeover'
 ok 'every row is still there'
 [ "$(checksum_of "$takeover")" = "$session_before" ] || fail 'the session changed'
 ok "the session's checksum is unchanged"

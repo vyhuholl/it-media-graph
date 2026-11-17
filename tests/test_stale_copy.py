@@ -24,14 +24,14 @@ async def seed_old_rows(database: Database) -> None:
     async with database.session() as session:
         await session.execute(
             text(
-                "INSERT INTO channels (tg_id, username, status, discovered_via, "
+                "INSERT INTO tg_channels (tg_id, username, status, discovered_via, "
                 "kind) VALUES (1, 'fake_old_channel', 'seed', 'manual', 'media')"
             )
         )
         for message in range(1, 30):
             await session.execute(
                 text(
-                    "INSERT INTO raw_messages (channel_id, msg_id, payload) "
+                    "INSERT INTO tg_raw_messages (channel_id, msg_id, payload) "
                     "VALUES (1, :id, cast(:payload as jsonb))"
                 ),
                 {
@@ -48,7 +48,7 @@ async def seed_old_rows(database: Database) -> None:
             )
             await session.execute(
                 text(
-                    "INSERT INTO message_metrics (channel_id, msg_id, "
+                    "INSERT INTO tg_message_metrics (channel_id, msg_id, "
                     "observed_at, views) VALUES (1, :id, :at, 10)"
                 ),
                 {"id": message, "at": OLD + timedelta(hours=1)},

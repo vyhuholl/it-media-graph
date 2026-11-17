@@ -472,7 +472,7 @@ def seed_resolution_queue(url: str, *, attempts: int = 0) -> None:
             ):
                 await session.execute(
                     text(
-                        "INSERT INTO channels "
+                        "INSERT INTO tg_channels "
                         "(tg_id, username, title, discovered_via, status, "
                         "resolved_at, resolve_attempts, resolve_last_error) "
                         "VALUES "
@@ -804,7 +804,7 @@ def seed_affiliation_fixture(url: str) -> None:
             ):
                 await session.execute(
                     text(
-                        "INSERT INTO channels "
+                        "INSERT INTO tg_channels "
                         "(tg_id, username, title, discovered_via, status) "
                         "VALUES "
                         "(:a, 'fake_gonzo_main', 'Main', 'manual', 'seed'), "
@@ -814,7 +814,7 @@ def seed_affiliation_fixture(url: str) -> None:
                 )
                 await session.execute(
                     text(
-                        "INSERT INTO raw_channels (channel_id, payload) "
+                        "INSERT INTO tg_raw_channels (channel_id, payload) "
                         "VALUES (:a, :payload)"
                     ),
                     {
@@ -829,7 +829,7 @@ def seed_affiliation_fixture(url: str) -> None:
                 for index in range(25):
                     await session.execute(
                         text(
-                            "INSERT INTO edges (src_channel_id, "
+                            "INSERT INTO tg_edges (src_channel_id, "
                             "dst_channel_id, kind, msg_id, published_at) "
                             "VALUES (:a, :b, 'forward', :msg, now())"
                         ),
@@ -863,7 +863,7 @@ def seed_handle_group_fixture(url: str) -> None:
             ):
                 await session.execute(
                     text(
-                        "INSERT INTO channels "
+                        "INSERT INTO tg_channels "
                         "(tg_id, username, title, discovered_via, status) "
                         "VALUES "
                         "(:a, 'tg_gonzo', 'Hub', 'manual', 'seed'), "
@@ -874,7 +874,7 @@ def seed_handle_group_fixture(url: str) -> None:
                 )
                 await session.execute(
                     text(
-                        "INSERT INTO raw_channels (channel_id, payload) "
+                        "INSERT INTO tg_raw_channels (channel_id, payload) "
                         "VALUES (:a, :payload)"
                     ),
                     {
@@ -939,7 +939,7 @@ def test_affiliates_writes_no_family_link(
         try:
             async with database.session() as session:
                 rows = await session.execute(
-                    text("SELECT family_key FROM channel_families")
+                    text("SELECT family_key FROM tg_channel_families")
                 )
                 return list(rows.scalars().all())
         finally:
@@ -1128,7 +1128,7 @@ def test_affiliates_hides_a_pair_with_no_seed_in_it(
                 session.begin(),
             ):
                 await session.execute(
-                    text("UPDATE channels SET status = 'candidate'")
+                    text("UPDATE tg_channels SET status = 'candidate'")
                 )
         finally:
             await engine.dispose()
@@ -1166,7 +1166,7 @@ def test_affiliates_shows_a_pair_with_one_seed_in_it(
             ):
                 await session.execute(
                     text(
-                        "UPDATE channels SET status = 'candidate' "
+                        "UPDATE tg_channels SET status = 'candidate' "
                         "WHERE tg_id = :b"
                     ),
                     {"b": KNOWN + 1},
@@ -1206,7 +1206,7 @@ def seed_vacancies_group(url: str) -> list[int]:
                 for index, tg_id in enumerate(ids):
                     await session.execute(
                         text(
-                            "INSERT INTO channels (tg_id, username, title, "
+                            "INSERT INTO tg_channels (tg_id, username, title, "
                             "discovered_via, status) VALUES "
                             "(:id, :name, :title, 'manual', 'seed')"
                         ),
@@ -1352,7 +1352,7 @@ def seed_seed_channel(url: str, tg_id: int, username: str) -> None:
             ):
                 await session.execute(
                     text(
-                        "INSERT INTO channels "
+                        "INSERT INTO tg_channels "
                         "(tg_id, username, title, discovered_via, status) "
                         "VALUES (:id, :name, 'Example', 'manual', 'seed')"
                     ),

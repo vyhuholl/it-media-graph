@@ -45,7 +45,7 @@ __all__ = [
 class RepostEdge:
     """One observed repost, in the terms this measurement needs.
 
-    A narrow projection of an ``edges`` row rather than the row itself:
+    A narrow projection of a ``tg_edges`` row rather than the row itself:
     what a cascade is made of is *who* carried *what* and *when*, and
     passing the whole row would let this module start depending on
     columns it has no business reading.
@@ -53,7 +53,7 @@ class RepostEdge:
     ``post_key`` identifies the referenced post after album collapsing —
     the parts of one album are one post here, and the caller has already
     resolved that. Doing it in the caller is deliberate: the grouping
-    comes from ``raw_messages``, because ``edges.grouped_id`` describes
+    comes from ``tg_raw_messages``, because ``tg_edges.grouped_id`` describes
     the *referencing* message and says nothing about the album being
     referenced.
     """
@@ -146,7 +146,7 @@ def crossings(
     still going, and skipping straight to the highest would lose that.
 
     ``already_raised`` is an optimisation and never a correctness
-    mechanism: the unique constraint on ``alerts`` is what actually
+    mechanism: the unique constraint on ``tg_alerts`` is what actually
     prevents a second alert, and this only avoids asking the database to
     reject rows it has rejected before. A caller that omits it gets the
     same alerts and a few more discarded inserts.

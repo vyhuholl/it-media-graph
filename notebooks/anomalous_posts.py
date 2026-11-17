@@ -95,7 +95,7 @@ maximum over parts, reactions and comments the maximum (only one part
 carries them), the text is the longest part's — the caption — and the id
 is the first part's, which is what a t.me link to the album wants.
 ``cited_posts.py`` merges albums the same way and on the same grouping —
-the measured post's own `grouped_id`, out of `raw_messages`. Note that
+the measured post's own `grouped_id`, out of `tg_raw_messages`. Note that
 `edges.grouped_id` is a different column and never the one to group on:
 it belongs to the *referencing* message and says nothing about the album
 being referenced.
@@ -211,8 +211,8 @@ POSTS = """
         (r.payload->'fwd_from'->'from_id'->>'channel_id')::bigint
             AS reposted_from,
         r.payload->>'message' AS text
-    FROM raw_messages r
-    JOIN channels c ON c.tg_id = r.channel_id AND c.status = 'seed'
+    FROM tg_raw_messages r
+    JOIN tg_channels c ON c.tg_id = r.channel_id AND c.status = 'seed'
     WHERE r.payload->>'_' = 'Message'
       AND r.fetched_at - (r.payload->>'date')::timestamptz
           >= make_interval(days => %(mature_days)s)
@@ -222,15 +222,15 @@ POSTS = """
 # missing from the view is a family of one, hence the fallback below.
 FAMILIES = """
     SELECT channel_id, family_key
-    FROM channel_families
+    FROM tg_channel_families
 """
 
 # Who was observed reposting a seed post. Forwards only — a mention
 # names a channel and never a post, so `dst_msg_id` is empty for it.
 CITED = """
     SELECT e.dst_channel_id, e.dst_msg_id, e.src_channel_id
-    FROM edges e
-    JOIN channels d ON d.tg_id = e.dst_channel_id AND d.status = 'seed'
+    FROM tg_edges e
+    JOIN tg_channels d ON d.tg_id = e.dst_channel_id AND d.status = 'seed'
     WHERE e.kind = 'forward' AND e.dst_msg_id IS NOT NULL
 """
 

@@ -589,7 +589,7 @@ async def test_the_pass_changes_nothing_but_the_queue(
                         "(SELECT count(*) FROM yt_requests), "
                         "(SELECT count(*) FROM yt_quota_days), "
                         "(SELECT count(*) FROM yt_baseline_runs), "
-                        "(SELECT count(*) FROM alerts)"
+                        "(SELECT count(*) FROM tg_alerts)"
                     )
                 )
             ).one()

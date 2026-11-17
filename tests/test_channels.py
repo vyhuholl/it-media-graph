@@ -235,7 +235,7 @@ async def test_the_database_refuses_a_reasonless_rejection(
         async with database.session() as session:
             await session.execute(
                 text(
-                    "insert into channels (tg_id, status, discovered_via) "
+                    "insert into tg_channels (tg_id, status, discovered_via) "
                     "values (:tg_id, 'rejected', 'manual')"
                 ),
                 {"tg_id": UNKNOWN},

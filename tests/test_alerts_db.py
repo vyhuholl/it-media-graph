@@ -56,7 +56,7 @@ async def seed(
         for tg_id in channels:
             await session.execute(
                 text(
-                    "INSERT INTO channels "
+                    "INSERT INTO tg_channels "
                     "(tg_id, username, title, discovered_via, status) "
                     "VALUES (:id, :name, 'Example', 'manual', 'seed')"
                 ),
@@ -72,7 +72,7 @@ async def seed(
             payload["grouped_id"] = album
         await session.execute(
             text(
-                "INSERT INTO raw_messages (channel_id, msg_id, payload) "
+                "INSERT INTO tg_raw_messages (channel_id, msg_id, payload) "
                 "VALUES (:c, :m, CAST(:p AS jsonb))"
             ),
             {"c": PUBLISHER, "m": POST, "p": _json(payload)},
@@ -84,7 +84,7 @@ async def seed(
         for index, src in enumerate(sources):
             await session.execute(
                 text(
-                    "INSERT INTO edges (src_channel_id, dst_channel_id, kind, "
+                    "INSERT INTO tg_edges (src_channel_id, dst_channel_id, kind, "
                     "msg_id, published_at, dst_msg_id, dst_published_at) "
                     "VALUES (:src, :dst, 'forward', :mid, :at, :dm, :dp)"
                 ),
@@ -100,7 +100,7 @@ async def seed(
         for a, b in families or []:
             await session.execute(
                 text(
-                    "INSERT INTO affiliation_candidates "
+                    "INSERT INTO tg_affiliation_candidates "
                     "(channel_a, channel_b, score, decision, decided_at) "
                     "VALUES (:a, :b, 1.0, 'confirmed', now())"
                 ),
@@ -126,7 +126,7 @@ async def seed_series(database: Database, *, folded: int = 2) -> int:
         for offset in range(1, folded + 1):
             await session.execute(
                 text(
-                    "INSERT INTO raw_messages (channel_id, msg_id, payload) "
+                    "INSERT INTO tg_raw_messages (channel_id, msg_id, payload) "
                     "VALUES (:c, :m, CAST(:p AS jsonb))"
                 ),
                 {
@@ -143,7 +143,7 @@ async def seed_series(database: Database, *, folded: int = 2) -> int:
             )
         head = await session.scalar(
             text(
-                "INSERT INTO alerts (kind, channel_id, msg_id, band, value) "
+                "INSERT INTO tg_alerts (kind, channel_id, msg_id, band, value) "
                 "VALUES ('views_spike', :c, :m, 1, 6.0) RETURNING id"
             ),
             {"c": PUBLISHER, "m": POST},
@@ -151,7 +151,7 @@ async def seed_series(database: Database, *, folded: int = 2) -> int:
         for offset in range(1, folded + 1):
             await session.execute(
                 text(
-                    "INSERT INTO alerts (kind, channel_id, msg_id, band, "
+                    "INSERT INTO tg_alerts (kind, channel_id, msg_id, band, "
                     "value, folded_into) "
                     "VALUES ('views_spike', :c, :m, 1, 5.0, :h)"
                 ),
@@ -165,7 +165,7 @@ async def delivery_of(database: Database) -> dict[int, str | None]:
     """How each alert was delivered, by msg, or None while outstanding."""
     async with database.session() as session:
         rows = await session.execute(
-            text("SELECT msg_id, delivery::text FROM alerts")
+            text("SELECT msg_id, delivery::text FROM tg_alerts")
         )
     return {msg: delivery for msg, delivery in rows}
 
@@ -173,7 +173,7 @@ async def delivery_of(database: Database) -> dict[int, str | None]:
 async def alerts(database: Database) -> list[tuple[int, int, float]]:
     async with database.session() as session:
         rows = await session.execute(
-            text("SELECT msg_id, band, value FROM alerts ORDER BY band")
+            text("SELECT msg_id, band, value FROM tg_alerts ORDER BY band")
         )
         return [tuple(row) for row in rows.all()]  # type: ignore[misc]
 
@@ -261,7 +261,7 @@ async def test_a_growing_cascade_escalates(database: Database) -> None:
     async with database.session() as session:
         await session.execute(
             text(
-                "INSERT INTO edges (src_channel_id, dst_channel_id, kind, "
+                "INSERT INTO tg_edges (src_channel_id, dst_channel_id, kind, "
                 "msg_id, published_at, dst_msg_id, dst_published_at) "
                 "VALUES (:src, :dst, 'forward', 9500, :at, :dm, :dp)"
             ),
@@ -282,7 +282,7 @@ async def test_a_growing_cascade_escalates(database: Database) -> None:
 async def test_an_album_is_one_alert_naming_its_first_part(
     database: Database,
 ) -> None:
-    """The grouping comes from `raw_messages`, not from `edges`.
+    """The grouping comes from `tg_raw_messages`, not from `tg_edges`.
 
     `edges.grouped_id` describes the repost, not the post being carried,
     and confusing the two is the easiest mistake in the pass.
@@ -292,7 +292,7 @@ async def test_an_album_is_one_alert_naming_its_first_part(
         # A second part of the same album, with a lower id.
         await session.execute(
             text(
-                "INSERT INTO raw_messages (channel_id, msg_id, payload) "
+                "INSERT INTO tg_raw_messages (channel_id, msg_id, payload) "
                 "VALUES (:c, :m, CAST(:p AS jsonb))"
             ),
             {
@@ -365,10 +365,10 @@ async def test_collection_running_ahead_of_derivation_is_reported(
     async with database.session() as session:
         # Messages collected long after the last edge was derived.
         await session.execute(
-            text("UPDATE edges SET derived_at = now() - interval '9 hours'")
+            text("UPDATE tg_edges SET derived_at = now() - interval '9 hours'")
         )
         await session.execute(
-            text("UPDATE raw_messages SET fetched_at = now()")
+            text("UPDATE tg_raw_messages SET fetched_at = now()")
         )
 
     summary = await run_cascades(database, bands=(2,), now=NOW)
@@ -388,11 +388,11 @@ async def test_an_idle_pipeline_is_not_reported_as_behind(
     await seed(database, reposters=2)
     async with database.session() as session:
         await session.execute(
-            text("UPDATE edges SET derived_at = now() - interval '9 hours'")
+            text("UPDATE tg_edges SET derived_at = now() - interval '9 hours'")
         )
         await session.execute(
             text(
-                "UPDATE raw_messages SET fetched_at = now() - interval '10 hours'"
+                "UPDATE tg_raw_messages SET fetched_at = now() - interval '10 hours'"
             )
         )
 
@@ -416,16 +416,16 @@ async def test_the_pass_modifies_nothing_it_read(
 
     async with database.session() as session:
         before = (
-            await session.scalar(text("SELECT count(*) FROM edges")),
-            await session.scalar(text("SELECT count(*) FROM raw_messages")),
+            await session.scalar(text("SELECT count(*) FROM tg_edges")),
+            await session.scalar(text("SELECT count(*) FROM tg_raw_messages")),
         )
 
     await run_cascades(database, bands=(2,), now=NOW)
 
     async with database.session() as session:
         after = (
-            await session.scalar(text("SELECT count(*) FROM edges")),
-            await session.scalar(text("SELECT count(*) FROM raw_messages")),
+            await session.scalar(text("SELECT count(*) FROM tg_edges")),
+            await session.scalar(text("SELECT count(*) FROM tg_raw_messages")),
         )
     assert before == after
 

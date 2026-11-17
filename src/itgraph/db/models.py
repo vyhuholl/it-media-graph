@@ -257,7 +257,7 @@ class Metric(enum.StrEnum):
     measured against its own baseline because a combined score would
     average away the only distinction worth having.
 
-    The values match the columns of ``message_metrics`` and the fields of
+    The values match the columns of ``tg_message_metrics`` and the fields of
     ``derive.metrics.Counters``, so the three never need translating.
     """
 
@@ -391,7 +391,7 @@ class YtChannelKind(enum.StrEnum):
 
     Its own type rather than Telegram's ``channel_kind``: a shared one
     would make these values valid in Telegram review, and removing one
-    later would mean recreating a type under the live ``channels`` table.
+    later would mean recreating a type under the live ``tg_channels`` table.
     """
 
     PERSONAL = "personal"
@@ -680,7 +680,7 @@ class Channel(Base):
     representation, and mixing the two silently doubles the row.
     """
 
-    __tablename__ = "channels"
+    __tablename__ = "tg_channels"
     __table_args__ = (
         CheckConstraint(
             "(status = 'rejected') = (reject_reason IS NOT NULL)",
@@ -704,17 +704,17 @@ class Channel(Base):
         server_default=ChannelStatus.CANDIDATE.value,
     )
     reject_reason: Mapped[RejectReason | None] = mapped_column(
-        _pg_enum(RejectReason, "reject_reason")
+        _pg_enum(RejectReason, "tg_reject_reason")
     )
     reject_note: Mapped[str | None] = mapped_column(Text)
 
     kind: Mapped[ChannelKind | None] = mapped_column(
-        _pg_enum(ChannelKind, "channel_kind")
+        _pg_enum(ChannelKind, "tg_channel_kind")
     )
     kind_note: Mapped[str | None] = mapped_column(Text)
 
     discovered_via: Mapped[DiscoverySource] = mapped_column(
-        _pg_enum(DiscoverySource, "discovery_source")
+        _pg_enum(DiscoverySource, "tg_discovery_source")
     )
     first_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -726,12 +726,12 @@ class Channel(Base):
     )
 
     linked_to: Mapped[int | None] = mapped_column(
-        ForeignKey("channels.tg_id", ondelete="SET NULL"), nullable=True
+        ForeignKey("tg_channels.tg_id", ondelete="SET NULL"), nullable=True
     )
 
     # No family column. Which channels share an author is the transitive
-    # closure of the confirmed pairs in `affiliation_candidates`, read
-    # through the `channel_families` view — see `db/affiliation.py`. It
+    # closure of the confirmed pairs in `tg_affiliation_candidates`, read
+    # through the `tg_channel_families` view — see `db/affiliation.py`. It
     # was a column once, pointing at a "canonical" channel every member
     # named, and that shape could not hold what the data turned out to
     # be: the pairs among one author's channels form an arbitrary graph,
@@ -743,7 +743,7 @@ class Channel(Base):
 
     # Denormalized from the newest message a backfill saw. A convenience
     # for "is this channel still alive", not a source of truth: the
-    # authority is the payload in `raw_messages`.
+    # authority is the payload in `tg_raw_messages`.
     last_post_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
@@ -782,10 +782,10 @@ class RawMessage(Base):
     expensive operation this table exists to avoid.
     """
 
-    __tablename__ = "raw_messages"
+    __tablename__ = "tg_raw_messages"
 
     channel_id: Mapped[int] = mapped_column(
-        ForeignKey("channels.tg_id", ondelete="CASCADE"),
+        ForeignKey("tg_channels.tg_id", ondelete="CASCADE"),
         primary_key=True,
         autoincrement=False,
     )
@@ -816,10 +816,10 @@ class RawChannel(Base):
     that is a separate table on a separate cadence.
     """
 
-    __tablename__ = "raw_channels"
+    __tablename__ = "tg_raw_channels"
 
     channel_id: Mapped[int] = mapped_column(
-        ForeignKey("channels.tg_id", ondelete="CASCADE"),
+        ForeignKey("tg_channels.tg_id", ondelete="CASCADE"),
         primary_key=True,
         autoincrement=False,
     )
@@ -867,24 +867,24 @@ class MessageMetric(Base):
     a post accumulating 🤡 and one accumulating ❤️ are opposite events
     that a total reports identically.
 
-    The foreign key onto ``raw_messages`` is load-bearing rather than
+    The foreign key onto ``tg_raw_messages`` is load-bearing rather than
     decorative: it makes a snapshot of a message the raw layer does not
     hold impossible, which pins the write order — payload first, snapshot
     second, one transaction. It references that table's primary key, so
     it costs no index of its own.
     """
 
-    __tablename__ = "message_metrics"
+    __tablename__ = "tg_message_metrics"
     __table_args__ = (
         ForeignKeyConstraint(
             ["channel_id", "msg_id"],
-            ["raw_messages.channel_id", "raw_messages.msg_id"],
+            ["tg_raw_messages.channel_id", "tg_raw_messages.msg_id"],
             ondelete="CASCADE",
         ),
         # The alert pass reads "every snapshot since I last ran", and the
         # primary key's leftmost column is the channel, so no prefix of it
         # can serve that query.
-        Index("ix_message_metrics_observed_at", "observed_at"),
+        Index("ix_tg_message_metrics_observed_at", "observed_at"),
     )
 
     channel_id: Mapped[int] = mapped_column(
@@ -922,10 +922,10 @@ class BackfillState(Base):
     per-channel table later.
     """
 
-    __tablename__ = "backfill_state"
+    __tablename__ = "tg_backfill_state"
 
     channel_id: Mapped[int] = mapped_column(
-        ForeignKey("channels.tg_id", ondelete="CASCADE"),
+        ForeignKey("tg_channels.tg_id", ondelete="CASCADE"),
         primary_key=True,
         autoincrement=False,
     )
@@ -939,11 +939,11 @@ class BackfillState(Base):
     cutoff_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     status: Mapped[BackfillStatus] = mapped_column(
-        _pg_enum(BackfillStatus, "backfill_status"),
+        _pg_enum(BackfillStatus, "tg_backfill_status"),
         server_default=BackfillStatus.PENDING.value,
     )
     failure_kind: Mapped[FailureKind | None] = mapped_column(
-        _pg_enum(FailureKind, "failure_kind")
+        _pg_enum(FailureKind, "tg_failure_kind")
     )
     failure_detail: Mapped[str | None] = mapped_column(Text)
 
@@ -983,10 +983,10 @@ class PollState(Base):
     seeding pass, and nothing has to backfill it.
     """
 
-    __tablename__ = "poll_state"
+    __tablename__ = "tg_poll_state"
 
     channel_id: Mapped[int] = mapped_column(
-        ForeignKey("channels.tg_id", ondelete="CASCADE"),
+        ForeignKey("tg_channels.tg_id", ondelete="CASCADE"),
         primary_key=True,
         autoincrement=False,
     )
@@ -1061,7 +1061,7 @@ class Edge(Base):
     safe to visualize and share.
     """
 
-    __tablename__ = "edges"
+    __tablename__ = "tg_edges"
     __table_args__ = (
         UniqueConstraint(
             "src_channel_id",
@@ -1069,7 +1069,7 @@ class Edge(Base):
             "kind",
             "dst_channel_id",
             "dst_msg_id",
-            name="uq_edges_reference",
+            name="uq_tg_edges_reference",
             postgresql_nulls_not_distinct=True,
         ),
         # Every post-level question filters on the referenced post — which
@@ -1078,7 +1078,7 @@ class Edge(Base):
         # explicitly named to sit alongside the single-column index the
         # foreign key already needs rather than collide with it.
         Index(
-            "ix_edges_dst_channel_id_dst_msg_id",
+            "ix_tg_edges_dst_channel_id_dst_msg_id",
             "dst_channel_id",
             "dst_msg_id",
         ),
@@ -1087,12 +1087,12 @@ class Edge(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
 
     src_channel_id: Mapped[int] = mapped_column(
-        ForeignKey("channels.tg_id", ondelete="CASCADE"), index=True
+        ForeignKey("tg_channels.tg_id", ondelete="CASCADE"), index=True
     )
     dst_channel_id: Mapped[int] = mapped_column(
-        ForeignKey("channels.tg_id", ondelete="CASCADE"), index=True
+        ForeignKey("tg_channels.tg_id", ondelete="CASCADE"), index=True
     )
-    kind: Mapped[EdgeKind] = mapped_column(_pg_enum(EdgeKind, "edge_kind"))
+    kind: Mapped[EdgeKind] = mapped_column(_pg_enum(EdgeKind, "tg_edge_kind"))
 
     # The referencing message, in the raw layer's per-channel numbering,
     # and its publication date — every time-decayed analysis reads this.
@@ -1136,12 +1136,12 @@ class PendingMention(Base):
     keyed by the normalized username, until ``itgraph resolve`` turns it
     into a channel. The *next* derivation run then writes the edge.
 
-    This keeps unresolved state out of ``edges``: the table analysis reads
+    This keeps unresolved state out of ``tg_edges``: the table analysis reads
     never carries a half-known endpoint that every consumer would have to
     filter out.
     """
 
-    __tablename__ = "pending_mentions"
+    __tablename__ = "tg_pending_mentions"
 
     # Lowercased, without the leading `@` — the same normalization the
     # channel lookup uses, so a username here and a username there agree.
@@ -1177,17 +1177,17 @@ class PendingMentionSource(Base):
     in a graph about who talks to whom. Resolving by weight of evidence
     spends a two-week queue's worth of quota on the two days that matter.
 
-    No foreign key onto ``channels``: those rows are never deleted, so the
+    No foreign key onto ``tg_channels``: those rows are never deleted, so the
     constraint could never fire, and it would make truncation
-    order-dependent for nothing. The one onto ``pending_mentions`` earns
+    order-dependent for nothing. The one onto ``tg_pending_mentions`` earns
     its place — that table *is* truncated, and its rows *are* deleted the
     moment a username resolves.
     """
 
-    __tablename__ = "pending_mention_sources"
+    __tablename__ = "tg_pending_mention_sources"
 
     username: Mapped[str] = mapped_column(
-        ForeignKey("pending_mentions.username", ondelete="CASCADE"),
+        ForeignKey("tg_pending_mentions.username", ondelete="CASCADE"),
         primary_key=True,
     )
     # The channel whose message carried the mention. Not a foreign key —
@@ -1219,7 +1219,7 @@ class AffiliationRun(Base):
     little, and only the denominator tells them apart.
     """
 
-    __tablename__ = "affiliation_runs"
+    __tablename__ = "tg_affiliation_runs"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     ran_at: Mapped[datetime] = mapped_column(
@@ -1277,7 +1277,7 @@ class AffiliationCandidate(Base):
 
     The confirmed rows are also the sole record of who shares an author.
     A family is a connected component of them, read through the
-    ``channel_families`` view; nothing stores membership separately, so
+    ``tg_channel_families`` view; nothing stores membership separately, so
     nothing can disagree with the pairs. Merging two families is
     therefore one confirmed row, and splitting one is the removal of a
     row — neither is an operation anything has to implement.
@@ -1290,7 +1290,7 @@ class AffiliationCandidate(Base):
 
     Evidence gets one nullable column per signal rather than a JSONB
     document. The raw layer is where documents belong; everything derived
-    here has explicit columns, as ``edges`` does. A fifth signal costs a
+    here has explicit columns, as ``tg_edges`` does. A fifth signal costs a
     migration, which is the same trade ``EdgeKind`` makes and for the
     same reason — a new signal is a deliberate change and can afford one.
 
@@ -1300,7 +1300,7 @@ class AffiliationCandidate(Base):
     ever costing a review already done.
     """
 
-    __tablename__ = "affiliation_candidates"
+    __tablename__ = "tg_affiliation_candidates"
     __table_args__ = (
         # The unordered pair, made canonical. Without this a pair could
         # be stored twice, once each way round, and the primary key
@@ -1313,23 +1313,23 @@ class AffiliationCandidate(Base):
             name="decided_has_timestamp",
         ),
         # The ranking is the table's one access path.
-        Index("ix_affiliation_candidates_score", "score"),
+        Index("ix_tg_affiliation_candidates_score", "score"),
     )
 
     channel_a: Mapped[int] = mapped_column(
-        ForeignKey("channels.tg_id", ondelete="CASCADE"),
+        ForeignKey("tg_channels.tg_id", ondelete="CASCADE"),
         primary_key=True,
         autoincrement=False,
     )
     channel_b: Mapped[int] = mapped_column(
-        ForeignKey("channels.tg_id", ondelete="CASCADE"),
+        ForeignKey("tg_channels.tg_id", ondelete="CASCADE"),
         primary_key=True,
         autoincrement=False,
     )
 
     score: Mapped[float] = mapped_column(Float)
     run_id: Mapped[int | None] = mapped_column(
-        ForeignKey("affiliation_runs.id", ondelete="SET NULL")
+        ForeignKey("tg_affiliation_runs.id", ondelete="SET NULL")
     )
 
     # --- evidence, one group per signal; null means it did not fire ---
@@ -1340,7 +1340,7 @@ class AffiliationCandidate(Base):
     # could not be checked, because most targets have no stored
     # description to check.
     about_direction: Mapped[AboutDirection | None] = mapped_column(
-        _pg_enum(AboutDirection, "about_direction")
+        _pg_enum(AboutDirection, "tg_about_direction")
     )
 
     # The shared username token and how many channels carry it. The count
@@ -1356,7 +1356,7 @@ class AffiliationCandidate(Base):
     # of groups would be the alternative, and a worse one — a group has
     # no attributes beyond these two, decisions are per-pair so it would
     # carry no decision column, and a stored membership can disagree with
-    # the pairs, which is the failure `channel_families` exists to make
+    # the pairs, which is the failure `tg_channel_families` exists to make
     # impossible.
     handle_token: Mapped[str | None] = mapped_column(Text)
     handle_token_channels: Mapped[int | None] = mapped_column(Integer)
@@ -1376,11 +1376,11 @@ class AffiliationCandidate(Base):
     # --- the review ---
 
     decision: Mapped[AffiliationDecision] = mapped_column(
-        _pg_enum(AffiliationDecision, "affiliation_decision"),
+        _pg_enum(AffiliationDecision, "tg_affiliation_decision"),
         server_default=AffiliationDecision.PENDING.value,
     )
     origin: Mapped[CandidateOrigin] = mapped_column(
-        _pg_enum(CandidateOrigin, "candidate_origin"),
+        _pg_enum(CandidateOrigin, "tg_candidate_origin"),
         server_default=CandidateOrigin.SIGNAL.value,
     )
     decided_at: Mapped[datetime | None] = mapped_column(
@@ -1419,7 +1419,7 @@ class Alert(Base):
 
     **What is stored is what it took to decide, not what will be shown.**
     No rendered message, no copy of which channels carried the post —
-    that is a query over ``edges`` at rendering time, and storing it
+    that is a query over ``tg_edges`` at rendering time, and storing it
     would put a derived measure in an observation table, the trade
     ``Edge`` already refuses when it carries two dates and declines to
     store the interval between them. ``value`` is the exception and
@@ -1449,14 +1449,14 @@ class Alert(Base):
     ``FOLDED`` once the head has gone out.
     """
 
-    __tablename__ = "alerts"
+    __tablename__ = "tg_alerts"
     __table_args__ = (
         # An alert about a post nothing collected should not be
         # representable. Same composite key `MessageMetric` references,
         # so it costs no index of its own.
         ForeignKeyConstraint(
             ["channel_id", "msg_id"],
-            ["raw_messages.channel_id", "raw_messages.msg_id"],
+            ["tg_raw_messages.channel_id", "tg_raw_messages.msg_id"],
             ondelete="CASCADE",
         ),
         UniqueConstraint(
@@ -1464,20 +1464,20 @@ class Alert(Base):
             "channel_id",
             "msg_id",
             "band",
-            name="uq_alerts_post_band",
+            name="uq_tg_alerts_post_band",
         ),
         # The bot's one access path, asked on every tick forever: what is
         # still outstanding. Partial, because the answer is almost always
         # a handful of rows out of everything ever raised.
         Index(
-            "ix_alerts_undelivered",
+            "ix_tg_alerts_undelivered",
             "raised_at",
             postgresql_where=text("delivered_at IS NULL"),
         ),
         # The head's message counts its folds, and settling them is a
         # join on it. Partial, because almost every alert is not a fold.
         Index(
-            "ix_alerts_folded_into",
+            "ix_tg_alerts_folded_into",
             "folded_into",
             postgresql_where=text("folded_into IS NOT NULL"),
         ),
@@ -1486,7 +1486,9 @@ class Alert(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
 
-    kind: Mapped[AlertKind] = mapped_column(_pg_enum(AlertKind, "alert_kind"))
+    kind: Mapped[AlertKind] = mapped_column(
+        _pg_enum(AlertKind, "tg_alert_kind")
+    )
 
     channel_id: Mapped[int] = mapped_column(BigInteger)
     msg_id: Mapped[int] = mapped_column(BigInteger)
@@ -1516,7 +1518,7 @@ class Alert(Base):
         DateTime(timezone=True)
     )
     delivery: Mapped[AlertDelivery | None] = mapped_column(
-        _pg_enum(AlertDelivery, "alert_delivery")
+        _pg_enum(AlertDelivery, "tg_alert_delivery")
     )
 
     # When the bot set it aside for the digest: raised in quiet hours, or
@@ -1534,7 +1536,7 @@ class Alert(Base):
     # same split as every other column here. Cascading, because a head
     # and its folds are one event.
     folded_into: Mapped[int | None] = mapped_column(
-        ForeignKey("alerts.id", ondelete="CASCADE")
+        ForeignKey("tg_alerts.id", ondelete="CASCADE")
     )
 
     def __repr__(self) -> str:
@@ -1565,7 +1567,7 @@ class BaselineRun(Base):
     a set of medians for some channels and curves fitted without them.
     """
 
-    __tablename__ = "baseline_runs"
+    __tablename__ = "tg_baseline_runs"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     started_at: Mapped[datetime] = mapped_column(
@@ -1626,18 +1628,18 @@ class ChannelBaseline(Base):
     scored a post has to be able to say which it had.
     """
 
-    __tablename__ = "channel_baselines"
+    __tablename__ = "tg_channel_baselines"
 
     run_id: Mapped[int] = mapped_column(
-        ForeignKey("baseline_runs.id", ondelete="CASCADE"), primary_key=True
+        ForeignKey("tg_baseline_runs.id", ondelete="CASCADE"), primary_key=True
     )
     channel_id: Mapped[int] = mapped_column(
-        ForeignKey("channels.tg_id", ondelete="CASCADE"),
+        ForeignKey("tg_channels.tg_id", ondelete="CASCADE"),
         primary_key=True,
         autoincrement=False,
     )
     metric: Mapped[Metric] = mapped_column(
-        _pg_enum(Metric, "metric"), primary_key=True
+        _pg_enum(Metric, "tg_metric"), primary_key=True
     )
 
     median: Mapped[float] = mapped_column(Float)
@@ -1692,16 +1694,16 @@ class MetricBaseline(Base):
     a measurement, which is the thing actually forbidden.
     """
 
-    __tablename__ = "metric_baselines"
+    __tablename__ = "tg_metric_baselines"
 
     run_id: Mapped[int] = mapped_column(
-        ForeignKey("baseline_runs.id", ondelete="CASCADE"), primary_key=True
+        ForeignKey("tg_baseline_runs.id", ondelete="CASCADE"), primary_key=True
     )
     kind: Mapped[ChannelKind] = mapped_column(
-        _pg_enum(ChannelKind, "channel_kind"), primary_key=True
+        _pg_enum(ChannelKind, "tg_channel_kind"), primary_key=True
     )
     metric: Mapped[Metric] = mapped_column(
-        _pg_enum(Metric, "metric"), primary_key=True
+        _pg_enum(Metric, "tg_metric"), primary_key=True
     )
 
     factor: Mapped[float] = mapped_column(Float)
@@ -1743,16 +1745,16 @@ class CurvePoint(Base):
     "not measured here" stays legible after the fact.
     """
 
-    __tablename__ = "curve_points"
+    __tablename__ = "tg_curve_points"
 
     run_id: Mapped[int] = mapped_column(
-        ForeignKey("baseline_runs.id", ondelete="CASCADE"), primary_key=True
+        ForeignKey("tg_baseline_runs.id", ondelete="CASCADE"), primary_key=True
     )
     kind: Mapped[ChannelKind] = mapped_column(
-        _pg_enum(ChannelKind, "channel_kind"), primary_key=True
+        _pg_enum(ChannelKind, "tg_channel_kind"), primary_key=True
     )
     metric: Mapped[Metric] = mapped_column(
-        _pg_enum(Metric, "metric"), primary_key=True
+        _pg_enum(Metric, "tg_metric"), primary_key=True
     )
     band: Mapped[str] = mapped_column(Text, primary_key=True)
 
@@ -1788,12 +1790,12 @@ class FloodEvent(Base):
     table.
     """
 
-    __tablename__ = "flood_events"
+    __tablename__ = "tg_flood_events"
     __table_args__ = (
         # The two questions asked of this table: what happened lately, and
         # how often this particular method.
-        Index("ix_flood_events_occurred_at", "occurred_at"),
-        Index("ix_flood_events_method", "method"),
+        Index("ix_tg_flood_events_occurred_at", "occurred_at"),
+        Index("ix_tg_flood_events_method", "method"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -1808,13 +1810,13 @@ class FloodEvent(Base):
     seconds: Mapped[int] = mapped_column(Integer)
 
     command: Mapped[CollectionCommand] = mapped_column(
-        _pg_enum(CollectionCommand, "collection_command")
+        _pg_enum(CollectionCommand, "tg_collection_command")
     )
 
     # Nullable: a limit hit during resolution, or before a walk starts,
     # belongs to no channel.
     channel_id: Mapped[int | None] = mapped_column(
-        ForeignKey("channels.tg_id", ondelete="SET NULL")
+        ForeignKey("tg_channels.tg_id", ondelete="SET NULL")
     )
 
     halted: Mapped[bool] = mapped_column(server_default=false())
@@ -1828,7 +1830,7 @@ class YtChannel(Base):
 
     Holds nothing read from the API. Title, handle, description and
     statistics live only in ``YtRawChannel.payload``, which every refresh
-    replaces; a copy here — the way Telegram's ``channels`` keeps
+    replaces; a copy here — the way Telegram's ``tg_channels`` keeps
     ``username`` and ``title`` — would be a second place to keep current.
     What is here is the operator's: the review, the provenance, and the
     channel id, kept for as long as the record.
@@ -2289,7 +2291,7 @@ class YtAlert(Base):
     """One thing worth telling the YouTube chat about a video.
 
     Telegram's ``Alert`` with a video for a post, in a table of its own:
-    ``alerts`` references ``raw_messages``, and an alert about something
+    ``tg_alerts`` references ``tg_raw_messages``, and an alert about something
     Telegram never collected should stay unrepresentable there.
 
     **It lives as long as the reading it was scored on.** The reading is
@@ -2662,16 +2664,16 @@ class WeeklyList(Base):
 
     **It holds no text and no channel name.** Its moments, the parameters
     it was computed with, itgraph's own counts, and how its delivery went;
-    what it lists is in ``weekly_entries``, which go with their readings
+    what it lists is in ``tg_weekly_entries``, which go with their readings
     while the list stays.
     """
 
-    __tablename__ = "weekly_lists"
+    __tablename__ = "tg_weekly_lists"
     __table_args__ = (
-        UniqueConstraint("week_start", name="uq_weekly_lists_week"),
+        UniqueConstraint("week_start", name="uq_tg_weekly_lists_week"),
         # What the bot asks on every tick: what is still to send.
         Index(
-            "ix_weekly_lists_undelivered",
+            "ix_tg_weekly_lists_undelivered",
             "week_start",
             postgresql_where=text("delivered_at IS NULL"),
         ),
@@ -2714,7 +2716,7 @@ class WeeklyEntry(Base):
     """One channel on Telegram's weekly list: its best post of the week.
 
     **It lives as long as the reading its score came from**, a row of
-    ``message_metrics``, which goes only with its channel.
+    ``tg_message_metrics``, which goes only with its channel.
 
     ``value`` is the score, ``observed`` the count of the reading scored
     on the entry's signal and ``expected`` what it was scored against —
@@ -2724,35 +2726,35 @@ class WeeklyEntry(Base):
     channel's name are read from the raw layer when the list is sent.
     """
 
-    __tablename__ = "weekly_entries"
+    __tablename__ = "tg_weekly_entries"
     __table_args__ = (
         ForeignKeyConstraint(
             ["channel_id", "msg_id", "scored_at"],
             [
-                "message_metrics.channel_id",
-                "message_metrics.msg_id",
-                "message_metrics.observed_at",
+                "tg_message_metrics.channel_id",
+                "tg_message_metrics.msg_id",
+                "tg_message_metrics.observed_at",
             ],
             ondelete="CASCADE",
         ),
         UniqueConstraint(
-            "list_id", "channel_id", name="uq_weekly_entries_channel"
+            "list_id", "channel_id", name="uq_tg_weekly_entries_channel"
         ),
     )
 
     list_id: Mapped[int] = mapped_column(
-        ForeignKey("weekly_lists.id", ondelete="CASCADE"),
+        ForeignKey("tg_weekly_lists.id", ondelete="CASCADE"),
         primary_key=True,
     )
     rank: Mapped[int] = mapped_column(Integer, primary_key=True)
     channel_id: Mapped[int] = mapped_column(
-        ForeignKey("channels.tg_id", ondelete="CASCADE")
+        ForeignKey("tg_channels.tg_id", ondelete="CASCADE")
     )
     msg_id: Mapped[int] = mapped_column(BigInteger)
     # The moment of the reading its score came from: a pointer into
-    # `message_metrics`.
+    # `tg_message_metrics`.
     scored_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    metric: Mapped[Metric] = mapped_column(_pg_enum(Metric, "metric"))
+    metric: Mapped[Metric] = mapped_column(_pg_enum(Metric, "tg_metric"))
     value: Mapped[float] = mapped_column(Float)
     observed: Mapped[float] = mapped_column(Float)
     expected: Mapped[float] = mapped_column(Float)
@@ -2779,29 +2781,29 @@ class WeeklyRevival(Base):
     channel's posts qualified. It goes with the reading that ends its week.
     """
 
-    __tablename__ = "weekly_revivals"
+    __tablename__ = "tg_weekly_revivals"
     __table_args__ = (
         ForeignKeyConstraint(
             ["channel_id", "msg_id", "end_at"],
             [
-                "message_metrics.channel_id",
-                "message_metrics.msg_id",
-                "message_metrics.observed_at",
+                "tg_message_metrics.channel_id",
+                "tg_message_metrics.msg_id",
+                "tg_message_metrics.observed_at",
             ],
             ondelete="CASCADE",
         ),
         UniqueConstraint(
-            "list_id", "channel_id", name="uq_weekly_revivals_channel"
+            "list_id", "channel_id", name="uq_tg_weekly_revivals_channel"
         ),
     )
 
     list_id: Mapped[int] = mapped_column(
-        ForeignKey("weekly_lists.id", ondelete="CASCADE"),
+        ForeignKey("tg_weekly_lists.id", ondelete="CASCADE"),
         primary_key=True,
     )
     rank: Mapped[int] = mapped_column(Integer, primary_key=True)
     channel_id: Mapped[int] = mapped_column(
-        ForeignKey("channels.tg_id", ondelete="CASCADE")
+        ForeignKey("tg_channels.tg_id", ondelete="CASCADE")
     )
     msg_id: Mapped[int] = mapped_column(BigInteger)
     before_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

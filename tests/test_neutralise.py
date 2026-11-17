@@ -64,7 +64,7 @@ async def connect(database_url: str) -> Any:
 async def seed(connection: Any) -> None:
     await connection.execute(
         """
-        INSERT INTO channels (tg_id, username, status, discovered_via, kind,
+        INSERT INTO tg_channels (tg_id, username, status, discovered_via, kind,
                               kind_note, reject_reason, reject_note)
         VALUES
           (1, 'fake_seed_mine', 'seed', 'own_subscriptions', 'personal',
@@ -89,13 +89,13 @@ async def seed(connection: Any) -> None:
     )
     await connection.execute(
         """
-        INSERT INTO affiliation_candidates (channel_a, channel_b, score,
+        INSERT INTO tg_affiliation_candidates (channel_a, channel_b, score,
                                             decision_note)
         VALUES (4, 5, 0.5, 'a fake note on a pair')
         """
     )
     await connection.execute(
-        "INSERT INTO pending_mentions (username) VALUES ('fake_person')"
+        "INSERT INTO tg_pending_mentions (username) VALUES ('fake_person')"
     )
     payloads: list[dict[str, Any]] = [
         {
@@ -153,19 +153,19 @@ async def seed(connection: Any) -> None:
     ]
     for payload in payloads:
         await connection.execute(
-            "INSERT INTO raw_messages (channel_id, msg_id, payload) "
+            "INSERT INTO tg_raw_messages (channel_id, msg_id, payload) "
             "VALUES (4, $1, $2::jsonb)",
             payload["id"],
             json.dumps(payload),
         )
     await connection.execute(
-        "INSERT INTO message_metrics (channel_id, msg_id, observed_at, views) "
+        "INSERT INTO tg_message_metrics (channel_id, msg_id, observed_at, views) "
         "VALUES (4, 10, $1, 123)",
         NOW,
     )
     await connection.execute(
         """
-        INSERT INTO alerts (kind, channel_id, msg_id, band, value, raised_at)
+        INSERT INTO tg_alerts (kind, channel_id, msg_id, band, value, raised_at)
         VALUES ('views_spike', 4, 10, 1, 4.2, $1)
         """,
         NOW - timedelta(hours=1),
@@ -208,23 +208,23 @@ async def seed(connection: Any) -> None:
     )
     # Telegram's list, half sent too: a second post of another channel, read.
     await connection.execute(
-        "INSERT INTO raw_messages (channel_id, msg_id, payload) "
+        "INSERT INTO tg_raw_messages (channel_id, msg_id, payload) "
         "VALUES (5, 12, $1::jsonb)",
         json.dumps({"id": 12, "_": "Message", "message": "another post"}),
     )
     await connection.execute(
-        "INSERT INTO message_metrics (channel_id, msg_id, observed_at, views) "
+        "INSERT INTO tg_message_metrics (channel_id, msg_id, observed_at, views) "
         "VALUES (5, 12, $1, 45)",
         NOW,
     )
     tg_list = await connection.fetchval(
-        "INSERT INTO weekly_lists (week_start, computed_at, threshold, size, "
+        "INSERT INTO tg_weekly_lists (week_start, computed_at, threshold, size, "
         "comments_min, posts_scored, channels_above) "
         "VALUES ('2026-10-26', $1, 3.7, 10, 10, 2, 2) RETURNING id",
         NOW,
     )
     await connection.execute(
-        "INSERT INTO weekly_entries (list_id, rank, channel_id, msg_id, "
+        "INSERT INTO tg_weekly_entries (list_id, rank, channel_id, msg_id, "
         "scored_at, metric, value, observed, expected, others, delivered_at) "
         "VALUES ($1, 1, 4, 10, $2, 'views', 5, 123, 20, 0, $2), "
         "($1, 2, 5, 12, $2, 'views', 4, 45, 10, 0, NULL)",
@@ -233,7 +233,7 @@ async def seed(connection: Any) -> None:
     )
     # Each list's second wind, unsent: a post and a video that sped up.
     await connection.execute(
-        "INSERT INTO weekly_revivals (list_id, rank, channel_id, msg_id, "
+        "INSERT INTO tg_weekly_revivals (list_id, rank, channel_id, msg_id, "
         "before_at, start_at, end_at, previous_pace, pace, norm, others, "
         "delivered_at) "
         "VALUES ($1, 1, 4, 10, $2, $3, $4, 1, 4, 10, 0, NULL)",
@@ -261,19 +261,24 @@ async def seed(connection: Any) -> None:
 
 
 async def clear_people(connection: Any) -> None:
-    """What the schema's revision does in a restore, before this file runs."""
+    """What the schema's revision does in a restore, before this file runs.
+
+    The revision names the tables as they were when it ran, before Telegram's
+    took `tg_`; a restore runs it there. This schema is at head, so the same
+    tables are reached by their names now.
+    """
     for statement in RULE.FUNCTIONS:
         await connection.execute(statement)
     for table in RULE.TABLES:
         await connection.execute(
-            f"UPDATE {table} SET payload = pg_temp.itgraph_without_people(payload) "
+            f"UPDATE tg_{table} SET payload = pg_temp.itgraph_without_people(payload) "
             f"WHERE jsonb_path_exists(payload, '{RULE.NAMES_SOMEONE}')"
         )
 
 
 async def payload_of(connection: Any, msg_id: int) -> dict[str, Any]:
     raw = await connection.fetchval(
-        "SELECT payload FROM raw_messages WHERE msg_id = $1", msg_id
+        "SELECT payload FROM tg_raw_messages WHERE msg_id = $1", msg_id
     )
     loaded: dict[str, Any] = json.loads(raw)
     return loaded
@@ -326,7 +331,7 @@ async def test_neutralising_passes_the_read_back_and_keeps_what_it_should(
             row["tg_id"]: row
             for row in await connection.fetch(
                 "SELECT tg_id, status::text, discovered_via::text, kind::text, "
-                "kind_note FROM channels"
+                "kind_note FROM tg_channels"
             )
         }
         # The seed stays, as another source; what was only read is gone.
@@ -337,7 +342,7 @@ async def test_neutralising_passes_the_read_back_and_keeps_what_it_should(
         # The decision stays, without what was written beside it.
         assert (
             await connection.fetchval(
-                "SELECT decision_note FROM affiliation_candidates"
+                "SELECT decision_note FROM tg_affiliation_candidates"
             )
             is None
         )
@@ -361,12 +366,14 @@ async def test_neutralising_passes_the_read_back_and_keeps_what_it_should(
         assert str(FAKE_USER) not in json.dumps(second)
 
         assert (
-            await connection.fetchval("SELECT count(*) FROM message_metrics")
+            await connection.fetchval(
+                "SELECT count(*) FROM tg_message_metrics"
+            )
             == 2
         )
         assert (
             await connection.fetchval(
-                "SELECT count(*) FROM alerts WHERE delivered_at IS NULL"
+                "SELECT count(*) FROM tg_alerts WHERE delivered_at IS NULL"
             )
             == 0
         )
@@ -400,25 +407,25 @@ async def test_neutralising_passes_the_read_back_and_keeps_what_it_should(
         # Telegram's list too, its entries kept with their readings.
         assert (
             await connection.fetchval(
-                "SELECT count(*) FROM weekly_entries "
+                "SELECT count(*) FROM tg_weekly_entries "
                 "WHERE delivered_at IS NOT NULL"
             )
             == 2
         )
         assert (
             await connection.fetchval(
-                "SELECT delivered_at FROM weekly_entries WHERE rank = 1"
+                "SELECT delivered_at FROM tg_weekly_entries WHERE rank = 1"
             )
             == NOW
         )
         assert (
             await connection.fetchval(
-                "SELECT count(*) FROM weekly_lists WHERE delivered_at IS NULL"
+                "SELECT count(*) FROM tg_weekly_lists WHERE delivered_at IS NULL"
             )
             == 0
         )
         # Both second winds are closed as if sent, and kept.
-        for table in ("weekly_revivals", "yt_weekly_revivals"):
+        for table in ("tg_weekly_revivals", "yt_weekly_revivals"):
             assert (
                 await connection.fetchval(
                     f"SELECT count(*) FROM {table} "
@@ -485,19 +492,19 @@ async def test_people_in_payloads_are_not_this_files_to_clear(
 
 async def store(connection: Any, payloads: list[dict[str, Any]]) -> None:
     await connection.execute(
-        "INSERT INTO channels (tg_id, status, discovered_via) "
+        "INSERT INTO tg_channels (tg_id, status, discovered_via) "
         "VALUES (4, 'seed', 'manual')"
     )
     for msg_id, payload in enumerate(payloads, start=1):
         if payload.get("_") == "messages.ChatFull":
             await connection.execute(
-                "INSERT INTO raw_channels (channel_id, payload) "
+                "INSERT INTO tg_raw_channels (channel_id, payload) "
                 "VALUES (4, $1::jsonb)",
                 json.dumps(payload),
             )
         else:
             await connection.execute(
-                "INSERT INTO raw_messages (channel_id, msg_id, payload) "
+                "INSERT INTO tg_raw_messages (channel_id, msg_id, payload) "
                 "VALUES (4, $1, $2::jsonb)",
                 msg_id,
                 json.dumps(payload),
@@ -554,11 +561,11 @@ async def test_a_person_among_a_channels_users_fails_the_read_back(
     connection = await connect(database_url)
     try:
         await connection.execute(
-            "INSERT INTO channels (tg_id, status, discovered_via) "
+            "INSERT INTO tg_channels (tg_id, status, discovered_via) "
             "VALUES (4, 'seed', 'manual')"
         )
         await connection.execute(
-            "INSERT INTO raw_channels (channel_id, payload) "
+            "INSERT INTO tg_raw_channels (channel_id, payload) "
             "VALUES (4, $1::jsonb)",
             json.dumps(
                 {

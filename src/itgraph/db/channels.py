@@ -1,4 +1,4 @@
-"""The channel inventory: every read and write of ``channels``.
+"""The channel inventory: every read and write of ``tg_channels``.
 
 Records are never deleted here, and no import path may overwrite a
 manual review.
@@ -84,7 +84,7 @@ def _identity(channel: Channel) -> str:
 
 
 def _families_subquery() -> Any:
-    """The ``channel_families`` view, as something a query can join.
+    """The ``tg_channel_families`` view, as something a query can join.
 
     Not a model: nothing maps to a view, and giving it one would invite
     `create_all` to try building it as a table. Declared inline instead,
@@ -95,7 +95,7 @@ def _families_subquery() -> Any:
             column("channel_id", BigInteger).label("channel_id"),
             column("family_key", BigInteger).label("family_key"),
         )
-        .select_from(table("channel_families"))
+        .select_from(table("tg_channel_families"))
         .subquery("families")
     )
 
@@ -388,7 +388,7 @@ async def list_channels(
 
     The family filter takes a *key*, not a member: resolve a channel
     reference to its family with :func:`family_keys` first. It joins the
-    ``channel_families`` view rather than reading a column, and falls
+    ``tg_channel_families`` view rather than reading a column, and falls
     back to the channel's own id, so a channel in no family is its own
     family of one and comes back when asked for by itself.
     """

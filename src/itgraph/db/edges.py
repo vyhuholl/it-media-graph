@@ -1,9 +1,9 @@
-"""Reads and writes of the derived tables: ``edges``, ``pending_mentions``
+"""Reads and writes of the derived tables: ``tg_edges``, ``tg_pending_mentions``
 and the sources of those mentions.
 
 All three are disposable — everything in them is recomputable from the raw
 layer — which is what makes ``derive --rebuild`` able to truncate them
-without a second thought. Nothing here touches ``channels`` beyond
+without a second thought. Nothing here touches ``tg_channels`` beyond
 creating rows a reference discovered, and nothing here reads the network.
 """
 
@@ -183,7 +183,7 @@ async def insert_edges(session: AsyncSession, edges: Sequence[EdgeRow]) -> int:
                 for edge in edges
             ]
         )
-        .on_conflict_do_nothing(constraint="uq_edges_reference")
+        .on_conflict_do_nothing(constraint="uq_tg_edges_reference")
         .returning(Edge.id)
     )
     return len((await session.execute(statement)).all())
@@ -353,7 +353,7 @@ async def truncate_derived(session: AsyncSession) -> None:
     """Empty the derived tables, and only those.
 
     The single path in the whole change that deletes derived data. It
-    must never reach ``channels`` — a channel discovered by reference is
+    must never reach ``tg_channels`` — a channel discovered by reference is
     kept, so a rebuild re-derives its edges rather than losing it — nor
     the raw layer, which is the source of truth a rebuild reads from.
 
@@ -362,5 +362,7 @@ async def truncate_derived(session: AsyncSession) -> None:
     here, which is exactly the quiet reach the paragraph above forbids.
     """
     await session.execute(
-        text("TRUNCATE TABLE edges, pending_mentions, pending_mention_sources")
+        text(
+            "TRUNCATE TABLE tg_edges, tg_pending_mentions, tg_pending_mention_sources"
+        )
     )

@@ -49,7 +49,7 @@ async def seed_channels(database: Database, *tg_ids: int) -> None:
         )
         await session.execute(
             text(
-                "UPDATE channels SET status = 'seed' WHERE tg_id = ANY(:ids)"
+                "UPDATE tg_channels SET status = 'seed' WHERE tg_id = ANY(:ids)"
             ),
             {"ids": list(tg_ids)},
         )
@@ -77,7 +77,7 @@ async def test_a_channel_with_no_state_is_due(database: Database) -> None:
     """This is what makes the queue seed itself.
 
     The first pass over the inventory is the seeding pass; nothing has to
-    backfill `poll_state`.
+    backfill `tg_poll_state`.
     """
     await seed_channels(database, FIRST)
 
@@ -138,7 +138,9 @@ async def test_only_channels_in_scope_are_polled(
     await seed_channels(database, FIRST, SECOND)
     async with database.session() as session:
         await session.execute(
-            text("UPDATE channels SET status = 'candidate' WHERE tg_id = :id"),
+            text(
+                "UPDATE tg_channels SET status = 'candidate' WHERE tg_id = :id"
+            ),
             {"id": SECOND},
         )
 
@@ -155,7 +157,7 @@ async def test_a_permanently_failed_channel_is_not_polled(
     async with database.session() as session:
         await session.execute(
             text(
-                "INSERT INTO backfill_state "
+                "INSERT INTO tg_backfill_state "
                 "(channel_id, status, failure_kind) "
                 "VALUES (:id, :status, :kind)"
             ),
@@ -315,16 +317,16 @@ async def test_a_successful_poll_clears_the_failures(
 
 
 async def test_the_cursor_is_read_in_place(database: Database) -> None:
-    """`newest_fetched_id` stays on `backfill_state`, uncopied.
+    """`newest_fetched_id` stays on `tg_backfill_state`, uncopied.
 
-    One fact, one table — a second copy on `poll_state` is a thing that
+    One fact, one table — a second copy on `tg_poll_state` is a thing that
     could disagree.
     """
     await seed_channels(database, FIRST)
     async with database.session() as session:
         await session.execute(
             text(
-                "INSERT INTO backfill_state (channel_id, newest_fetched_id) "
+                "INSERT INTO tg_backfill_state (channel_id, newest_fetched_id) "
                 "VALUES (:id, 4242)"
             ),
             {"id": FIRST},
@@ -427,7 +429,7 @@ async def test_a_discussion_chat_is_never_polled(
     await seed_channels(database, FIRST)
     async with database.session() as session:
         await session.execute(
-            text("UPDATE channels SET is_chat = true WHERE tg_id = :id"),
+            text("UPDATE tg_channels SET is_chat = true WHERE tg_id = :id"),
             {"id": FIRST},
         )
 
@@ -444,7 +446,7 @@ async def test_status_is_the_seed_status(database: Database) -> None:
     await seed_channels(database, FIRST)
     async with database.session() as session:
         status = await session.scalar(
-            text("SELECT status FROM channels WHERE tg_id = :id"),
+            text("SELECT status FROM tg_channels WHERE tg_id = :id"),
             {"id": FIRST},
         )
     assert status == ChannelStatus.SEED.value

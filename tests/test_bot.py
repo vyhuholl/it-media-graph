@@ -331,14 +331,14 @@ async def raise_spikes(
             }
             await session.execute(
                 text(
-                    "INSERT INTO raw_messages (channel_id, msg_id, payload) "
+                    "INSERT INTO tg_raw_messages (channel_id, msg_id, payload) "
                     "VALUES (:c, :m, CAST(:p AS jsonb))"
                 ),
                 {"c": PUBLISHER, "m": POST + offset, "p": json.dumps(payload)},
             )
             await session.execute(
                 text(
-                    "INSERT INTO alerts (kind, channel_id, msg_id, band, "
+                    "INSERT INTO tg_alerts (kind, channel_id, msg_id, band, "
                     "value, raised_at) VALUES "
                     "('views_spike', :c, :m, 1, 5.0, :at)"
                 ),
@@ -400,7 +400,7 @@ async def test_quiet_hours_hold_rather_than_drop(
     monkeypatch.setattr(settings, "watch_timezone", "UTC")
     async with database.session() as session:
         await session.execute(
-            text("UPDATE alerts SET raised_at = :at"),
+            text("UPDATE tg_alerts SET raised_at = :at"),
             {"at": NOW.replace(hour=3)},
         )
     sender = Recorder()
@@ -420,7 +420,9 @@ async def test_the_cap_holds_rather_than_drops(
     # One already delivered today, so the cap is reached.
     async with database.session() as session:
         await session.execute(
-            text("UPDATE alerts SET delivered_at = :at, delivery = 'direct'"),
+            text(
+                "UPDATE tg_alerts SET delivered_at = :at, delivery = 'direct'"
+            ),
             {"at": NOW - timedelta(hours=1)},
         )
         await raise_cascades(
@@ -442,7 +444,9 @@ async def test_held_stays_held_when_the_cap_frees_up(
     monkeypatch.setattr(settings, "alert_daily_cap", 1)
     async with database.session() as session:
         await session.execute(
-            text("UPDATE alerts SET delivered_at = :at, delivery = 'direct'"),
+            text(
+                "UPDATE tg_alerts SET delivered_at = :at, delivery = 'direct'"
+            ),
             {"at": NOW - timedelta(hours=1)},
         )
         await raise_cascades(
@@ -510,7 +514,7 @@ async def test_the_digest_delivers_what_quiet_hours_held(
     # alert raised overnight has to say when overnight was.
     async with database.session() as session:
         await session.execute(
-            text("UPDATE alerts SET raised_at = :at"), {"at": night}
+            text("UPDATE tg_alerts SET raised_at = :at"), {"at": night}
         )
 
     await deliver_once(database, sender, stats, now=night)
@@ -572,7 +576,7 @@ async def test_a_failed_part_is_sent_again_and_the_rest_are_not(
     assert 0 < remaining < 30
     async with database.session() as session:
         attempts = await session.scalar(
-            text("SELECT count(*) FROM alerts WHERE attempts = 1")
+            text("SELECT count(*) FROM tg_alerts WHERE attempts = 1")
         )
     assert attempts == remaining
     # The digest is not counted as sent, so the next pass tries the rest.
@@ -607,7 +611,7 @@ async def test_the_digest_goes_at_its_hour_in_the_operators_zone(
     night = NOW.replace(hour=1)  # 04:00 in Moscow, inside quiet hours
     async with database.session() as session:
         await session.execute(
-            text("UPDATE alerts SET raised_at = :at"), {"at": night}
+            text("UPDATE tg_alerts SET raised_at = :at"), {"at": night}
         )
 
     await deliver_once(database, sender, stats, now=night)
@@ -643,7 +647,7 @@ async def test_an_alert_whose_post_vanished_is_skipped(
     async with database.session() as session:
         # Cascades to the alert, so this leaves an empty queue rather
         # than a dangling one — which is itself the guarantee.
-        await session.execute(text("DELETE FROM raw_messages"))
+        await session.execute(text("DELETE FROM tg_raw_messages"))
 
     sender = Recorder()
     await deliver_once(database, sender, BotStats(), now=NOW)
@@ -776,14 +780,14 @@ async def test_a_fold_after_its_head_was_sent_is_settled_silently(
     async with database.session() as session:
         await session.execute(
             text(
-                "INSERT INTO raw_messages (channel_id, msg_id, payload) "
+                "INSERT INTO tg_raw_messages (channel_id, msg_id, payload) "
                 'VALUES (:c, :m, \'{"_": "Message"}\'::jsonb)'
             ),
             {"c": PUBLISHER, "m": POST + 1},
         )
         await session.execute(
             text(
-                "INSERT INTO alerts (kind, channel_id, msg_id, band, value, "
+                "INSERT INTO tg_alerts (kind, channel_id, msg_id, band, value, "
                 "folded_into) VALUES ('views_spike', :c, :m, 1, 4.0, :h)"
             ),
             {"c": PUBLISHER, "m": POST + 1, "h": head},

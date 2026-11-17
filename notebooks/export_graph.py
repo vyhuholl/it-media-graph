@@ -31,22 +31,22 @@ HALF_LIFE_DAYS = 90.0
 
 NODES = """
     SELECT tg_id, username, title, kind::text
-    FROM channels
+    FROM tg_channels
     WHERE status = 'seed'
 """
 
 EDGES = """
     SELECT e.src_channel_id, e.dst_channel_id, e.published_at
-    FROM edges e
-    JOIN channels s ON s.tg_id = e.src_channel_id AND s.status = 'seed'
-    JOIN channels d ON d.tg_id = e.dst_channel_id AND d.status = 'seed'
+    FROM tg_edges e
+    JOIN tg_channels s ON s.tg_id = e.src_channel_id AND s.status = 'seed'
+    JOIN tg_channels d ON d.tg_id = e.dst_channel_id AND d.status = 'seed'
 """
 
 # Connected components of the confirmed affiliation pairs. A channel
 # missing from the view is a family of one, hence the COALESCE below.
 FAMILIES = """
     SELECT channel_id, family_key
-    FROM channel_families
+    FROM tg_channel_families
 """
 
 

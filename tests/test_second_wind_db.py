@@ -44,7 +44,7 @@ async def tg_post(
         payload["grouped_id"] = album
     await run(
         database,
-        "INSERT INTO raw_messages (channel_id, msg_id, payload) "
+        "INSERT INTO tg_raw_messages (channel_id, msg_id, payload) "
         "VALUES (:c, :m, CAST(:p AS jsonb))",
         c=channel,
         m=msg_id,
@@ -53,7 +53,7 @@ async def tg_post(
     for at, views in readings:
         await run(
             database,
-            "INSERT INTO message_metrics (channel_id, msg_id, observed_at, "
+            "INSERT INTO tg_message_metrics (channel_id, msg_id, observed_at, "
             "views) VALUES (:c, :m, :at, :v)",
             c=channel,
             m=msg_id,
@@ -66,7 +66,7 @@ async def tg_channels(database: Database) -> None:
     for channel, chat in ((CHANNEL, False), (CHAT, True)):
         await run(
             database,
-            "INSERT INTO channels (tg_id, username, title, discovered_via, "
+            "INSERT INTO tg_channels (tg_id, username, title, discovered_via, "
             "status, kind, is_chat) VALUES (:c, :u, 'Fake', 'manual', 'seed', "
             "'personal', :chat)",
             c=channel,
@@ -187,7 +187,7 @@ async def test_a_telegram_revival_whose_reading_is_gone_is_not_claimed(
         await tg.store_week(session, a_tg_list(a_tg_revival()))
     await run(
         database,
-        "DELETE FROM message_metrics WHERE observed_at = :at",
+        "DELETE FROM tg_message_metrics WHERE observed_at = :at",
         at=START + timedelta(days=3),
     )
 

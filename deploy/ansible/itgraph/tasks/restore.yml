@@ -123,7 +123,7 @@
 
     - name: Count the channels left in the copy
       ansible.builtin.command:
-        argv: "{{ __itgraph_psql_query + ['SELECT count(*) FROM channels'] }}"
+        argv: "{{ __itgraph_psql_query + ['SELECT count(*) FROM tg_channels'] }}"
       register: __itgraph_channels_left
       changed_when: false
 

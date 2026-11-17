@@ -196,7 +196,7 @@ async def test_the_derivation_pass_writes_the_same(
         for payload in built:
             await session.execute(
                 text(
-                    "UPDATE raw_messages SET payload = CAST(:p AS jsonb) "
+                    "UPDATE tg_raw_messages SET payload = CAST(:p AS jsonb) "
                     "WHERE channel_id = :c AND msg_id = :m"
                 ),
                 {
@@ -208,7 +208,7 @@ async def test_the_derivation_pass_writes_the_same(
         await session.commit()
         stored = await session.scalar(
             text(
-                "SELECT count(*) FROM raw_messages "
+                "SELECT count(*) FROM tg_raw_messages "
                 "WHERE payload::text LIKE :user"
             ),
             {"user": f"%{OTHER_USER}%"},

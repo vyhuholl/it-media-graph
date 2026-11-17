@@ -1,6 +1,8 @@
 -- Rows of every shape the restore neutralises, none of them real. An empty table
 -- proves nothing. The people in the payloads are for the revision that clears them,
 -- which the restore runs: the suite dumps this as the previous release left it.
+-- Hence the names from before Telegram's tables took `tg_`: every database this
+-- seeds is at a revision older than that, and is migrated across it afterwards.
 INSERT INTO channels (tg_id, username, status, discovered_via, kind, kind_note, reject_reason, reject_note) VALUES
   (1, 'fake_seed_mine', 'seed', 'own_subscriptions', 'personal', 'a fake note', NULL, NULL),
   (2, 'fake_rejected_mine', 'rejected', 'own_subscriptions', NULL, NULL, 'not_it', 'a fake reason'),

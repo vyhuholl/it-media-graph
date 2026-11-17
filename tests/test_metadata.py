@@ -94,7 +94,7 @@ async def age_payload(database: Database, channel_id: int) -> None:
     async with database.session() as session:
         await session.execute(
             text(
-                "UPDATE raw_channels SET fetched_at = now() - interval "
+                "UPDATE tg_raw_channels SET fetched_at = now() - interval "
                 "'400 days' WHERE channel_id = :cid"
             ),
             {"cid": channel_id},

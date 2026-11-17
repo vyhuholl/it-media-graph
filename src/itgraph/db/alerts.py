@@ -133,7 +133,7 @@ async def raise_cascades(
     )
     result = await session.execute(
         statement.on_conflict_do_nothing(
-            constraint="uq_alerts_post_band"
+            constraint="uq_tg_alerts_post_band"
         ).returning(Alert.id)
     )
     written = len(result.all())
@@ -218,7 +218,7 @@ async def raise_spikes(
     it is what a replay at another threshold has to be able to compare
     against. The multiple it corresponds to depends on the spread of the
     baseline run that produced it, which is why the run's parameters are
-    kept in ``baseline_runs`` rather than the ratio being frozen here.
+    kept in ``tg_baseline_runs`` rather than the ratio being frozen here.
 
     Heads go in first so their ids exist for the folds, and all of it in
     the caller's one transaction, so the bot never sees a fold before
@@ -254,7 +254,7 @@ async def raise_spikes(
         result = await session.execute(
             insert(Alert)
             .values(rows)
-            .on_conflict_do_nothing(constraint="uq_alerts_post_band")
+            .on_conflict_do_nothing(constraint="uq_tg_alerts_post_band")
             .returning(Alert.id, Alert.kind, Alert.channel_id, Alert.msg_id)
         )
         return [
