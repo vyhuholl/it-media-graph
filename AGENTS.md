@@ -1,0 +1,107 @@
+# AGENTS.md
+Analytics over the IT-media graph: who reposts, mentions and comments on whom. Telegram first, later YouTube / Threads / Instagram.
+
+Roadmap and phase breakdown live in `docs/PLAN.md`. Read it before proposing architectural changes — most "obvious improvements" are already scheduled for a later phase, or were deliberately rejected.
+
+The infrastructure requirements every project shares are in force, and this file keeps to them; read them before any work: @docs/INFRASTRUCTURE.md
+
+## Hard rules
+1. **Never run project code via Python directly.** Always `uv run <cmd>` — no bare `python`, no `pip`, no activating a venv. Dependencies change via `uv add` / `uv add --dev`, never by hand-editing `pyproject.toml`. Ansible tooling is also run via `uv run`. Inside the published image there is no uv: its containers run the entry point from the environment CI built with `uv sync --locked --no-dev --no-editable` — the same lock file, which is what this rule protects.
+2. **Run `make validate` after every change that touches code.** Fix what it reports before declaring the task done. Never report success on a red validate.
+3. **Never commit secrets or personal data.** See "Never commit" below. If it looks like a secret has to live in a file, stop and ask.
+
+## Commands
+```bash
+make lint          # ruff check --fix + ruff format
+make typecheck     # mypy src/
+make test          # pytest
+make ansible-lint  # ansible-lint over deploy/
+make test-e2e      # the role on a throwaway k3d cluster; outside validate, needs Docker and k3d
+make validate      # lint + typecheck + test + ansible-lint   <- after every change
+
+uv run alembic revision --autogenerate -m "..."
+uv run alembic upgrade head
+uv run itgraph --help    # CLI entrypoint (typer)
+```
+
+## Architecture invariants
+- **Collection is MTProto (Telethon), from a user account.** The Bot API cannot read channel history, so aiogram is never an option for collection. aiogram is used only for the alert bot that sends notifications to the user.
+- **The raw layer is immutable.** The collector writes raw payloads to `tg_raw_messages` and does nothing else. All parsing, enrichment and metrics derive from it and must be re-runnable from scratch. Never move parsing logic into the collector — re-fetching history is expensive and risks the account.
+- **One exception: what names a person is never stored.** A user's account, a mention of a user by id, a name signed under a post or carried by a forward — removed by `without_people` in `tg/payload.py` before any payload is written, and removed once from what was stored before by the revision `fb31bd0b6656`. Channels stay wherever they appear. Nothing derived reads any of it. A new kind of it goes into that rule, its tests and the restore's read-back, with a revision of its own for rows already stored.
+- **YouTube's raw layer is refreshed, not frozen.** A payload in `yt_raw_*` is overwritten in place by a refresh and deleted when YouTube stops returning the object; a statistics reading is appended and never updated. What YouTube said lives only in `yt_raw_*` — no copied titles or handles elsewhere — and what is read out of it, such as which channels a video mentions, is worked out when needed. The rest of the invariant holds: the collector only stores payloads, and everything derived is re-runnable from them. Re-fetching fifty channels costs one unit, which is why the latest fetch wins here rather than the first.
+- **Postgres only.** No graph database. Graph work loads edges into `igraph`/`networkx` in memory.
+- **Schema changes only through an Alembic migration.** Never edit tables directly.
+- **The inventory is backed up, and the backups are read back.** `db/backup.py` dumps the hand-reviewed tables often and the whole database weekly, outside the repository — into `~/itgraph-backups` on the operator's machine, and on the collection host into the backups volume, which outlives the removal and recreation of every workload in the namespace, the database's included — because a dump carries the operator's own subscriptions. The PostgreSQL tools need nothing installed on the host itself: they come from the application image there, and run through `docker exec` on the operator's machine. Every dump is verified with `pg_restore --list` before it counts, and pruning only ever follows a good one. An `alembic upgrade` on the working database first takes a dump of the whole database into a tier of its own, which stays on the host: only the scheduled tiers are copied off-site, since the store's budget is sized by the schedule. Restoring is exercised, not assumed: see `src/itgraph/README.md`.
+- **A migration is verified on a scratch database, never on the working one.** `alembic downgrade` drops tables, and the URL comes from the environment, so the safe command and the destructive one are keystroke-identical. `db/guard.py` refuses a downgrade unless the database name ends in `_test` — point `DATABASE_URL` at a scratch database, or use `alembic downgrade --sql` to read what it would do. The `ITGRAPH_ALLOW_DESTRUCTIVE=1` override exists for deliberate use after a backup; reaching for it to make an error go away is the mistake it is named after.
+
+## Telegram collection rules
+- Handle `FloodWaitError` with honest backoff. Never work around a limit by switching sessions or accounts — that is what escalates to a ban.
+- **Never join channels.** Public channels are read by username via `get_entity` + `iter_messages`. Mass joining is the single strongest ban signal.
+- The collector must be resumable: persist `offset_id` per channel, so an interrupted backfill continues instead of restarting.
+
+## Testing
+- **No network in tests.** Telethon is mocked; fixtures are saved, anonymized payloads under `tests/fixtures/`.
+- Real `api_id` / `api_hash` / session files never appear in tests. CI holds no secret but its own token, so there is nowhere to add them to, and making it run the collector "for real" is not a reason to give it more.
+- Fake credentials are spelled out in words (`test-api-hash`, `fake-…`), never as plausible-looking hex. `tests/` is deliberately **not** excluded from the gitleaks hook, so a realistic fake trips it — and the fix is to make the value obviously fake, not to add an exclude, a `# gitleaks:allow`, or a fingerprint allowlist. A fake that looks real also costs a human reviewer the ability to tell the difference.
+- Tests use separate databases on the same Postgres instance, created and dropped by a fixture in `conftest.py`. That fixture refuses to run against a database whose name does not end in `_test` — never weaken the check, per-worker names included.
+- `make test` runs eight workers (`pytest-xdist`), one database each (`itgraph_gw0_test`, …). The schema is built once per run and the tables are emptied with `TRUNCATE` between tests — building it per test was two thirds of the suite's wall clock. **Nothing in the suite may alter the schema**, because it now outlives the test that changed it; a test that needs its own schema has to build its own database. `make test WORKERS=0` runs in one process, which is how a failure is read.
+- **A push to `master` gates nothing, and a tag does.** One person works on this repository, so pre-commit is the gate for a push: ruff and ansible-lint on commit, mypy and pytest on push. `.github/workflows/image.yml` builds `linux/amd64` and pushes `ghcr.io/vyhuholl/it-media-graph:<commit>` on every push to master; it runs no tests and blocks nothing. A hook skipped with `--no-verify` is still not caught there. A version tag means something, since what it publishes is what an operator will run: `.github/workflows/release.yml` runs the suite and the role's checks first, and publishes nothing if they fail.
+
+## Deploying
+- **A deploy is an operator running the role `deploy/ansible/itgraph` at a pinned release**, from the repository that owns the host, in the test environment first. Everything about where it runs is an input: the role names no host, no address and no repository, and neither does anything else here. Nothing deploys on a merge or a tag. See `deploy/runbook.md`.
+- **The session never reaches a test environment.** A test environment has `itgraph_telegram_collection: false`, a proxy whose one outbound closes every connection, no YouTube key, no off-site store and its own credentials, and the role refuses anything else there. No task of the role writes a session, and the session lease cannot see across databases, so this rule is what protects the account.
+- **Each workload holds only its own secrets, and reaches only what it needs.** A new secret goes to the workloads that read it and no others; a new outbound connection needs a label in `deploy/ansible/itgraph/vars/main.yml`. The collector reaches DNS, the database and the proxy, and nothing else.
+- **The reader is an operator's door, and no workload's.** `itgraph_reader` reads every table through the tunnel and writes nothing; its password reaches no pod and no Secret's data, and no process connects as it. Its session guards are against accidents, not a boundary: the grants are the boundary, so a new privilege for it is a revision, never a setting.
+- **What the restore neutralises keeps up with the schema.** A change adding a note someone writes, or anything that would act on restored data, names the restore in its design: `files/neutralise.sql` and `files/readback.sql`, whose tests remove each statement in turn. A field naming a person goes into the collector's rule instead; the read-back looks for its type in every payload, and fails a copy that still holds one, since production would too.
+
+## Never commit
+- `.env`, `*.session`, `*.session-journal` — a session file is full account access
+- the Telegram **bot token**. Unlike the api hash it plausibly ends up on a machine you do not own, which is why the bot also gets its own database role: the role is what bounds the damage when the token leaks, and a token in a migration or a fixture defeats both
+- the **proxy password** (`PROXY_PASSWORD`), on the same footing as the api hash. It buys someone else a shared exit billed to the operator, and — worse — an address the collector's traffic is known to come from
+- **production's inventory or vault**, or any value from them. They live on the controller alone, and this repository is public: no host, address, token or chat id belongs in it, in code, docs, OpenSpec artifacts or commit messages. Inputs under `deploy/ansible/inputs/` are synthetic and spelled so
+- the **YouTube API key** (`YOUTUBE_API_KEY`), on the same footing as the api hash. Whoever holds it spends the project's daily quota
+- the **B2 application key** (`b2_application_key`), on the same footing as the api hash. Whoever holds it fills the off-site store the account pays for; the account's caps are $0 precisely so that this fails loudly instead of billing quietly
+- the **age identity** that decrypts the off-site copies. It pairs with the public recipient the role is given as `itgraph_backup_age_recipient`; on the collection host it would undo the point of encrypting before upload (the host cannot read its own copies), and anywhere else it turns every off-site copy into plaintext for whoever finds it. It lives in the password manager only
+- **review files** from `itgraph yt review-export` (`*.review.tsv`). They hold real collected channel data, so they live outside the repository and are deleted once applied
+- any dump of the user's own subscriptions or real collected channel data
+- commenter user IDs or any other personal data. The raw layer does not keep them; anything that ever must keeps them hashed; none of it goes into git
+
+Test fixtures are synthetic or anonymized. There is no such thing as a "small real sample, just for a test".
+
+- The operator's own private dialogs, work chats and legacy group chats are out of scope. Only publicly addressable channels enter the inventory; history is fetched only for channels with status `seed` or `accepted`.
+- Nothing derived from the operator's own subscriptions is publishable. Exports select an explicit column list filtered to `status = 'seed'`; never `SELECT *`, and never include `discovered_via`, `reject_reason`, `reject_note` or `kind_note`.
+
+## Requirements discipline
+A gap or a contradiction in the requirements is **a question for the user**, never a guess in the code. A guess pinned down by a green test is worse than no code at all: it looks like a solution.
+
+Before starting on a feature:
+
+1. Ask about everything that admits more than one reading — and wait for the answers.
+2. List the assumptions you made explicitly. Mark any assumption the user has not confirmed as **"not covered by the requirements"** in the artifacts.
+
+When the prompt and the actual behaviour of a library or of the code disagree, do not pick a side silently. Check the sources, show the evidence, and record the user's decision.
+
+## Workflow
+- Standard / infrastructure tasks (collector, schema, API, bot): implement via OpenSpec: `/opsx:explore` -> write change artifacts -> `/opsx:apply` -> `/opsx:verify` -> `/opsx:archive`.
+- A small change — a bugfix, a narrow cleanup — needs no new OpenSpec change. But if it changes behaviour an existing spec describes, the spec in `openspec/specs/` should be updated, so the specs never disagree with what the code does.
+- Exploratory analytics (clustering, edge weights, engagement baselines): no spec. Iterate in `notebooks/`, promote to `src/` only once the approach is settled.
+- One commit per logical unit of work.
+- Commit messages — in English. Follow conventional commits standard.
+- **Commit to `master`. Never create a branch unless asked for one.** One person works on this repository, so a branch buys no review and costs a merge on every change. If something is risky enough to want isolating, say so and ask — do not decide it by branching.
+
+## Style
+- ruff and mypy settings are deliberate. Do not loosen config or sprinkle `# type: ignore` to make an error disappear — fix the code, or ask.
+- Code, identifiers and comments in English. Docs and commit messages may be Russian.
+- **Bot button text:** one to three words, with a leading emoji: `🔘 Да`. The leading emoji does not count as a word. No trailing punctuation.
+
+## Database access
+During explore you may read the production database as `itgraph_reader`, a read-only user. The operator opens SSH tunnel, and the password is in `.pgpass` at the repository root (gitignored), not in `~/.pgpass` — hence `PGPASSFILE`, run from the root: do not look for it or print it.
+```bash
+PGPASSFILE=.pgpass PGOPTIONS='-c statement_timeout=60s' /opt/homebrew/opt/libpq/bin/psql -h localhost -p 15433 -U itgraph_reader -d itgraph
+```
+Rules:
+* This is the working database, and the collector writes to it while you read. Read large tables through aggregates and with `LIMIT`. If a query hits `statement_timeout`, narrow it rather than lifting the limit.
+* This user may not write. Do not work around a refusal or look for other credentials.
+* Do not point `DATABASE_URL` or `.env` at this tunnel. Do not run alembic, the `itgraph` CLI or the tests against this database.
+* You may read everything, YouTube data and notes included. But no value from the database goes into the repository's files, OpenSpec artifacts, commits or pull requests: the repository is public. Artifacts get only the schema and aggregates: counts, distributions, JSON keys.
+* Save no exports to files unless explicitly asked to by the operator.
