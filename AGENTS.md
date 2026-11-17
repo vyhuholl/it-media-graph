@@ -81,6 +81,8 @@ Before starting on a feature:
 
 When the prompt and the actual behaviour of a library or of the code disagree, do not pick a side silently. Check the sources, show the evidence, and record the user's decision.
 
+- Use the **context7** and **ansible-know** MCP servers for documentation. Check before writing rather than trusting recall.
+
 ## Workflow
 - Standard / infrastructure tasks (collector, schema, API, bot): implement via OpenSpec: `/opsx:explore` -> write change artifacts -> `/opsx:apply` -> `/opsx:verify` -> `/opsx:archive`.
 - A small change — a bugfix, a narrow cleanup — needs no new OpenSpec change. But if it changes behaviour an existing spec describes, the spec in `openspec/specs/` should be updated, so the specs never disagree with what the code does.
@@ -95,9 +97,9 @@ When the prompt and the actual behaviour of a library or of the code disagree, d
 - **Bot button text:** one to three words, with a leading emoji: `🔘 Да`. The leading emoji does not count as a word. No trailing punctuation.
 
 ## Database access
-During explore you may read the production database as `itgraph_reader`, a read-only user. The operator opens SSH tunnel, and the password is in `.pgpass` at the repository root (gitignored), not in `~/.pgpass` — hence `PGPASSFILE`, run from the root: do not look for it or print it.
+During explore you may read the production database as `itgraph_reader`, a read-only user. The operator opens SSH tunnel, and the password is in `~/.pgpass`: do not look for it or print it.
 ```bash
-PGPASSFILE=.pgpass PGOPTIONS='-c statement_timeout=60s' /opt/homebrew/opt/libpq/bin/psql -h localhost -p 15433 -U itgraph_reader -d itgraph
+PGPASSFILE=~/.pgpass PGOPTIONS='-c statement_timeout=60s' /opt/homebrew/opt/libpq/bin/psql -h localhost -p 15433 -U itgraph_reader -d itgraph
 ```
 Rules:
 * This is the working database, and the collector writes to it while you read. Read large tables through aggregates and with `LIMIT`. If a query hits `statement_timeout`, narrow it rather than lifting the limit.
