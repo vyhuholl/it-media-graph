@@ -139,13 +139,27 @@ Every series SHALL be worked out at scrape time from durable state in the databa
 
 ### Requirement: Metrics Carry Nothing YouTube Said
 
-No series SHALL carry a title, handle, description, channel id, video id or statistic read from YouTube. What the exporter reads of YouTube's tables SHALL be limited to when each row was fetched, enforced by the database role it connects as. Of a YouTube alert it SHALL read only its moments and delivery state; of a baseline run of either platform, only when it completed and how many channels it counted; of a YouTube weekly list, only its language and its moments, and of a Telegram weekly list only its moments, and nothing of either's entries or second wind entries; of a refresh's record, only when it ended and how.
+No series SHALL carry a title, handle, description, channel id, video id or statistic read from YouTube. What the exporter reads of YouTube's tables SHALL be limited to when each row was fetched, enforced by the database role it connects as.
 
 #### Scenario: The role cannot read a title
 
 - **GIVEN** the exporter's database role
 - **WHEN** it selects `payload` from any `yt_raw_*` table
 - **THEN** the database refuses with a permission error
+
+#### Scenario: The role can write nothing
+
+- **WHEN** the exporter's role attempts an insert, update or delete on any table
+- **THEN** the database refuses
+
+#### Scenario: A label names no channel
+
+- **WHEN** a client scrapes
+- **THEN** no label value in the body names a Telegram or YouTube channel, a video or a person
+
+### Requirement: The Exporter Reads Only Moments And Outcomes
+
+Of a YouTube alert, the exporter SHALL read only its moments and delivery state; of a baseline run of either platform, only when it completed and how many channels it counted; of a YouTube weekly list, only its language and its moments, and of a Telegram weekly list only its moments, and nothing of either's entries or second wind entries; of a refresh's record, only when it ended and how. Each limit SHALL be enforced by the database role it connects as.
 
 #### Scenario: The role cannot read what an alert is about
 
@@ -170,16 +184,6 @@ No series SHALL carry a title, handle, description, channel id, video id or stat
 - **GIVEN** the exporter's database role
 - **WHEN** it selects how many late readings a refresh found due or took, or its error
 - **THEN** the database refuses with a permission error
-
-#### Scenario: The role can write nothing
-
-- **WHEN** the exporter's role attempts an insert, update or delete on any table
-- **THEN** the database refuses
-
-#### Scenario: A label names no channel
-
-- **WHEN** a client scrapes
-- **THEN** no label value in the body names a Telegram or YouTube channel, a video or a person
 
 ### Requirement: Only The Monitoring's Scraper Reads The Series
 

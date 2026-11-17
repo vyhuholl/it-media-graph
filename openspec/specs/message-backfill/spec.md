@@ -1,7 +1,7 @@
 # message-backfill Specification
 
 ## Purpose
-TBD - created by archiving change add-message-backfill. Update Purpose after archive.
+Walking a channel's Telegram history into the raw layer: which channels are walked and how deep, how a walk resumes, how it keeps to Telegram's rate limits without ever circumventing them, and how failures and rate limits are recorded. It also covers the pass that reads a channel's extended information.
 
 ## Requirements
 
@@ -78,7 +78,7 @@ The system SHALL record per-channel progress so an interrupted run resumes rathe
 
 ### Requirement: Rate Limit Compliance
 
-The system SHALL comply with Telegram's rate limits by waiting, MUST NOT attempt to circumvent them, and SHALL stop a run rather than sleep through a wait longer than it is willing to hold a connection open for. Every request the system makes SHALL be bounded by a deadline; a request that passes it SHALL be abandoned and reported as a failed request rather than waited on further. The deadline SHALL apply to the request alone and MUST NOT bound a rate-limit wait, and it MUST be configured above the longest wait the client sleeps off inside a request.
+The system SHALL comply with Telegram's rate limits by waiting, MUST NOT circumvent them, and SHALL stop a run rather than sleep through a wait longer than it will hold a connection open for. Every request SHALL be bounded by a deadline; one that passes it SHALL be abandoned and reported as a failed request rather than waited on. The deadline SHALL bound the request alone, never a rate-limit wait, and MUST be configured above the longest wait the client sleeps off inside a request.
 
 #### Scenario: A short FloodWait is waited out
 

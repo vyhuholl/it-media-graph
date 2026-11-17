@@ -1,7 +1,7 @@
 # youtube-backfill Specification
 
 ## Purpose
-TBD - created by archiving change add-youtube-backfill. Update Purpose after archive.
+Walking a YouTube seed's uploads back to a configured depth: page by page and one walk at a time, leaving to the poll loop what it owns, spending only the general pool's share of the quota, and recording what each walk found and why it stopped.
 
 ## Requirements
 

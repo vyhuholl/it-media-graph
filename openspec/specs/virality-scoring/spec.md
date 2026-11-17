@@ -1,19 +1,13 @@
 # virality-scoring Specification
 
 ## Purpose
-TBD - created by archiving change add-virality-scoring. Update Purpose after archive.
+Recognising that a Telegram post is doing unusually well for its channel and its age: baselines fitted from collected readings, a score per metric against them, a channel's simultaneous spikes folded into one event, and a replay that scores the past without sending anything.
 
 ## Requirements
 
 ### Requirement: A Post Is Measured Against Its Own Channel At Its Own Age
 
 The system SHALL compute an expected value for each metric from the channel's own history scaled to the post's age, and score the observed value as its deviation from that expectation in units of the measured spread. Absolute values MUST NOT be compared across channels, and values at different ages MUST NOT be compared without the age correction. Comments are the one exception to how the deviation is measured: they are scored as counts ("Comments Are Scored As Counts").
-
-The channel's reference SHALL be drawn from its own newest posts, read at the age the growth curve is normalised to: the median, over a configured number of the channel's most recent posts within a configured maximum age, of the value each reached at that age. For comments it is the mean of those values, zeros included. It MUST be recomputed from posts as they are collected, so that it describes the channel as it is now. A reference that does not move measures a channel against the version of itself that existed when it was fixed, which for a growing channel means its ordinary posts read as remarkable, and for a shrinking one that nothing it publishes can.
-
-Where a channel has too few such posts, its comments SHALL NOT be scored, and for the other metrics the system SHALL fall back to the median of its settled posts scaled by its kind's factor, bounded at both ends as before: posts settled enough to have stopped moving, and recent enough to describe the channel. A channel scored against this fallback SHALL be distinguishable from one scored against its newest posts, because the fallback is only as recent as the history it was taken from.
-
-A post SHALL be scoreable at any age inside the alerting window, not only at ages near a collection sample offset. Sampling is irregular by design, so ages cluster differently for posts published at different times of day; scoring only near the offsets makes a post's chance of being measured depend on when it was published.
 
 #### Scenario: The same reach scores differently on channels of different size
 
@@ -35,6 +29,10 @@ A post SHALL be scoreable at any age inside the alerting window, not only at age
 - **WHEN** it is scored
 - **THEN** its score is near zero
 
+### Requirement: A Channel's Reference Is Its Newest Posts
+
+The channel's reference SHALL be the median, over a configured number of its most recent posts within a configured maximum age, of the value each reached at the age the growth curve is normalised to; for comments, the mean of those values, zeros included. It MUST be recomputed as posts are collected. A reference fixed in time measures a channel against its past self: a growing channel's ordinary posts read as remarkable, and nothing a shrinking one publishes can.
+
 #### Scenario: A channel that has grown is measured against what it is now
 
 - **GIVEN** a channel whose newest posts reach far more than its posts did some months ago
@@ -54,12 +52,20 @@ A post SHALL be scoreable at any age inside the alerting window, not only at age
 - **WHEN** it publishes posts that reach a different level and baselines are refreshed again
 - **THEN** the new reference reflects those posts
 
+### Requirement: A Quiet Channel Falls Back To Its Settled Posts
+
+Where a channel has too few recent posts for a reference of its own, its comments SHALL NOT be scored, and its other metrics SHALL fall back to the median of its settled posts scaled by its kind's factor, taken from posts settled enough to have stopped moving and recent enough to describe the channel. A channel scored against this fallback SHALL be distinguishable from one scored against its newest posts, because the fallback is only as recent as the history it was taken from.
+
 #### Scenario: A channel too quiet for a recent reference falls back to its settled posts
 
 - **GIVEN** a channel with fewer recent posts than the configured minimum but enough settled history
 - **WHEN** its baseline is computed
 - **THEN** it is given the median of its settled posts scaled by its kind's factor
 - **AND** the baseline records that it is the fallback
+
+### Requirement: A Post Is Scoreable At Any Age Inside The Window
+
+A post SHALL be scoreable at any age inside the alerting window, not only at ages near a collection sample offset. Sampling is irregular by design, so ages cluster differently for posts published at different times of day; scoring only near the offsets makes a post's chance of being measured depend on when it was published.
 
 #### Scenario: A reading between sample offsets is still scored
 
@@ -114,14 +120,6 @@ Samples are irregular by design: quiet hours, suspend and rate limits all cost r
 
 The system SHALL store the channel baselines, the growth curves and the spread each was measured against, refresh them on a configured cadence, and record the parameters under which each was computed, including which kind of reference each channel was given.
 
-The spread SHALL be measured per age band rather than once per metric, because the dispersion of the residual is not constant across a post's life, and one figure makes a threshold stricter at some ages than at others without saying so.
-
-The spread SHALL be measured against the reference each post would actually have been scored against: one built from the channel's posts whose reference age had passed before that post was published. A post MUST NOT take part in the reference its own residual is measured from, because a reference containing the posts it is measured on fits them, and a ruler fitted to its own readings is too narrow — the direction that over-alerts.
-
-A band's own spread SHALL be used only where it was measured on at least a configured number of distinct posts, as well as a configured number of readings. A post is read several times inside one band, so readings overstate how much a band has seen; a spread measured on a handful of posts is too narrow as often as not, and too narrow is the direction that over-alerts.
-
-Where a channel kind has too little data to fit a curve of its own, the system SHALL fall back to a curve pooled across kinds rather than leaving that kind unscoreable, and SHALL record on the stored baseline that the curve was borrowed. A borrowed estimate that reports itself is not the same as a partial baseline assembled silently.
-
 #### Scenario: Scoring reads stored baselines
 
 - **WHEN** the scoring pass runs
@@ -147,17 +145,29 @@ Where a channel kind has too little data to fit a curve of its own, the system S
 - **THEN** no alert is raised
 - **AND** the run reports that there are no baselines rather than appearing to find nothing
 
+### Requirement: The Spread Is Measured Per Age Band
+
+The spread SHALL be measured per age band rather than once per metric, because the dispersion of the residual is not constant across a post's life, and one figure makes a threshold stricter at some ages than at others without saying so.
+
 #### Scenario: The spread is measured where the reading is
 
 - **GIVEN** a metric whose residuals are more dispersed on young posts than on settled ones
 - **WHEN** a reading is scored
 - **THEN** it is divided by the spread measured for its own age band
 
+### Requirement: A Post Takes No Part In Its Own Reference
+
+The spread SHALL be measured against the reference each post would actually have been scored against: one built from the channel's posts whose reference age had passed before that post was published. A post MUST NOT take part in the reference its own residual is measured from, because a reference containing the posts it is measured on fits them, and a ruler fitted to its own readings is too narrow — the direction that over-alerts.
+
 #### Scenario: A post does not narrow its own ruler
 
 - **GIVEN** a post whose readings contribute to the spread
 - **WHEN** baselines are refreshed
 - **THEN** its residuals are measured against a reference built only from posts whose reference age had passed before it was published
+
+### Requirement: A Band's Own Spread Needs Enough Distinct Posts
+
+A band's own spread SHALL be used only where it was measured on at least a configured number of distinct posts, as well as a configured number of readings. A post is read several times inside one band, so readings overstate how much a band has seen; a spread measured on a handful of posts is too narrow as often as not, and too narrow is the direction that over-alerts.
 
 #### Scenario: A band too thin to measure its own spread borrows the metric's
 
@@ -173,6 +183,10 @@ Where a channel kind has too little data to fit a curve of its own, the system S
 - **THEN** no spread of its own is stored for that band
 - **AND** a reading in it is scored against the metric's pooled spread
 
+### Requirement: A Kind Without A Curve Borrows The Pooled One
+
+Where a channel kind has too little data to fit a curve of its own, the system SHALL fall back to a curve pooled across kinds rather than leaving that kind unscoreable, and SHALL record on the stored baseline that the curve was borrowed. A borrowed estimate that reports itself is not the same as a partial baseline assembled silently.
+
 #### Scenario: A kind with no curve of its own is still scored
 
 - **GIVEN** a channel kind with too few posts to fit its own growth curve
@@ -182,9 +196,7 @@ Where a channel kind has too little data to fit a curve of its own, the system S
 
 ### Requirement: A Channel Without Enough History Is Not Scored, And Is Reported
 
-The system SHALL score only channels that have either enough recent posts for a reference of their own, or at least the configured number of mature posts inside the mature window, and SHALL report how many channels were excluded for want of history.
-
-It SHALL also report how many scored channels are measured against the fallback rather than their newest posts. "No alerts from this channel" and "this channel is not scored at all" are different facts, and only one of them means the channel is quiet; "scored against what it is now" and "scored against what it was when its history was collected" are a second such pair, and MUST be reported rather than inferred.
+The system SHALL score only channels that have either enough recent posts for a reference of their own, or at least the configured number of mature posts inside the mature window, and SHALL report how many channels were excluded for want of history. "No alerts from this channel" and "this channel is not scored at all" are different facts, and only one of them means the channel is quiet.
 
 #### Scenario: A thin channel produces no score
 
@@ -196,11 +208,6 @@ It SHALL also report how many scored channels are measured against the fallback 
 
 - **WHEN** a scoring run finishes
 - **THEN** it reports how many in-scope channels have no baseline
-
-#### Scenario: The channels on the fallback are counted
-
-- **WHEN** baselines are refreshed, or a scoring run finishes
-- **THEN** it reports how many channels are measured against their newest posts and how many against their settled history
 
 #### Scenario: A channel with recent posts but no settled history is scored
 
@@ -215,6 +222,15 @@ It SHALL also report how many scored channels are measured against the fallback 
 - **WHEN** baselines are refreshed
 - **THEN** it is given no baseline
 - **AND** it is counted among the channels excluded for want of history
+
+### Requirement: The Channels On The Fallback Are Reported
+
+The system SHALL report how many scored channels are measured against the fallback rather than their newest posts. "Scored against what it is now" and "scored against what it was when its history was collected" are different facts, and MUST be reported rather than inferred.
+
+#### Scenario: The channels on the fallback are counted
+
+- **WHEN** baselines are refreshed, or a scoring run finishes
+- **THEN** it reports how many channels are measured against their newest posts and how many against their settled history
 
 ### Requirement: One Post Raises One Alert
 
@@ -265,9 +281,7 @@ The system SHALL take the score threshold, the minimum history and the minimum c
 
 ### Requirement: Scoring Can Be Replayed Over History Without Sending Anything
 
-The system SHALL be able to score stored snapshots as of a past moment, report what would have been raised, and write no alert and send no message while doing so. The replay MUST use the same scoring code as the live pass, including the folding of a channel's spikes into one event, and SHALL report which spikes would have been folded and into which head.
-
-A threshold that can only be tried in production costs a day per experiment and is therefore chosen once. A replay implemented separately would agree with the live pass on the cases anyone checks and diverge on the one that matters.
+The system SHALL be able to score stored snapshots as of a past moment and report what would have been raised, writing no alert and sending no message. The replay MUST use the same scoring code as the live pass, the folding of a channel's spikes into one event included, and SHALL report which spikes would have been folded and into which head. A threshold tried only in production costs a day per experiment, and a replay written separately would diverge on the one case that matters.
 
 #### Scenario: A replay reports without raising
 
@@ -314,18 +328,22 @@ The system SHALL score from stored snapshots and stored history alone. It MUST i
 
 The system SHALL treat every spike of one channel that crosses the threshold within a configured window of that channel's first spike as part of one event. The first spike SHALL be raised as the event's head; each later spike of the same channel inside the window SHALL be recorded as folded into that head, and MUST NOT be delivered as a message of its own.
 
-When a whole channel's audience grows at once — an advertisement, a broadcast, purchased views — every recent post crosses together, and one message per post tells one event many times. The window is measured from the head, so a channel raises at most one direct spike message per window, and an event on a later day starts a new head.
-
-The order of spikes inside one pass SHALL be by the moment each crossed the threshold, and among spikes that crossed at the same moment by score, highest first, so the head is the earliest and then the most remarkable post.
-
-A folded spike SHALL be recorded rather than discarded: a post folded into an event MUST NOT be raised again as a new head once the window has passed.
-
 #### Scenario: Posts of one channel crossing together raise one head
 
 - **GIVEN** a channel with several recent posts that all cross the threshold in the same pass
 - **WHEN** the scoring pass runs
 - **THEN** one alert is raised as the head
 - **AND** every other crossing post of that channel is recorded as folded into it
+
+#### Scenario: Spikes of different channels do not fold together
+
+- **GIVEN** two channels whose posts cross the threshold in the same pass
+- **WHEN** the scoring pass runs
+- **THEN** each channel has its own head
+
+### Requirement: The Fold Window Is Measured From The Head
+
+The window SHALL be measured from the head, so a channel raises at most one direct spike message per window, and an event on a later day starts a new head. When a whole channel's audience grows at once — an advertisement, a broadcast, purchased views — every recent post crosses together, and one message per post would tell one event many times.
 
 #### Scenario: A later crossing inside the window folds into the existing head
 
@@ -340,17 +358,19 @@ A folded spike SHALL be recorded rather than discarded: a post folded into an ev
 - **WHEN** another of its posts crosses the threshold
 - **THEN** that spike is raised as a new head
 
-#### Scenario: Spikes of different channels do not fold together
+### Requirement: A Folded Spike Is Not Raised Again
 
-- **GIVEN** two channels whose posts cross the threshold in the same pass
-- **WHEN** the scoring pass runs
-- **THEN** each channel has its own head
+A folded spike SHALL be recorded rather than discarded: a post folded into an event MUST NOT be raised again as a new head once the window has passed.
 
 #### Scenario: A folded post is not raised again later
 
 - **GIVEN** a post whose spike was folded into a head
 - **WHEN** the scoring pass runs again after the window has passed while the post is still above the threshold
 - **THEN** no further alert is raised for that post and metric
+
+### Requirement: The Head Is The Earliest Crossing
+
+The order of spikes inside one pass SHALL be by the moment each crossed the threshold, and among spikes that crossed at the same moment by score, highest first, so the head is the earliest and then the most remarkable post.
 
 #### Scenario: The head is the earliest crossing
 

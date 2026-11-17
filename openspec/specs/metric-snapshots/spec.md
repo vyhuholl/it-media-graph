@@ -1,7 +1,7 @@
 # metric-snapshots Specification
 
 ## Purpose
-TBD - created by archiving change add-metric-snapshots. Update Purpose after archive.
+The poll loop that reads each seed's newest posts and their counters on a schedule set by post age, storing new posts and append-only readings from one request, spending no quota-bearing request, and staying up through rate limits, quiet hours and lost connections.
 
 ## Requirements
 
@@ -316,7 +316,7 @@ The system SHALL report the work the loop skipped, not only the work it complete
 
 ### Requirement: The Loop Survives A Lost Connection
 
-The system SHALL keep the watch loop able to recover from a connection that has been lost or has stopped answering, without operator action. The loop SHALL confirm it is connected before each poll and MUST NOT poll over a connection the client has given up on. A connection that is lost MUST NOT be recorded as a failure of the channels that were due while it was down. A request that passes its deadline SHALL cause the connection to be discarded rather than reused. Where the loop makes no progress at all while channels are due, it SHALL stop with a non-zero exit rather than continue to appear healthy.
+The system SHALL keep the watch loop able to recover from a connection that has been lost or has stopped answering, without operator action. The loop SHALL confirm it is connected before each poll and MUST NOT poll over a connection the client has given up on. A connection that is lost MUST NOT be recorded as a failure of the channels that were due while it was down. A request that passes its deadline SHALL cause the connection to be discarded rather than reused.
 
 #### Scenario: A poll is not issued over a connection the client gave up on
 
@@ -359,6 +359,10 @@ The system SHALL keep the watch loop able to recover from a connection that has 
 - **WHEN** the loop continues
 - **THEN** the remaining due channels are polled once the connection is re-established
 - **AND** the loop is still running
+
+### Requirement: A Loop That Makes No Progress Exits
+
+Where the watch loop makes no progress at all while channels are due, it SHALL stop with a non-zero exit rather than continue to appear healthy, so that a supervisor restarts it.
 
 #### Scenario: A loop that makes no progress exits
 

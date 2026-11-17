@@ -7,7 +7,7 @@ This capability owns where data read from the YouTube Data API lives, how it is 
 
 ### Requirement: Data From YouTube Has One Place
 
-The system SHALL store data read from the API in one place only: a channel's as its latest payload, a video's as its latest payload, a reading's counters as that reading, which channel a linked video, handle or legacy name belongs to as that name's lookup, which channels a seed features as that seed's featured list, and which channels a search returned as that search's results. A title, handle, description or statistic MUST NOT be copied into any other table, column or log record. What the system works out from a video's data SHALL be stored with that video's payload and removed with it.
+The system SHALL store data read from the API in one place: a channel's and a video's as its latest payload, a reading's counters as that reading, the channel behind a linked video, handle or legacy name as its lookup, a seed's featured channels as its featured list, and a search's channels as its results. A title, handle, description or statistic MUST NOT be copied into another table, column or log record. What is worked out from a video's data SHALL be stored and removed with its payload.
 
 #### Scenario: The title lives in the payload alone
 
@@ -113,7 +113,7 @@ The system SHALL run the refresh daily on the collection host without an operato
 
 ### Requirement: Nothing Is Removed By Age
 
-The system SHALL NOT remove YouTube data because of its age: channel and video payloads, readings, lookups, featured lists, search runs and results, and the history walk's records stay until YouTube stops returning the object or the operator removes them. An answer that decides what to ask YouTube next — a lookup, a featured list, a search run with its results — SHALL be read only while it is younger than `youtube_answers_fresh_days` (30 by default); an older one is kept, not read, and replaced when the question is asked again.
+The system SHALL NOT remove YouTube data because of its age: channel and video payloads, readings, lookups, featured lists, search runs and results, and the walk's records stay until YouTube stops returning the object or the operator removes them. An answer that decides what to ask YouTube next — a lookup, a featured list, a search run and its results — SHALL be read only while younger than `youtube_answers_fresh_days` (30 by default); an older one is kept unread and replaced when asked again.
 
 #### Scenario: An old payload is kept
 

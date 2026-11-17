@@ -1,7 +1,7 @@
 # channel-inventory Specification
 
 ## Purpose
-TBD - created by archiving change add-channel-inventory. Update Purpose after archive.
+The inventory of Telegram channels that collection reads from: how a channel enters it — from the account's own subscriptions, by hand, or by reference — how the operator reviews it, and why no record is ever deleted. It also owns the collecting account's session and how that account connects out.
 ## Requirements
 ### Requirement: Telegram Session Authentication
 

@@ -1,7 +1,7 @@
 # forward-graph Specification
 
 ## Purpose
-TBD - created by archiving change add-forward-graph. Update Purpose after archive.
+The graph of who forwards and mentions whom, derived from the raw layer and rebuildable from it, and the channels discovered through those references, with the resolution that names them within Telegram's limits.
 ## Requirements
 ### Requirement: Derivation Is Rebuildable
 
@@ -157,7 +157,7 @@ The system SHALL add every channel referenced from an in-scope source that is no
 
 ### Requirement: Reference Resolution
 
-The system SHALL provide `itgraph resolve`, obtaining username and title for channels that entered the inventory by reference. The mention queue SHALL be worked in order of how many distinct channels mention each username, most first, so that a bounded run spends the daily quota on the references carrying the most independent evidence. A run MAY be narrowed to a single channel named by its Telegram id, in which case that channel is the whole run; the named channel SHALL still be subject to the queue's own rules, and a channel outside the queue SHALL be refused without a request being made.
+The system SHALL provide `itgraph resolve`, obtaining username and title for channels that entered the inventory by reference. The mention queue SHALL be worked most-mentioned first, by distinct mentioning channels, so that a bounded run spends the daily quota on the references with the most independent evidence. A run MAY name a single channel by its Telegram id, which is then the whole run, still under the queue's own rules; a channel outside the queue SHALL be refused without a request.
 
 #### Scenario: An identifier is resolved
 

@@ -1,7 +1,7 @@
 # alert-delivery Specification
 
 ## Purpose
-TBD - created by archiving change add-alert-bot. Update Purpose after archive.
+How an alert reaches the operator: raised once, claimed, sent through the bot and confirmed, held through quiet hours and the daily cap rather than dropped, worded by its kind, and accounted for in the bot's own report. The bot reaches only its configured chats, holds no Telegram session and writes no collection state.
 
 ## Requirements
 
@@ -239,7 +239,7 @@ The system SHALL run the bot without a Telethon session. It MUST NOT acquire the
 
 The system SHALL identify, in each delivered alert, the post it is about, the channel that published it, how old the post is, and what crossed the threshold — worded according to the kind of alert it is.
 
-The delivery path itself stays kind-blind: claiming, the daily cap, quiet hours, the digest and the retry never inspect the kind. Only the wording does, because a kind is precisely a claim about what the message should say, and a single wording would deliver a view spike as several sources reposting.
+Only the wording reads the kind: claiming, the daily cap, quiet hours, the digest and the retry never inspect it. A kind is a claim about what the message should say, and one wording would deliver a view spike as several sources reposting.
 
 #### Scenario: The alert links to the post
 
@@ -299,10 +299,6 @@ The system SHALL let the operator ask, in each chat the bot is configured for, w
 
 The system SHALL NOT deliver an alert folded into another as a message of its own. The head's message SHALL state how many other posts of the channel were folded into it at the moment it is rendered, so a reader learns that the whole channel was elevated rather than this one post.
 
-A folded alert SHALL be marked delivered, as folded, once its head has been delivered, and MUST NOT be counted as outstanding while it waits for its head. A fold recorded after its head was already delivered belongs to an event the reader has been told about, and is marked delivered without a further message.
-
-Folding is not withholding: every folded alert is recorded, stays attributable to the head it was told through, and is counted in the bot's own report, so "folded into a message you received" and "never sent" remain different facts.
-
 #### Scenario: A folded alert is not sent on its own
 
 - **GIVEN** an alert folded into a head
@@ -321,6 +317,10 @@ Folding is not withholding: every folded alert is recorded, stays attributable t
 - **WHEN** it is delivered
 - **THEN** its message makes no claim about other posts of the channel
 
+### Requirement: A Folded Alert Is Settled With Its Head
+
+A folded alert SHALL be marked delivered, as folded, once its head has been delivered, and MUST NOT be counted as outstanding while it waits for its head. A fold recorded after its head was already delivered belongs to an event the reader has been told about, and is marked delivered without a further message.
+
 #### Scenario: A fold is settled once its head is delivered
 
 - **GIVEN** an alert folded into a head that has been delivered
@@ -333,6 +333,10 @@ Folding is not withholding: every folded alert is recorded, stays attributable t
 - **GIVEN** an alert folded into a head held by quiet hours
 - **WHEN** the operator asks for status
 - **THEN** the folded alert is not counted among the undelivered alerts
+
+### Requirement: A Folded Alert Is Recorded, Not Withheld
+
+Folding SHALL NOT be withholding: every folded alert SHALL be recorded, stay attributable to the head it was told through, and be counted in the bot's own report, so that "folded into a message you received" and "never sent" remain different facts.
 
 #### Scenario: Folded alerts do not count towards the daily cap
 

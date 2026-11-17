@@ -1,7 +1,7 @@
 # repost-cascades Specification
 
 ## Purpose
-TBD - created by archiving change add-alert-bot. Update Purpose after archive.
+Recognising that a post is travelling: distinct sources outside the post's own family that forward or mention it inside a window, read from derived data alone, re-runnable, and reported with how fresh their evidence is.
 ## Requirements
 ### Requirement: A Cascade Is Distinct Unaffiliated Sources
 

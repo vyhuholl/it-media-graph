@@ -1,7 +1,7 @@
 # channel-affiliation Specification
 
 ## Purpose
-TBD - created by archiving change detect-affiliated-channels. Update Purpose after archive.
+Recognising that several channels share an author: signals read from collected data propose ranked candidate pairs with their evidence, and only the operator's decision makes them a family. Detection never records a family and never changes an observed edge.
 ## Requirements
 ### Requirement: Detection Reads Only Collected Data
 
@@ -436,10 +436,6 @@ Every threshold and weight governing detection SHALL be settable per run, and MU
 
 The system SHALL treat a username token as evidence of a shared author when a channel carrying that token names the same token as a handle in its own stored description. Every pair among the channels carrying such a token SHALL be proposed.
 
-The evidence is the signature, not its rarity: the strength of this signal MUST NOT decrease as more channels carry the token. The number of channels a named handle may be carried by SHALL be bounded by its own configurable maximum, which exists to bound the number of pairs one token can produce and MUST NOT be shared with the rarity-weighted token signal.
-
-This signal MUST NOT resolve a handle to a channel. It compares text against the usernames the inventory already holds, so it SHALL accept a handle that could not be a Telegram username, and a handle naming no channel in the inventory is evidence exactly as a handle naming one.
-
 #### Scenario: A signed handle proposes the whole group
 
 - **GIVEN** three channels whose usernames share a token
@@ -455,11 +451,38 @@ This signal MUST NOT resolve a handle to a channel. It compares text against the
 - **WHEN** detection runs
 - **THEN** no candidate is formed on this signal
 
+#### Scenario: A short handle is not evidence
+
+- **GIVEN** a named handle shorter than the configured minimum token length
+- **WHEN** detection runs
+- **THEN** no candidate is formed on this signal
+
+#### Scenario: No description to read
+
+- **GIVEN** several channels sharing a token, none of which has a stored description
+- **WHEN** detection runs
+- **THEN** this signal forms no candidate among them
+- **AND** they remain eligible for every other signal
+
+### Requirement: A Named Handle Is Not Weighed By Its Rarity
+
+The evidence is the signature, not its rarity: the strength of the named-handle signal MUST NOT decrease as more channels carry the token. The number of channels a named handle may be carried by SHALL be bounded by its own configurable maximum, which exists to bound the number of pairs one token can produce and MUST NOT be shared with the rarity-weighted token signal.
+
 #### Scenario: A larger group is not weaker evidence
 
 - **GIVEN** one named-handle group of two channels and one of five
 - **WHEN** detection runs
 - **THEN** the contribution of this signal to a pair from the larger group is no smaller than its contribution to a pair from the smaller
+
+#### Scenario: A handle on too many channels
+
+- **GIVEN** a token carried by more channels than this signal's configured maximum
+- **WHEN** detection runs
+- **THEN** no candidate is formed on this signal
+
+### Requirement: A Named Handle Is Compared, Never Resolved
+
+The named-handle signal MUST NOT resolve a handle to a channel. It compares text against the usernames the inventory already holds, so it SHALL accept a handle that could not be a Telegram username, and a handle naming no channel in the inventory is evidence exactly as a handle naming one.
 
 #### Scenario: A handle that could not be a username
 
@@ -475,25 +498,6 @@ This signal MUST NOT resolve a handle to a channel. It compares text against the
 - **WHEN** detection runs
 - **THEN** it is evidence on this signal just the same
 - **AND** it is not reported as an unresolvable reference of the description signal
-
-#### Scenario: A handle on too many channels
-
-- **GIVEN** a token carried by more channels than this signal's configured maximum
-- **WHEN** detection runs
-- **THEN** no candidate is formed on this signal
-
-#### Scenario: A short handle is not evidence
-
-- **GIVEN** a named handle shorter than the configured minimum token length
-- **WHEN** detection runs
-- **THEN** no candidate is formed on this signal
-
-#### Scenario: No description to read
-
-- **GIVEN** several channels sharing a token, none of which has a stored description
-- **WHEN** detection runs
-- **THEN** this signal forms no candidate among them
-- **AND** they remain eligible for every other signal
 
 #### Scenario: The signal reads only stored data
 
