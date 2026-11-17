@@ -83,8 +83,8 @@ Rules for every task:
 
 A release of its own. It carries no revision.
 
-- [ ] 6.1 **(operator)** Tag, pin and deploy to the test environment, then rehearse a restore from the claim through the infrastructure repository. Verify: the deploy reports no migration, the restore brings up the newest `full-…` dump from `weekly/`, and its trial dump lands in `weekly/`.
-- [ ] 6.2 **(operator)** Pin and deploy to production. Verify: the deploy reports no migration, and no file appears in `premigration/`.
+- [x] 6.1 **(operator)** Tag, pin and deploy to the test environment, then rehearse a restore from the claim through the infrastructure repository. Verify: the deploy reports no migration, the restore brings up the newest `full-…` dump from `weekly/`, and its trial dump lands in `weekly/`.
+- [x] 6.2 **(operator)** Pin and deploy to production. Verify: the deploy reports no migration, and no file appears in `premigration/`.
 ## Workflow follow-up
 
 - Archive once 6.2 is done. The two checks below come after it, and the archive does not wait for them.

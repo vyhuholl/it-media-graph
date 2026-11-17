@@ -70,6 +70,8 @@ Every series SHALL be worked out at scrape time from durable state in the databa
 | `itgraph_youtube_weekly_list_delivered_timestamp_seconds{route}` | gauge | when the newest delivered weekly list of that language went out, 0 when none |
 | `itgraph_telegram_weekly_list_computed_timestamp_seconds` | gauge | when Telegram's newest weekly list was computed, 0 when none |
 | `itgraph_telegram_weekly_list_delivered_timestamp_seconds` | gauge | when Telegram's newest delivered weekly list went out, 0 when none |
+| `itgraph_telegram_seeds_awaiting_history` | gauge | seeds in scope whose history walk is not complete |
+| `itgraph_telegram_oldest_awaiting_history_seconds` | gauge | how long ago the earliest of them was marked a seed, 0 when none |
 
 #### Scenario: Quiet hours
 
@@ -136,6 +138,19 @@ Every series SHALL be worked out at scrape time from durable state in the databa
 - **GIVEN** no refresh recorded
 - **WHEN** a client scrapes
 - **THEN** `itgraph_youtube_last_complete_refresh_timestamp_seconds` is 0
+
+#### Scenario: Seeds awaiting their walk
+
+- **GIVEN** two seeds marked three hours and one hour ago, neither walked, and a seed whose walk is complete
+- **WHEN** a client scrapes
+- **THEN** `itgraph_telegram_seeds_awaiting_history` is 2
+- **AND** `itgraph_telegram_oldest_awaiting_history_seconds` is about 10800
+
+#### Scenario: What is out of scope does not wait
+
+- **GIVEN** a rejected channel, a discussion chat and a seed whose walk failed permanently, none walked
+- **WHEN** a client scrapes
+- **THEN** both series are 0
 
 ### Requirement: Metrics Carry Nothing YouTube Said
 
@@ -209,3 +224,25 @@ The exporter SHALL run wherever the role runs, so that its series, its role's gr
 - **GIVEN** a test environment on a restored copy, with the collector at zero replicas and no YouTube key
 - **WHEN** a client scrapes
 - **THEN** the response is 200
+
+### Requirement: The Exporter Reads No Channel's Name Or Notes
+
+Of Telegram's inventory the exporter SHALL read only a channel's id, status, whether it is a chat and when it was reviewed; of a channel's history walk, only its status and the kind of its failure. This SHALL be enforced by the database role it connects as.
+
+#### Scenario: The role reads when a channel was reviewed
+
+- **GIVEN** the exporter's database role
+- **WHEN** it selects the review time of the inventory's channels and the status of their walks
+- **THEN** the rows are returned
+
+#### Scenario: The role cannot read a channel's name or notes
+
+- **GIVEN** the exporter's database role
+- **WHEN** it selects a channel's username, title, kind, rejection reason, or either note
+- **THEN** the database refuses with a permission error
+
+#### Scenario: The role cannot read a walk's cursor or its failure's text
+
+- **GIVEN** the exporter's database role
+- **WHEN** it selects a walk's message cursors, its cutoff or its failure detail
+- **THEN** the database refuses with a permission error

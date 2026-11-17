@@ -71,13 +71,13 @@ A deploy SHALL run a migration only when the database is behind head. A deploy a
 - **GIVEN** a host whose schema is at head
 - **WHEN** the full deploy runs
 - **THEN** no migration runs
-- **AND** no new file appears among the host's full dumps, and none is pruned
+- **AND** no new file appears among the host's pre-migration dumps or its full dumps, and none is pruned
 
 #### Scenario: Behind head
 
 - **GIVEN** a host whose schema is behind head
 - **WHEN** the full deploy runs
-- **THEN** exactly one full dump is taken, before the migration
+- **THEN** exactly one pre-migration dump is taken, before the migration, and no full dump
 - **AND** the output names the revision before and after, and the path of that dump
 
 #### Scenario: Repeated re-runs
@@ -85,7 +85,7 @@ A deploy SHALL run a migration only when the database is behind head. A deploy a
 - **GIVEN** a host whose schema is at head
 - **AND** no scheduled full dump falls due while the deploys run
 - **WHEN** the full deploy is run four times in a row
-- **THEN** the host's full dumps are the same files after the fourth run as before the first
+- **THEN** the host's pre-migration dumps and full dumps are the same files after the fourth run as before the first
 
 ### Requirement: The Deploy Touches Nothing Outside Its Namespace
 

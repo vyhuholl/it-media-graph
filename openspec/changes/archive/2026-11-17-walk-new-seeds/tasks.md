@@ -72,14 +72,14 @@ Rules for every task:
 
 A release of its own.
 
-- [ ] 7.1 **(operator)** Deploy the release to the test environment. Verify: the revision applies; both new series read 0; the YouTube CronJob, where a key is configured, is scheduled hourly.
-- [ ] 7.2 **(operator)** Deploy to production. Verify: both series read 0, and the loop's line shows no page walked.
-- [ ] 7.3 **(operator)** Mark a seed (`itgraph mark … --seed`) outside quiet hours. Verify:
+- [x] 7.1 **(operator)** Deploy the release to the test environment. Verify: the revision applies; both new series read 0; the YouTube CronJob, where a key is configured, is scheduled hourly.
+- [x] 7.2 **(operator)** Deploy to production. Verify: both series read 0, and the loop's line shows no page walked.
+- [x] 7.3 **(operator)** Mark a seed (`itgraph mark … --seed`) outside quiet hours. Verify:
   - within minutes, `itgraph channels --backfill` shows it complete to 2025-07-24, or capped;
   - the series return to 0;
   - its edges appear after the next `derive`;
   - `tg_flood_events` shows nothing new under `watch`.
-- [ ] 7.4 **(operator)** Ask the infrastructure repository for the alert on `itgraph_telegram_oldest_awaiting_history_seconds > 86400` and a panel of both series.
+- [x] 7.4 **(operator)** Ask the infrastructure repository for the alert on `itgraph_telegram_oldest_awaiting_history_seconds > 86400` and a panel of both series.
 
 ## Workflow follow-up
 
