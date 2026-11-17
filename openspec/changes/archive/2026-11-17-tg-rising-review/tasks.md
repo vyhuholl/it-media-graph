@@ -107,18 +107,18 @@ Rules for every task:
 
 A release of its own.
 
-- [ ] 10.1 **(operator)** Deploy the release to the test environment. Verify:
+- [x] 10.1 **(operator)** Deploy the release to the test environment. Verify:
   - the revision applies;
   - `scripts/on-host.sh offer --preview` prints the copy's offers;
   - a run of `itgraph-offer` sends the cards to the test chat;
   - a seed and a rejection pressed there are applied by the next `itgraph-detect`;
   - the three series read sensibly.
-- [ ] 10.2 **(operator)** Deploy to production. Verify, over the first two days:
+- [x] 10.2 **(operator)** Deploy to production. Verify, over the first two days:
   - at most five cards at 11:00 in the Telegram alert chat;
   - presses land within 15 minutes;
   - a pressed seed is walked by the poll loop;
   - nothing is offered twice.
-- [ ] 10.3 **(operator)** Ask the infrastructure repository for the three alerts — a selection older than 25 hours, an offer undelivered for an hour outside quiet hours, a decision unapplied for an hour — and a panel.
+- [x] 10.3 **(operator)** Ask the infrastructure repository for the three alerts — a selection older than 25 hours, an offer undelivered for an hour outside quiet hours, a decision unapplied for an hour — and a panel.
 
 ## Workflow follow-up
 

@@ -182,7 +182,7 @@ After loading, the restore SHALL compare every table's row count with the rows t
 
 ### Requirement: A Restored Copy Acts On Nobody
 
-After a restore, nothing in the copy SHALL cause a message to anyone but the environment's own chat, or a request to Telegram, YouTube or B2. Every alert, every weekly list of either platform and every second wind entry not yet delivered in the dump SHALL be marked delivered before the bot starts, and the restore's read-back SHALL fail if one remains.
+After a restore, nothing in the copy SHALL cause a message to anyone but the environment's own chat, or a request to Telegram, YouTube or B2. Every alert, every weekly list of either platform, every second wind entry and every rising offer not yet delivered in the dump SHALL be marked delivered before the bot starts, every rising offer's decision not yet applied SHALL be closed unapplied, and the restore's read-back SHALL fail if one remains.
 
 #### Scenario: An undelivered alert in the dump
 
@@ -214,6 +214,20 @@ After a restore, nothing in the copy SHALL cause a message to anyone but the env
 - **WHEN** the restore finishes and the bot starts
 - **THEN** no message of them is sent, and each is marked delivered
 - **AND** the read-back fails while one remains undelivered
+
+#### Scenario: An undelivered rising offer in the dump
+
+- **GIVEN** a dump holding a day's selection computed at 11:00 and not yet sent
+- **WHEN** the restore finishes and the bot starts
+- **THEN** no card of it is sent, and each offer is marked delivered
+- **AND** the read-back fails while one remains undelivered
+
+#### Scenario: A decision not yet applied in the dump
+
+- **GIVEN** a dump holding a seed decided on a card and not yet applied
+- **WHEN** the restore finishes and the detection pass runs on the copy
+- **THEN** the channel's review in the copy is unchanged, and the decision is closed as not applied
+- **AND** the read-back fails while one remains unapplied
 
 #### Scenario: No collection and no YouTube work
 
