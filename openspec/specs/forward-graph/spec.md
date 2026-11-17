@@ -2,7 +2,9 @@
 
 ## Purpose
 The graph of who forwards and mentions whom, derived from the raw layer and rebuildable from it, and the channels discovered through those references, with the resolution that names them within Telegram's limits.
+
 ## Requirements
+
 ### Requirement: Derivation Is Rebuildable
 
 The system SHALL derive all graph data from the raw layer alone, and MUST NOT modify the raw layer while doing so.
@@ -363,7 +365,7 @@ The system SHALL NOT record an edge whose source and target are the same channel
 
 ### Requirement: Pending Mentions Record Their Sources
 
-The system SHALL record which channels mention each pending username, as a set of distinct source channels rather than a count, and MUST keep that record re-derivable: a derivation pass over unchanged raw messages writes no new source.
+The system SHALL record which channels mention each pending username, as a set of distinct source channels rather than a count, each with the publication time of the first and the last of its messages that mentioned the name, and MUST keep that record re-derivable: a derivation pass over unchanged raw messages writes no new source and moves no time.
 
 #### Scenario: A pending mention records the channel that made it
 
@@ -384,6 +386,18 @@ The system SHALL record which channels mention each pending username, as a set o
 - **WHEN** derivation runs
 - **THEN** the username has one recorded source
 
+#### Scenario: A source keeps when it mentioned the name
+
+- **GIVEN** an in-scope channel that mentioned an unknown username in a message of 1 March and again in one of 9 March
+- **WHEN** derivation runs
+- **THEN** its source row holds 1 March as the first mention and 9 March as the last
+
+#### Scenario: A later mention moves the last time only
+
+- **GIVEN** a recorded source whose last mention was 9 March
+- **WHEN** the channel mentions the name again on 20 March and derivation runs
+- **THEN** the source's last mention is 20 March and its first is unchanged
+
 #### Scenario: Re-derivation adds nothing
 
 - **GIVEN** a derivation pass has already recorded the sources of a pending mention
@@ -402,4 +416,3 @@ The system SHALL record which channels mention each pending username, as a set o
 - **WHEN** derivation is asked to rebuild from scratch
 - **THEN** the recorded sources are emptied along with the edges and the pending mentions
 - **AND** the pass that follows records them again from the raw layer
-

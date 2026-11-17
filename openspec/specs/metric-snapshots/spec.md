@@ -90,30 +90,6 @@ The system SHALL confine the watch loop to fetching and storing. It MUST NOT wri
 - **WHEN** the derivation pass is run afterwards
 - **THEN** it produces the same edges it would have produced had the messages arrived from a history walk
 
-### Requirement: Polling Spends No Quota-Bearing Request
-
-The system SHALL poll a channel using its peer from the session's entity cache alone. A poll MUST NOT resolve a username and MUST NOT request extended channel information.
-
-#### Scenario: The peer comes from the session's own cache
-
-- **GIVEN** an in-scope channel whose peer the session can supply
-- **WHEN** it is polled
-- **THEN** the peer is obtained from the session's entity cache
-- **AND** no username is resolved
-
-#### Scenario: A channel with no cached peer is skipped rather than resolved
-
-- **GIVEN** an in-scope channel whose peer the session cannot supply
-- **WHEN** the loop reaches it
-- **THEN** no username resolution is requested
-- **AND** the channel is skipped and counted as such
-- **AND** the loop continues with the remaining channels
-
-#### Scenario: A running loop resolves nothing, however long it runs
-
-- **WHEN** the loop has polled every in-scope channel
-- **THEN** it has issued no username resolution and no extended-information request
-
 ### Requirement: Per-Channel Poll Schedule
 
 The system SHALL hold a next-due moment per channel and poll only channels that are due. The interval SHALL be derived from the age of the channel's youngest tracked post and, where it has none, from the channel's own posting rate, and MUST stay within configured bounds.
@@ -449,3 +425,35 @@ The system SHALL take late readings only from polls the schedule makes anyway. A
 - **WHEN** a poll at 9 days stores its late reading
 - **THEN** the snapshot carries the moment of that poll
 - **AND** its age is obtained from that moment and the post's publication date alone
+
+### Requirement: Polls Spend No Quota-Bearing Request
+
+The system SHALL poll a channel using its peer from the session's entity cache alone. A poll MUST NOT resolve a username and MUST NOT request extended channel information. The loop SHALL request no extended information at all, and resolve nothing but the head of the rising ranking under its cap (telegram-rising-candidates).
+
+#### Scenario: The peer comes from the session's own cache
+
+- **GIVEN** an in-scope channel whose peer the session can supply
+- **WHEN** it is polled
+- **THEN** the peer is obtained from the session's entity cache
+- **AND** no username is resolved
+
+#### Scenario: A channel with no cached peer is skipped rather than resolved
+
+- **GIVEN** an in-scope channel whose peer the session cannot supply
+- **WHEN** the loop reaches it
+- **THEN** no username resolution is requested
+- **AND** the channel is skipped and counted as such
+- **AND** the loop continues with the remaining channels
+
+#### Scenario: A loop with nothing rising resolves nothing, however long it runs
+
+- **GIVEN** no rising candidate awaiting an identity
+- **WHEN** the loop has polled every in-scope channel
+- **THEN** it has issued no username resolution and no extended-information request
+
+#### Scenario: A loop with rising candidates resolves within the cap
+
+- **GIVEN** rising candidates awaiting an identity
+- **WHEN** the loop runs for a day
+- **THEN** its resolutions are of rising candidates only, and fewer than the cap leaves
+- **AND** it has issued no extended-information request

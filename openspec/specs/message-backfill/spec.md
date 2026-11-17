@@ -429,7 +429,7 @@ The system SHALL let the operator read the recorded events, both individually an
 
 ### Requirement: Quota-Free History Walk
 
-The system SHALL walk a channel's history without issuing any request that carries a per-day quota. In particular a walk MUST NOT resolve a username: `contacts.resolveUsername` SHALL be issued by the resolution pass alone, and by no other command.
+The system SHALL walk a channel's history without issuing any request that carries a per-day quota. In particular a walk MUST NOT resolve a username. `contacts.resolveUsername` SHALL be issued only by the resolution pass, by `itgraph add`, and by the poll loop resolving the head of the rising ranking under its cap — never by a walk, a poll or the metadata pass.
 
 #### Scenario: The peer comes from the session's own cache
 

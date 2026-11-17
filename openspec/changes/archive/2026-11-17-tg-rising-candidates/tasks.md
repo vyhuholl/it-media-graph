@@ -84,13 +84,13 @@ Rules for every task:
 
 A release of its own.
 
-- [ ] 9.1 **(operator)** Deploy the release to the test environment. Verify: the revision applies; after the next `itgraph-detect`, `scripts/on-host.sh rising` prints a ranking of the restored copy; the series reads 0 for every command.
-- [ ] 9.2 **(operator)** Deploy to production. Verify, over the first day:
+- [x] 9.1 **(operator)** Deploy the release to the test environment. Verify: the revision applies; after the next `itgraph-detect`, `scripts/on-host.sh rising` prints a ranking of the restored copy; the series reads 0 for every command.
+- [x] 9.2 **(operator)** Deploy to production. Verify, over the first day:
   - `itgraph rising` shows the head;
   - the series shows the loop's resolutions, never more than ten in 24 hours;
   - `tg_flood_events` holds nothing new, or, if a wait came, polls went on through it;
   - resolved candidates appear in the ranking with their usernames.
-- [ ] 9.3 **(operator)** Ask the infrastructure repository for the alert on `itgraph_telegram_resolutions_24h{command="watch"} > 10` and a panel.
+- [x] 9.3 **(operator)** Ask the infrastructure repository for the alert on `itgraph_telegram_resolutions_24h{command="watch"} > 10` and a panel.
 
 ## Workflow follow-up
 

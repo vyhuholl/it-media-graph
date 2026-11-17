@@ -72,6 +72,7 @@ Every series SHALL be worked out at scrape time from durable state in the databa
 | `itgraph_telegram_weekly_list_delivered_timestamp_seconds` | gauge | when Telegram's newest delivered weekly list went out, 0 when none |
 | `itgraph_telegram_seeds_awaiting_history` | gauge | seeds in scope whose history walk is not complete |
 | `itgraph_telegram_oldest_awaiting_history_seconds` | gauge | how long ago the earliest of them was marked a seed, 0 when none |
+| `itgraph_telegram_resolutions_24h{command}` | gauge | resolutions recorded in the last 24 hours, per command that made them: `resolve`, `add`, `watch`; 0 for a command that made none |
 
 #### Scenario: Quiet hours
 
@@ -152,6 +153,12 @@ Every series SHALL be worked out at scrape time from durable state in the databa
 - **WHEN** a client scrapes
 - **THEN** both series are 0
 
+#### Scenario: Resolutions by command
+
+- **GIVEN** three resolutions by `resolve` and two by `watch` in the last 24 hours, and one by `add` a day and a half ago
+- **WHEN** a client scrapes
+- **THEN** `itgraph_telegram_resolutions_24h` is 3 for `command="resolve"`, 2 for `command="watch"` and 0 for `command="add"`
+
 ### Requirement: Metrics Carry Nothing YouTube Said
 
 No series SHALL carry a title, handle, description, channel id, video id or statistic read from YouTube. What the exporter reads of YouTube's tables SHALL be limited to when each row was fetched, enforced by the database role it connects as.
@@ -174,7 +181,7 @@ No series SHALL carry a title, handle, description, channel id, video id or stat
 
 ### Requirement: The Exporter Reads Only Moments And Outcomes
 
-Of a YouTube alert, the exporter SHALL read only its moments and delivery state; of a baseline run of either platform, only when it completed and how many channels it counted; of a YouTube weekly list, only its language and its moments, and of a Telegram weekly list only its moments, and nothing of either's entries or second wind entries; of a refresh's record, only when it ended and how. Each limit SHALL be enforced by the database role it connects as.
+Of a YouTube alert, the exporter SHALL read only its moments and delivery state; of a baseline run of either platform, only when it completed and how many channels it counted; of a YouTube weekly list, only its language and its moments, and of a Telegram weekly list only its moments, and nothing of either's entries or second wind entries; of a refresh's record, only when it ended and how; of a resolution's record, only when it was made and by which command. Each limit SHALL be enforced by the database role it connects as.
 
 #### Scenario: The role cannot read what an alert is about
 
@@ -198,6 +205,12 @@ Of a YouTube alert, the exporter SHALL read only its moments and delivery state;
 
 - **GIVEN** the exporter's database role
 - **WHEN** it selects how many late readings a refresh found due or took, or its error
+- **THEN** the database refuses with a permission error
+
+#### Scenario: The role cannot read what a resolution found
+
+- **GIVEN** the exporter's database role
+- **WHEN** it selects a resolution's kind or outcome
 - **THEN** the database refuses with a permission error
 
 ### Requirement: Only The Monitoring's Scraper Reads The Series
