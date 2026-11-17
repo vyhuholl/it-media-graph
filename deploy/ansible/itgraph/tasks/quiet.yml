@@ -1,0 +1,35 @@
+---
+# Whether quiet hours hold now, or begin before a check that waits up to
+# `__itgraph_quiet_wait` seconds is through. Either way the check proves nothing: the
+# bot holds what it was given, the collector stops polling, and the wait runs out on a
+# service that works. A check that starts at 01:58 and waits five minutes is the case.
+#
+# Read as the code reads a quiet window (`schedule.in_quiet_window`): in the readers'
+# zone, past midnight when it starts later than it ends, and none at all when its bounds
+# are equal. The clock is read once, to the minute, so the wait is given a minute more
+# for the seconds the reading drops.
+
+- name: Read the clock where the readers are
+  ansible.builtin.set_fact:
+    __itgraph_clock: >-
+      {{ ('%02d:%02d' | format(__itgraph_now_hour | int, __itgraph_now_minute | default(0) | int))
+         if __itgraph_now_hour is defined
+         else lookup('ansible.builtin.pipe', 'TZ=' ~ itgraph_timezone ~ ' date +%H:%M') }}
+
+- name: Work out whether quiet hours hold, or begin during the wait
+  ansible.builtin.set_fact:
+    __itgraph_quiet_now: >-
+      {{ __itgraph_q_start | int != __itgraph_q_end | int
+         and ((__itgraph_q_start | int < __itgraph_q_end | int
+               and __itgraph_q_start | int <= __itgraph_q_minute | int < __itgraph_q_end | int)
+              or (__itgraph_q_start | int > __itgraph_q_end | int
+                  and (__itgraph_q_minute | int >= __itgraph_q_start | int
+                       or __itgraph_q_minute | int < __itgraph_q_end | int))) }}
+    __itgraph_quiet_soon: >-
+      {{ __itgraph_q_start | int != __itgraph_q_end | int
+         and ((__itgraph_q_start | int - __itgraph_q_minute | int) % 1440) * 60
+             < (__itgraph_quiet_wait | int) + 60 }}
+  vars:
+    __itgraph_q_minute: "{{ (__itgraph_clock.split(':')[0] | int) * 60 + (__itgraph_clock.split(':')[1] | int) }}"
+    __itgraph_q_start: "{{ (itgraph_quiet_from_hour | int) * 60 }}"
+    __itgraph_q_end: "{{ (itgraph_quiet_to_hour | int) * 60 }}"

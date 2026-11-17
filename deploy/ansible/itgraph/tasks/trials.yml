@@ -238,17 +238,32 @@
     fail_msg: "No dump was made of the restored data: {{ __itgraph_shot_result.logs | truncate(800) }}"
     quiet: true
 
-- name: Work out whether the bot may speak now
+# One answer for both trials, Telegram's and then YouTube's, so the wait it covers is
+# both of theirs: they are proven together or reported together.
+- name: Work out whether the bot may speak for as long as the trials wait
+  ansible.builtin.include_tasks: quiet.yml
+  vars:
+    __itgraph_quiet_wait: >-
+      {{ (__itgraph_trial_retries | default(30) | int) * (__itgraph_trial_delay | default(10) | int)
+         * (2 if __itgraph_has_youtube_alerts | bool else 1) }}
+
+- name: Say why the trials cannot be proven, if they cannot
   ansible.builtin.set_fact:
-    __itgraph_hour_here: "{{ __itgraph_now_hour | default(lookup('ansible.builtin.pipe', 'TZ=' ~ itgraph_timezone ~ ' date +%H')) | int }}"
+    __itgraph_trials_quiet: >-
+      {{ ('the bot holds alerts until ' ~ itgraph_quiet_to_hour ~ ':00 ' ~ itgraph_timezone)
+         if __itgraph_quiet_now | bool
+         else ('the bot falls quiet at ' ~ itgraph_quiet_from_hour ~ ':00 ' ~ itgraph_timezone
+               ~ ', before the wait for its alerts would end')
+         if __itgraph_quiet_soon | bool
+         else '' }}
 
 - name: Note that the alert could not be proven
   ansible.builtin.set_fact:
-    __itgraph_alert_report: "could not be proven: the bot holds alerts until {{ itgraph_quiet_to_hour }}:00 {{ itgraph_timezone }}"
-  when: __itgraph_hour_here | int >= itgraph_quiet_from_hour and __itgraph_hour_here | int < itgraph_quiet_to_hour
+    __itgraph_alert_report: "could not be proven: {{ __itgraph_trials_quiet }}"
+  when: __itgraph_trials_quiet | length > 0
 
 - name: Deliver an alert through the bot
-  when: __itgraph_hour_here | int < itgraph_quiet_from_hour or __itgraph_hour_here | int >= itgraph_quiet_to_hour
+  when: __itgraph_trials_quiet | length == 0
   block:
     - name: Raise a synthetic alert on the newest post of a seed
       ansible.builtin.command:
@@ -298,15 +313,15 @@
 
 - name: Note that the YouTube alerts could not be proven
   ansible.builtin.set_fact:
-    __itgraph_youtube_report: "could not be proven: the bot holds alerts until {{ itgraph_quiet_to_hour }}:00 {{ itgraph_timezone }}"
+    __itgraph_youtube_report: "could not be proven: {{ __itgraph_trials_quiet }}"
   when:
     - __itgraph_has_youtube_alerts | bool
-    - __itgraph_hour_here | int >= itgraph_quiet_from_hour and __itgraph_hour_here | int < itgraph_quiet_to_hour
+    - __itgraph_trials_quiet | length > 0
 
 - name: Deliver a YouTube alert to each topic
   when:
     - __itgraph_has_youtube_alerts | bool
-    - __itgraph_hour_here | int < itgraph_quiet_from_hour or __itgraph_hour_here | int >= itgraph_quiet_to_hour
+    - __itgraph_trials_quiet | length == 0
   block:
     - name: Raise a synthetic YouTube alert for a seed of each language
       ansible.builtin.command:

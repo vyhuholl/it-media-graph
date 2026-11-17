@@ -1259,6 +1259,41 @@ def test_inside_quiet_hours_polls_are_not_asked_about(tmp_path: Path) -> None:
     assert run.calls == []
 
 
+def test_polls_are_not_waited_for_into_quiet_hours(tmp_path: Path) -> None:
+    """At 01:57 a five-minute wait would end in the collector's sleep."""
+    run = run_role(
+        tmp_path,
+        "polls",
+        extra={
+            "__itgraph_now_hour": 1,
+            "__itgraph_now_minute": 57,
+            "__itgraph_polls_delay": 10,
+        },
+    )
+
+    assert not run.failed, run.output
+    assert run.calls == []
+
+
+def test_polls_with_the_wait_to_spare_are_waited_for(tmp_path: Path) -> None:
+    run = run_role(
+        tmp_path,
+        "polls",
+        rules=[
+            rule("startedAt", "2026-11-06T09:00:00Z"),
+            rule("count\\(\\*\\) FROM tg_poll_state", "3\n"),
+        ],
+        extra={
+            "__itgraph_now_hour": 1,
+            "__itgraph_now_minute": 50,
+            "__itgraph_polls_delay": 10,
+        },
+    )
+
+    assert not run.failed, run.output
+    assert [c for c in run.joined() if "tg_poll_state" in c]
+
+
 @pytest.mark.parametrize(
     ("bounds", "hour", "asked"),
     [
@@ -1270,6 +1305,27 @@ def test_inside_quiet_hours_polls_are_not_asked_about(tmp_path: Path) -> None:
         ((2, 2), 2, True),
     ],
 )
+def test_quiet_hours_are_read_as_the_code_reads_them(
+    tmp_path: Path, bounds: tuple[int, int], hour: int, asked: bool
+) -> None:
+    run = run_role(
+        tmp_path,
+        "polls",
+        rules=[
+            rule("startedAt", "2026-11-06T09:00:00Z"),
+            rule("count\\(\\*\\) FROM tg_poll_state", "3\n"),
+        ],
+        extra={
+            "__itgraph_now_hour": hour,
+            "itgraph_quiet_from_hour": bounds[0],
+            "itgraph_quiet_to_hour": bounds[1],
+        },
+    )
+
+    assert not run.failed, run.output
+    assert bool([c for c in run.joined() if "tg_poll_state" in c]) is asked
+
+
 def deployments(*items: tuple[str, int, bool]) -> str:
     return json.dumps(
         {
@@ -2108,3 +2164,53 @@ def test_inside_quiet_hours_the_alert_is_reported_as_not_proven(
     assert [c for c in run.joined() if "INSERT INTO tg_alerts" in c] == []
     assert "YouTube: could not be proven" in run.output
     assert [c for c in run.joined() if "INSERT INTO yt_raw_videos" in c] == []
+
+
+def test_trials_are_not_started_when_quiet_hours_would_overtake_them(
+    tmp_path: Path,
+) -> None:
+    """At 01:58 the bot would fall quiet before its five-minute wait ended."""
+    dump = tmp_path / "real.dump"
+    dump.write_bytes(b"fake dump bytes\n")
+    run = run_role(
+        tmp_path,
+        "restore",
+        inputs="b",
+        rules=restore_rules(),
+        extra={
+            **RESTORE,
+            "itgraph_restore_from": str(dump),
+            "__itgraph_now_hour": 1,
+            "__itgraph_now_minute": 58,
+            "__itgraph_trial_delay": 10,
+        },
+    )
+
+    assert not run.failed, run.output
+    assert "the bot falls quiet at 2:00" in run.output
+    assert [c for c in run.joined() if "INSERT INTO tg_alerts" in c] == []
+    assert "YouTube: could not be proven" in run.output
+    assert [c for c in run.joined() if "INSERT INTO yt_raw_videos" in c] == []
+
+
+def test_trials_with_both_waits_to_spare_are_run(tmp_path: Path) -> None:
+    """Ten minutes of waiting, Telegram's and YouTube's, fit before 02:00."""
+    dump = tmp_path / "real.dump"
+    dump.write_bytes(b"fake dump bytes\n")
+    run = run_role(
+        tmp_path,
+        "restore",
+        inputs="b",
+        rules=restore_rules(),
+        extra={
+            **RESTORE,
+            "itgraph_restore_from": str(dump),
+            "__itgraph_now_hour": 1,
+            "__itgraph_now_minute": 45,
+            "__itgraph_trial_delay": 10,
+        },
+    )
+
+    assert not run.failed, run.output
+    assert [c for c in run.joined() if "INSERT INTO tg_alerts" in c]
+    assert [c for c in run.joined() if "INSERT INTO yt_raw_videos" in c]
