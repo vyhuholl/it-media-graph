@@ -15,7 +15,7 @@ channel, video or person can reach the store.
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,7 +45,9 @@ from itgraph.db.models import (
     YtWeeklyList,
 )
 from itgraph.db.poll import queue_lag
+from itgraph.db.rising import resolutions_since
 from itgraph.db.yt_quota import pool_cap
+from itgraph.derive.rising import RESOLVING_COMMANDS
 from itgraph.schedule import in_quiet_hours
 from itgraph.yt_quota import quota_day
 
@@ -102,6 +104,9 @@ async def _telegram(session: AsyncSession, now: datetime) -> list[Family]:
         )
     ).one()
     waited = (now - earliest).total_seconds() if earliest is not None else 0.0
+    # The journal's rolling day, by the command that resolved: the loop's
+    # own count past the cap is a leak, the operator's is a choice.
+    resolutions = await resolutions_since(session, now - timedelta(hours=24))
     return [
         _gauge(
             "itgraph_telegram_last_poll_timestamp_seconds",
@@ -137,6 +142,17 @@ async def _telegram(session: AsyncSession, now: datetime) -> list[Family]:
             "itgraph_telegram_oldest_awaiting_history_seconds",
             "How long ago the earliest seed awaiting its walk was marked.",
             max(waited, 0.0),
+        ),
+        Family(
+            "itgraph_telegram_resolutions_24h",
+            "Resolutions in the last 24 hours, by the command that made them.",
+            [
+                (
+                    {"command": command.value},
+                    float(resolutions.get(command, 0)),
+                )
+                for command in RESOLVING_COMMANDS
+            ],
         ),
     ]
 

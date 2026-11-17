@@ -36,6 +36,7 @@ from itgraph.db.models import (
 )
 
 __all__ = [
+    "NOT_A_CHANNEL",
     "AmbiguousUsernameError",
     "ChannelAlreadyResolvedError",
     "ChannelLookupError",
@@ -66,6 +67,10 @@ __all__ = [
 # A channel is addressed either by Telegram id or by username without
 # the leading ``@``.
 ChannelRef = int | str
+
+# The error recorded when a resolution found a user or a bot. Named once,
+# because the rising ranking tells "not a channel" from "failed" by it.
+NOT_A_CHANNEL = "resolved to a user or bot, not a channel"
 
 
 def _spelled(ref: ChannelRef) -> str:

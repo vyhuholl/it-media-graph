@@ -65,6 +65,7 @@ EXPECTED = {
     "itgraph_telegram_last_flood_timestamp_seconds",
     "itgraph_telegram_seeds_awaiting_history",
     "itgraph_telegram_oldest_awaiting_history_seconds",
+    "itgraph_telegram_resolutions_24h",
     "itgraph_youtube_quota_spent_units",
     "itgraph_youtube_quota_cap_units",
     "itgraph_youtube_quota_exhausted",
@@ -241,6 +242,11 @@ async def test_every_series_is_declared_on_an_empty_database(
     assert value(read, "itgraph_telegram_last_flood_timestamp_seconds") == 0
     assert value(read, "itgraph_telegram_seeds_awaiting_history") == 0
     assert value(read, "itgraph_telegram_oldest_awaiting_history_seconds") == 0
+    for command in ("resolve", "add", "watch"):
+        assert (
+            value(read, "itgraph_telegram_resolutions_24h", command=command)
+            == 0
+        )
     for platform in ("telegram", "youtube"):
         assert (
             value(
@@ -481,7 +487,7 @@ async def test_no_series_reads_the_big_tables_and_no_label_comes_from_data(
         assert "payload" not in statement
 
     allowed = (
-        {"watch", "general", "search", "main"}
+        {"watch", "general", "search", "main", "resolve", "add"}
         | {
             "channel",
             "video",
@@ -885,3 +891,31 @@ async def test_what_is_out_of_scope_does_not_wait(database: Database) -> None:
 
     assert value(read, "itgraph_telegram_seeds_awaiting_history") == 0
     assert value(read, "itgraph_telegram_oldest_awaiting_history_seconds") == 0
+
+
+async def test_resolutions_by_command(database: Database) -> None:
+    async with database.session() as session:
+        await session.execute(
+            text(
+                "INSERT INTO tg_resolutions "
+                "(requested_at, command, kind, outcome) VALUES "
+                "(:hour, 'resolve', 'username', 'channel'), "
+                "(:hour, 'resolve', 'username', 'not_channel'), "
+                "(:hour, 'resolve', 'id', 'failed'), "
+                "(:hour, 'watch', 'username', 'channel'), "
+                "(:hour, 'watch', 'id', 'channel'), "
+                "(:older, 'add', 'username', 'channel')"
+            ),
+            {
+                "hour": NOW - timedelta(hours=1),
+                "older": NOW - timedelta(hours=36),
+            },
+        )
+        await session.commit()
+
+    read = await families(database)
+
+    name = "itgraph_telegram_resolutions_24h"
+    assert value(read, name, command="resolve") == 3
+    assert value(read, name, command="watch") == 2
+    assert value(read, name, command="add") == 0

@@ -15,6 +15,9 @@ ban signal available, so this pass does not have one to forget.
 A name the inventory already holds costs no request at all, which is
 what makes a run resumable: re-run the same list and the work continues
 where it stopped rather than paying for it twice.
+
+Every lookup is journaled under ``add``, with its answer and without the
+name, and counts against the poll loop's cap like any resolution.
 """
 
 import logging
@@ -27,6 +30,7 @@ from telethon.errors import RPCError
 
 from itgraph.config import settings
 from itgraph.db.channels import (
+    NOT_A_CHANNEL,
     DiscoveredChannel,
     create_resolved_channel,
     existing_usernames,
@@ -39,13 +43,16 @@ from itgraph.db.models import (
     ChannelStatus,
     CollectionCommand,
     DiscoverySource,
+    ResolutionKind,
+    ResolutionOutcome,
 )
+from itgraph.db.rising import record_resolution
 from itgraph.db.session import Database
 from itgraph.tg.backfill import FloodWaitTooLong, waiting_out_floods
 from itgraph.tg.client import persist_peers
 from itgraph.tg.floods import FloodRecorder
 from itgraph.tg.pacing import pace
-from itgraph.tg.resolve import channel_identity
+from itgraph.tg.resolve import channel_identity, journal_halt
 
 __all__ = ["AddSummary", "Review", "add_channels"]
 
@@ -204,9 +211,14 @@ async def _add_one(
         entity = await waiting_out_floods(
             lambda: client.get_entity(username), recorder
         )
+    except FloodWaitTooLong:
+        await journal_halt(session, recorder.command, ResolutionKind.USERNAME)
+        raise
     except _LOOKUP_ERRORS as exc:
         logger.warning("@%s did not resolve: %s", username, exc)
         summary.failures.append((username, str(exc)))
+        await _journal(session, recorder, ResolutionOutcome.FAILED)
+        await session.commit()
         return
 
     identity = channel_identity(entity)
@@ -214,9 +226,9 @@ async def _add_one(
         # A person or a bot. This graph holds channels only.
         logger.info("@%s is not a channel", username)
         summary.not_channels += 1
-        summary.failures.append(
-            (username, "resolved to a user or bot, not a channel")
-        )
+        summary.failures.append((username, NOT_A_CHANNEL))
+        await _journal(session, recorder, ResolutionOutcome.NOT_CHANNEL)
+        await session.commit()
         return
 
     inserted = await create_resolved_channel(
@@ -235,6 +247,7 @@ async def _add_one(
     # would otherwise leave behind a request that can only return a
     # channel the inventory now has.
     await delete_pending_mention(session, username.lower())
+    await _journal(session, recorder, ResolutionOutcome.CHANNEL)
 
     if inserted:
         if review is not None:
@@ -254,6 +267,15 @@ async def _add_one(
     # rather than merely present in the inventory.
     await persist_peers(client)
     await session.commit()
+
+
+async def _journal(
+    session: AsyncSession, recorder: FloodRecorder, outcome: ResolutionOutcome
+) -> None:
+    """Journal one lookup by name under this run's command, naming nothing."""
+    await record_resolution(
+        session, recorder.command, ResolutionKind.USERNAME, outcome
+    )
 
 
 async def _apply_review(

@@ -170,7 +170,8 @@ async def _flush(
     discovered: set[int] = set()
     edge_rows: list[EdgeRow] = []
     # Pairs, not names: which channel made the mention is what orders the
-    # resolution queue, and it is already in hand here.
+    # resolution queue, and it is already in hand here. With the message's
+    # date, which is what the rising ranking's window reads.
     pending: list[MentionSource] = []
 
     for channel_id, msg_id, payload in rows:
@@ -211,6 +212,7 @@ async def _flush(
                         MentionSource(
                             channel_id=channel_id,
                             username=reference.username,
+                            referenced_at=published_at,
                         )
                     )
                 elif dst != channel_id:

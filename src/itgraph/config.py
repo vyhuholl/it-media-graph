@@ -180,6 +180,23 @@ class Settings(BaseSettings):
     # own `--since` and is not bound by this.
     history_walk_since: AwareDatetime = datetime(2025, 7, 24, tzinfo=UTC)
 
+    # --- rising candidates -------------------------------------------
+    #
+    # A channel or a pending name is rising when seeds of at least
+    # `rising_min_families` distinct families referred to it within the
+    # trailing `rising_window_days`. Families, not seeds: one author's
+    # channels naming one another is one opinion.
+    rising_window_days: int = Field(default=14, ge=1)
+    rising_min_families: int = Field(default=2, ge=1)
+    # How many resolutions the account spends in a rolling 24 hours before
+    # the poll loop stops resolving: every command's — `resolve`, `add` and
+    # the loop's own — counted from the journal. It never stops the
+    # operator's commands. 0 keeps the loop from resolving at all.
+    resolution_cap: int = Field(default=10, ge=0)
+    # The least time between two of the loop's resolutions, read from the
+    # journal's newest `watch` row, so a restart does not reset it.
+    rising_resolve_gap_minutes: float = Field(default=20.0, ge=0)
+
     # Messages read per partition when deriving edges. Derivation touches
     # no network, so this is a memory/round-trip trade, not a pacing one:
     # large enough that the batch write amortizes, small enough that a run

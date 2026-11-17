@@ -850,3 +850,34 @@ def test_a_second_wind_threshold_out_of_range_is_refused(
     env.setenv(prefix + name, value)
     with pytest.raises(ValidationError, match=(prefix + name).lower()):
         build()
+
+
+def test_the_rising_defaults(env: pytest.MonkeyPatch) -> None:
+    settings = build()
+    assert settings.rising_window_days == 14
+    assert settings.rising_min_families == 2
+    assert settings.resolution_cap == 10
+    assert settings.rising_resolve_gap_minutes == 20
+
+
+def test_a_cap_of_zero_loads(env: pytest.MonkeyPatch) -> None:
+    """Zero is the switch that keeps the loop from resolving at all."""
+    env.setenv("RESOLUTION_CAP", "0")
+    assert build().resolution_cap == 0
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("RISING_WINDOW_DAYS", "0"),
+        ("RISING_MIN_FAMILIES", "0"),
+        ("RESOLUTION_CAP", "-1"),
+        ("RISING_RESOLVE_GAP_MINUTES", "-1"),
+    ],
+)
+def test_a_rising_setting_out_of_range_is_refused(
+    env: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    env.setenv(name, value)
+    with pytest.raises(ValidationError, match=name.lower()):
+        build()

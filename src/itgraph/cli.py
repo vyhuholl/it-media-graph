@@ -1230,6 +1230,55 @@ def resolve(
 
 
 @app.command()
+def rising() -> None:
+    """Telegram's rising candidates: newly referred to by several seed
+    families at once.
+
+    Worked out from what is stored as it stands now, and nothing is
+    written: the channels with a username in rank order, then how many
+    await a resolution, how many were left out and why, and the
+    resolutions of the last 24 hours against the poll loop's cap. A
+    pending name is never printed — it may be a person's.
+
+    Makes no request and takes no lease, so it runs beside the loop.
+    Prints channel titles, so it is for a person at a terminal — never a
+    scheduled job, whose output the cluster keeps.
+    """
+    from itgraph.config import settings
+    from itgraph.db.rising import load_rising_rows, resolutions_since
+    from itgraph.db.session import Database
+    from itgraph.derive.rising import rank_rising, report
+
+    async def run() -> None:
+        database = Database()
+        now = datetime.now(UTC)
+        try:
+            async with database.session() as session:
+                rows = await load_rising_rows(session)
+                journal = await resolutions_since(
+                    session, now - timedelta(hours=24)
+                )
+        finally:
+            await database.dispose()
+        ranking = rank_rising(
+            rows,
+            now,
+            window_days=settings.rising_window_days,
+            min_families=settings.rising_min_families,
+        )
+        for line in report(
+            ranking,
+            journal,
+            window_days=settings.rising_window_days,
+            min_families=settings.rising_min_families,
+            cap=settings.resolution_cap,
+        ):
+            typer.echo(line)
+
+    _run(run())
+
+
+@app.command()
 def backup(
     full: Annotated[
         bool,

@@ -24,6 +24,7 @@ from fakes import (
 from people_cases import fields_naming_people, names_nobody, peer_channel
 from sqlalchemy import text
 from telethon.errors import ChannelPrivateError, FloodWaitError
+from telethon.tl.functions.contacts import ResolveUsernameRequest
 
 from itgraph.config import settings
 from itgraph.db.backfill import record_complete
@@ -32,13 +33,28 @@ from itgraph.db.channels import (
     mark_channel,
     upsert_channels,
 )
+from itgraph.db.edges import (
+    EdgeRow,
+    MentionSource,
+    add_pending_mentions,
+    create_discovered_channels,
+    insert_edges,
+)
+from itgraph.db.floods import store_flood_event
 from itgraph.db.metrics import store_metrics
-from itgraph.db.models import ChannelKind, ChannelStatus, DiscoverySource
+from itgraph.db.models import (
+    ChannelKind,
+    ChannelStatus,
+    CollectionCommand,
+    DiscoverySource,
+    EdgeKind,
+)
 from itgraph.db.poll import due_channels
 from itgraph.db.raw import store_messages
 from itgraph.db.session import Database
 from itgraph.derive.metrics import Counters
 from itgraph.tg import watch as watch_module
+from itgraph.tg.backfill import RequestTimedOut
 from itgraph.tg.errors import WatchStalled
 from itgraph.tg.manual import Review, add_channels
 from itgraph.tg.payload import encode_payload
@@ -1518,3 +1534,473 @@ async def test_a_long_rate_limit_stops_the_walk_with_the_polls(
         ).all()
     assert soonest > datetime.now(UTC) + timedelta(seconds=seconds - 120)
     assert list(commands) == ["watch"]
+
+
+# --- the turn at resolution -------------------------------------------------
+
+RISING = 2000000001
+OTHER_RISING = 2000000002
+THIRD = 1000000003
+
+
+async def rising_names(
+    database: Database, *names: str, sources: tuple[int, ...] = (FIRST, SECOND)
+) -> None:
+    """Pending names each mentioned yesterday by the given seeds."""
+    yesterday = datetime.now(UTC) - timedelta(days=1)
+    async with database.session() as session:
+        await add_pending_mentions(
+            session,
+            [
+                MentionSource(seed_id, name, yesterday)
+                for name in names
+                for seed_id in sources
+            ],
+        )
+        await session.commit()
+
+
+def rising_client(**kwargs: Any) -> FakeTelegramClient:
+    """Three quiet seeds, and the channels the names resolve to."""
+    return FakeTelegramClient(
+        entities={
+            **{
+                f"example_{tg_id}": FakeChannel(tg_id, f"example_{tg_id}")
+                for tg_id in (FIRST, SECOND, THIRD)
+            },
+            "fake_head": tl_channel(RISING, username="fake_head"),
+            "fake_next": tl_channel(OTHER_RISING, username="fake_next"),
+        },
+        histories={FIRST: [], SECOND: [], THIRD: []},
+        **kwargs,
+    )
+
+
+async def journal(database: Database) -> list[tuple[str, str, str]]:
+    async with database.session() as session:
+        rows = await session.execute(
+            text(
+                "SELECT command::text, kind::text, outcome::text "
+                "FROM tg_resolutions ORDER BY id"
+            )
+        )
+        return [(row[0], row[1], row[2]) for row in rows]
+
+
+async def journal_rows(
+    database: Database,
+    command: CollectionCommand,
+    count: int,
+    *,
+    ago: timedelta,
+) -> None:
+    async with database.session() as session:
+        await session.execute(
+            text(
+                "INSERT INTO tg_resolutions (requested_at, command, kind, outcome) "
+                "SELECT now() - CAST(:ago AS interval), "
+                "CAST(:command AS tg_collection_command), "
+                "'id', 'channel' FROM generate_series(1, :count)"
+            ),
+            {"ago": ago, "command": command.value, "count": count},
+        )
+        await session.commit()
+
+
+@pytest.fixture
+def no_gap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The gap off, so a test reaches the guard it is about."""
+    monkeypatch.setattr(settings, "rising_resolve_gap_minutes", 0.0)
+
+
+async def test_the_head_is_resolved_and_the_second_waits_for_the_gap(
+    database: Database,
+) -> None:
+    await seed(database, FIRST, SECOND)
+    await rising_names(database, "fake_head")
+    await rising_names(database, "fake_next", sources=(FIRST, SECOND))
+    # One more family for the head, so the order is not a tie.
+    await seed(database, THIRD)
+    await rising_names(database, "fake_head", sources=(THIRD,))
+    client = rising_client()
+
+    stats = await watch(client, database, max_cycles=10)
+
+    assert client.resolved == ["fake_head"]
+    assert stats.resolutions == 1
+    assert await journal(database) == [("watch", "username", "channel")]
+    assert client.requests == []
+
+
+async def test_a_name_that_is_a_channel_becomes_a_candidate(
+    database: Database,
+) -> None:
+    await seed(database, FIRST, SECOND)
+    await rising_names(database, "fake_head")
+
+    await watch(rising_client(), database, max_cycles=5)
+
+    async with database.session() as session:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT status::text, discovered_via::text, username "
+                    "FROM tg_channels WHERE tg_id = :id"
+                ),
+                {"id": RISING},
+            )
+        ).one()
+        pending = await session.scalar(
+            text("SELECT count(*) FROM tg_pending_mentions")
+        )
+    assert tuple(row) == ("candidate", "mention", "fake_head")
+    assert pending == 0
+
+
+async def test_polls_and_walks_come_before_any_resolution(
+    database: Database, walking: None
+) -> None:
+    await seed(database, FIRST, SECOND)
+    await seed(database, THIRD, walked=False)
+    await rising_names(database, "fake_head")
+    client = rising_client()
+    client.histories[THIRD] = old_history(4)
+
+    # A poll cycle, then the walk's two pages: nothing resolved yet.
+    await watch(client, database, max_cycles=3)
+    assert client.resolved == []
+    assert len(pages(client)) == 2
+
+    # The walk is complete; the next idle turn is resolution's.
+    await watch(client, database, max_cycles=3)
+    assert client.resolved == ["fake_head"]
+
+
+async def test_nothing_that_is_not_rising_is_resolved(
+    database: Database, no_gap: None
+) -> None:
+    await seed(database, FIRST, SECOND)
+    # One family only, and one mentioned before the window.
+    await rising_names(database, "fake_head", sources=(FIRST,))
+    async with database.session() as session:
+        await add_pending_mentions(
+            session,
+            [
+                MentionSource(seed_id, "fake_next", NOW - timedelta(days=90))
+                for seed_id in (FIRST, SECOND)
+            ],
+        )
+        await session.commit()
+    client = rising_client()
+
+    stats = await watch(client, database, max_cycles=20)
+
+    assert client.resolved == []
+    assert stats.resolutions == 0
+
+
+async def test_a_failed_resolution_is_not_tried_again(
+    database: Database, no_gap: None
+) -> None:
+    await seed(database, FIRST, SECOND)
+    await rising_names(database, "fake_missing")
+    client = rising_client()
+
+    await watch(client, database, max_cycles=10)
+
+    assert client.resolved == ["fake_missing"]
+    assert await journal(database) == [("watch", "username", "failed")]
+
+
+async def test_a_rising_channel_is_resolved_by_id(
+    database: Database,
+) -> None:
+    await seed(database, FIRST, SECOND)
+    yesterday = datetime.now(UTC) - timedelta(days=1)
+    async with database.session() as session:
+        await create_discovered_channels(
+            session, tg_ids=[RISING], discovered_via=DiscoverySource.FORWARD
+        )
+        await insert_edges(
+            session,
+            [
+                EdgeRow(src, RISING, EdgeKind.FORWARD, msg_id, yesterday)
+                for msg_id, src in enumerate((FIRST, SECOND), start=1)
+            ],
+        )
+        await session.commit()
+    client = rising_client(
+        entities_by_id={RISING: tl_channel(RISING, username="fake_head")}
+    )
+
+    await watch(client, database, max_cycles=5)
+
+    assert client.resolved == [RISING]
+    assert await journal(database) == [("watch", "id", "channel")]
+
+
+# --- the cap -------------------------------------------------------------
+
+
+async def test_the_loop_stops_at_the_cap(
+    database: Database, no_gap: None
+) -> None:
+    await seed(database, FIRST, SECOND)
+    await rising_names(database, "fake_head")
+    await journal_rows(
+        database, CollectionCommand.WATCH, 10, ago=timedelta(hours=23)
+    )
+    client = rising_client()
+
+    await watch(client, database, max_cycles=10)
+    assert client.resolved == []
+
+    # Once the oldest is more than a day old, there is room again.
+    async with database.session() as session:
+        await session.execute(
+            text(
+                "UPDATE tg_resolutions SET requested_at = "
+                "requested_at - interval '2 hours'"
+            )
+        )
+        await session.commit()
+    await watch(client, database, max_cycles=10)
+    assert client.resolved == ["fake_head"]
+
+
+async def test_a_manual_run_spends_the_loop_s_share(
+    database: Database, no_gap: None
+) -> None:
+    await seed(database, FIRST, SECOND)
+    await rising_names(database, "fake_head")
+    await journal_rows(
+        database, CollectionCommand.RESOLVE, 50, ago=timedelta(hours=1)
+    )
+    client = rising_client()
+
+    await watch(client, database, max_cycles=10)
+
+    assert client.resolved == []
+
+
+async def test_the_operator_is_not_stopped_by_the_cap(
+    database: Database,
+) -> None:
+    await journal_rows(
+        database, CollectionCommand.WATCH, 10, ago=timedelta(hours=1)
+    )
+    client = rising_client()
+
+    summary = await add_channels(
+        client, database, usernames=["fake_head"], delay=0
+    )
+
+    assert summary.added == 1
+    assert client.resolved == ["fake_head"]
+
+
+async def test_a_loop_with_rising_candidates_stays_within_the_cap(
+    database: Database, no_gap: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "resolution_cap", 2)
+    await seed(database, FIRST, SECOND)
+    await rising_names(database, "fake_head", "fake_next", "fake_third")
+    client = rising_client()
+
+    await watch(client, database, max_cycles=30)
+
+    assert sorted(client.resolved) == ["fake_head", "fake_next"]
+    assert client.requests == []
+
+
+# --- a rate limit on resolution ---------------------------------------
+
+
+async def test_a_day_s_wait_holds_resolution_alone(
+    database: Database, no_gap: None
+) -> None:
+    await seed(database, FIRST, SECOND)
+    await rising_names(database, "fake_head", "fake_next")
+    client = rising_client(
+        resolve_floods={"fake_head": 86400},
+        flood_request=ResolveUsernameRequest(username="fake_head"),
+    )
+
+    stats = await watch(client, database, max_cycles=20)
+
+    # Asked once, never slept off, never asked again.
+    assert client.resolved == ["fake_head"]
+    assert stats.resolution_holds == 1
+    assert stats.postponed == 0
+    async with database.session() as session:
+        event = (
+            await session.execute(
+                text(
+                    "SELECT method, seconds, command::text, halted "
+                    "FROM tg_flood_events"
+                )
+            )
+        ).one()
+        # Polls were not pushed past the wait.
+        latest_due = await session.scalar(
+            text("SELECT max(due_at) FROM tg_poll_state")
+        )
+    assert tuple(event) == ("ResolveUsernameRequest", 86400, "watch", True)
+    assert latest_due < datetime.now(UTC) + timedelta(hours=12)
+    # The name stays as it was, for after the wait.
+    assert await journal(database) == [("watch", "username", "failed")]
+    async with database.session() as session:
+        attempts = await session.scalar(
+            text(
+                "SELECT attempts FROM tg_pending_mentions "
+                "WHERE username = 'fake_head'"
+            )
+        )
+    assert attempts == 0
+
+
+async def test_polls_go_on_through_the_wait(
+    database: Database, no_gap: None
+) -> None:
+    await seed(database, FIRST, SECOND)
+    await rising_names(database, "fake_head")
+    client = rising_client(
+        resolve_floods={"fake_head": 86400},
+        flood_request=ResolveUsernameRequest(username="fake_head"),
+    )
+    await watch(client, database, max_cycles=5)
+    polled = len(client.windows)
+
+    await due_again(database)
+    await watch(client, database, max_cycles=5)
+
+    assert len(client.windows) > polled
+    assert client.resolved == ["fake_head"]
+
+
+async def test_a_restart_inside_the_wait_resolves_nothing(
+    database: Database, no_gap: None
+) -> None:
+    await seed(database, FIRST, SECOND)
+    await rising_names(database, "fake_head")
+    async with database.session() as session:
+        # Met by the operator's run: the limit is the account's.
+        await store_flood_event(
+            session,
+            method="GetChannelsRequest",
+            seconds=86400,
+            command=CollectionCommand.RESOLVE,
+            channel_id=None,
+            halted=True,
+        )
+        await session.commit()
+    client = rising_client()
+
+    await watch(client, database, max_cycles=10)
+
+    assert client.resolved == []
+
+
+async def test_a_resolution_that_never_answers_drops_the_connection(
+    database: Database, no_gap: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await seed(database, FIRST, SECOND)
+    await rising_names(database, "fake_head")
+    client = rising_client()
+
+    async def never_answers(ref: Any) -> Any:
+        client.resolved.append(ref)
+        raise RequestTimedOut(settings.request_timeout_seconds)
+
+    monkeypatch.setattr(client, "get_entity", never_answers)
+
+    stats = await watch(client, database, max_cycles=5)
+
+    assert client.resolved == ["fake_head"]
+    assert client.disconnects >= 1
+    assert stats.timed_out == 1
+
+
+async def test_a_name_is_never_logged_by_the_loop(
+    database: Database, no_gap: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    await seed(database, FIRST, SECOND, THIRD)
+    # The failure first, with a family more; then the wait.
+    await rising_names(
+        database, "fake_missing", sources=(FIRST, SECOND, THIRD)
+    )
+    await rising_names(database, "fake_head")
+    client = rising_client(
+        resolve_floods={"fake_head": 86400},
+        flood_request=ResolveUsernameRequest(username="fake_head"),
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        await watch(client, database, max_cycles=10)
+
+    assert sorted(client.resolved) == ["fake_head", "fake_missing"]
+    assert "fake_missing" not in caplog.text
+    assert "fake_head" not in caplog.text
+
+
+async def test_the_loop_adds_no_wait_of_its_own_after_a_resolution(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The gap is the journal's alone: with it answered, the next head is
+    asked for at the next idle tick, not a gap later again."""
+    from itgraph.tg import rising as rising_module
+
+    async def never_resolved(*args: Any) -> None:
+        return None
+
+    monkeypatch.setattr(rising_module, "newest_resolution", never_resolved)
+    await seed(database, FIRST, SECOND)
+    await rising_names(database, "fake_head", "fake_next")
+    client = rising_client()
+
+    await watch(client, database, max_cycles=10, walk_clock=lambda: 0.0)
+
+    assert sorted(client.resolved) == ["fake_head", "fake_next"]
+
+
+async def test_a_ranking_with_nothing_awaiting_is_not_read_every_tick(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from itgraph.tg import rising as rising_module
+
+    loads = 0
+    original = rising_module.load_rising_rows
+
+    async def counted(session: Any) -> Any:
+        nonlocal loads
+        loads += 1
+        return await original(session)
+
+    monkeypatch.setattr(rising_module, "load_rising_rows", counted)
+    await seed(database, FIRST, SECOND)
+
+    await watch(
+        rising_client(), database, max_cycles=10, walk_clock=lambda: 0.0
+    )
+
+    assert loads == 1
+
+
+async def test_a_wait_naming_no_request_still_holds_resolution(
+    database: Database, no_gap: None
+) -> None:
+    """Recorded as `unknown`, which the record's question does not ask
+    about: the loop holds it in memory to its end all the same."""
+    await seed(database, FIRST, SECOND)
+    await rising_names(database, "fake_head", "fake_next")
+    client = rising_client(resolve_floods={"fake_head": 86400})
+
+    stats = await watch(client, database, max_cycles=20)
+
+    assert client.resolved == ["fake_head"]
+    assert stats.resolution_holds == 1
+    async with database.session() as session:
+        method = await session.scalar(
+            text("SELECT method FROM tg_flood_events")
+        )
+    assert method == "unknown"

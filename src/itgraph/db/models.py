@@ -209,13 +209,14 @@ class CollectionCommand(enum.StrEnum):
     "which of the two spent today's quota" — which is the question worth
     asking once both are running against the same daily ceiling.
 
-    ``WATCH`` owns no quota-bearing method at all, which is the strongest
-    version of the same claim. The poll loop asks for history and nothing
-    else, and unlike a backfill it does so indefinitely — so a
-    ``ResolveUsernameRequest`` or a ``GetFullChannelRequest`` filed under
-    it is not one run's mistake but a leak that spends the day's quota
-    every day until someone notices. This is the command whose attribution
-    is worth the most.
+    ``WATCH`` owns no quota-bearing method of its polls or walks. It does
+    resolve the head of the rising ranking, under a cap of resolutions in
+    24 hours that every command's count towards, so a
+    ``ResolveUsernameRequest`` filed under it is expected up to the cap —
+    and a leak past it. A ``GetFullChannelRequest`` under it is a leak at
+    any count. Unlike a backfill the loop runs indefinitely, so a leak
+    would spend the day's quota every day until someone noticed: this is
+    the command whose attribution is worth the most.
     """
 
     BACKFILL = "backfill"
@@ -223,6 +224,21 @@ class CollectionCommand(enum.StrEnum):
     METADATA = "metadata"
     ADD = "add"
     WATCH = "watch"
+
+
+class ResolutionKind(enum.StrEnum):
+    """What a resolution asked by: a channel's id, or a public username."""
+
+    ID = "id"
+    USERNAME = "username"
+
+
+class ResolutionOutcome(enum.StrEnum):
+    """What a resolution found. A rate limit is a failure: it was asked."""
+
+    CHANNEL = "channel"
+    NOT_CHANNEL = "not_channel"
+    FAILED = "failed"
 
 
 class AlertKind(enum.StrEnum):
@@ -1194,6 +1210,18 @@ class PendingMentionSource(Base):
     # see the class docstring.
     channel_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
 
+    # When the channel first and last mentioned the name: the publication
+    # times of those messages, kept as the least and the greatest by every
+    # derivation. What lets the rising ranking apply its window to a name
+    # the inventory does not hold yet. Null until a derivation has seen the
+    # source, which the first one after the revision does for every row.
+    first_referenced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    last_referenced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
     def __repr__(self) -> str:
         return (
             f"PendingMentionSource(username={self.username!r}, "
@@ -1823,6 +1851,43 @@ class FloodEvent(Base):
 
     def __repr__(self) -> str:
         return f"FloodEvent(method={self.method!r}, seconds={self.seconds})"
+
+
+class Resolution(Base):
+    """One resolution of a channel's id or a username, by any command.
+
+    What the poll loop's cap is read from: resolutions in the last 24
+    hours, `itgraph resolve`'s, `itgraph add`'s and its own alike, since
+    the quota they spend is the account's. Written with the answer, in the
+    transaction that records it.
+
+    It holds no username and no id. A name can be a person's, and nothing
+    here needs to know which name was asked — only when, by whom, and
+    what came back.
+    """
+
+    __tablename__ = "tg_resolutions"
+    __table_args__ = (Index("ix_tg_resolutions_requested_at", "requested_at"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    command: Mapped[CollectionCommand] = mapped_column(
+        _pg_enum(CollectionCommand, "tg_collection_command")
+    )
+    kind: Mapped[ResolutionKind] = mapped_column(
+        _pg_enum(ResolutionKind, "tg_resolution_kind")
+    )
+    outcome: Mapped[ResolutionOutcome] = mapped_column(
+        _pg_enum(ResolutionOutcome, "tg_resolution_outcome")
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"Resolution(command={self.command}, kind={self.kind}, "
+            f"outcome={self.outcome})"
+        )
 
 
 class YtChannel(Base):

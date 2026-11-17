@@ -106,12 +106,15 @@ class FloodWaitTooLong(RuntimeError):
     unreachable by that handler.
     """
 
-    def __init__(self, seconds: float) -> None:
+    def __init__(self, seconds: float, threshold: float | None = None) -> None:
         self.seconds = seconds
         self.resume_after = datetime.now(UTC) + timedelta(seconds=seconds)
+        limit = (
+            settings.flood_abort_threshold if threshold is None else threshold
+        )
         super().__init__(
             f"FloodWait of {seconds:.0f}s exceeds the "
-            f"{settings.flood_abort_threshold:.0f}s halt threshold; "
+            f"{limit:.0f}s halt threshold; "
             f"stopping. Work may resume after "
             f"{self.resume_after:%Y-%m-%d %H:%M} UTC."
         )
@@ -252,7 +255,10 @@ def classify(error: BaseException) -> FailureKind:
 
 
 async def waiting_out_floods[T](
-    operation: Callable[[], Awaitable[T]], recorder: FloodRecorder
+    operation: Callable[[], Awaitable[T]],
+    recorder: FloodRecorder,
+    *,
+    halt_after: float | None = None,
 ) -> T:
     """Run a request, sleeping off a short rate limit and asking again.
 
@@ -278,6 +284,11 @@ async def waiting_out_floods[T](
     Every wait is recorded before it is acted on, so the method that was
     limited survives the run that hit it. ``recorder`` never raises.
 
+    ``halt_after`` moves that threshold for one caller. The poll loop's
+    turn at resolution passes ``0``: a wait on resolution is never slept
+    off there, since polls and walks must go on through it, and the turn
+    reads the recorded wait instead.
+
     **Two kinds of waiting, and only one of them is bounded.** A rate
     limit is waited out without limit, because that is the policy. A
     request is waited on for ``request_timeout_seconds`` and then
@@ -301,14 +312,19 @@ async def waiting_out_floods[T](
             raise RequestTimedOut(settings.request_timeout_seconds) from exc
         except FloodWaitError as exc:
             seconds = getattr(exc, "seconds", 0)
-            halting = seconds > settings.flood_abort_threshold
+            threshold = (
+                settings.flood_abort_threshold
+                if halt_after is None
+                else halt_after
+            )
+            halting = seconds > threshold
             await recorder.record(
                 request=getattr(exc, "request", None),
                 seconds=seconds,
                 halted=halting,
             )
             if halting:
-                raise FloodWaitTooLong(seconds) from exc
+                raise FloodWaitTooLong(seconds, threshold) from exc
             logger.warning("FloodWait for %ds — sleeping it off", seconds)
             await asyncio.sleep(seconds)
 

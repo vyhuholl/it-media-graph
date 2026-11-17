@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 
 from itgraph.db.channels import (
@@ -1106,3 +1106,135 @@ async def test_a_rebuild_clears_the_sources_and_the_next_pass_refills(
     # Truncated with the queue it belongs to, then written again from the
     # raw layer in the same pass.
     assert await sources_of(inventory, "newcomer") == {SRC}
+
+
+# --- when they mentioned it ------------------------------------------
+
+FIRST = "2026-03-01T10:00:00+00:00"
+LAST = "2026-03-09T10:00:00+00:00"
+LATER = "2026-03-20T10:00:00+00:00"
+
+
+def mentioning(msg_id: int, date: str) -> dict[str, Any]:
+    return raw(
+        msg_id,
+        message="@newcomer",
+        entities=[mention_entity("newcomer")],
+        date=date,
+    )
+
+
+async def span_of(
+    database: Database, channel_id: int = SRC
+) -> tuple[datetime | None, datetime | None, int]:
+    """A source's two times, and the transaction that last wrote its row."""
+    async with database.session() as session:
+        row = (
+            await session.execute(
+                select(
+                    PendingMentionSource.first_referenced_at,
+                    PendingMentionSource.last_referenced_at,
+                    text("xmin::text::bigint"),
+                ).where(
+                    PendingMentionSource.username == "newcomer",
+                    PendingMentionSource.channel_id == channel_id,
+                )
+            )
+        ).one()
+    return row[0], row[1], row[2]
+
+
+async def test_a_source_keeps_its_first_and_last_mention(
+    inventory: Database,
+) -> None:
+    async with inventory.session() as session:
+        # Stored out of order, and with a message between: the times are
+        # the least and the greatest, not the first and last read.
+        await seed(
+            session,
+            mentioning(12, LAST),
+            mentioning(10, FIRST),
+            mentioning(11, "2026-03-05T10:00:00+00:00"),
+        )
+
+    await derive_graph(inventory)
+
+    first, last, _ = await span_of(inventory)
+    assert first == datetime.fromisoformat(FIRST)
+    assert last == datetime.fromisoformat(LAST)
+
+
+async def test_times_span_batches(inventory: Database) -> None:
+    """A pair met in two batches is folded by the database, not Python."""
+    async with inventory.session() as session:
+        await seed(session, mentioning(10, LAST), mentioning(11, FIRST))
+
+    await derive_graph(inventory, batch_size=1)
+
+    first, last, _ = await span_of(inventory)
+    assert first == datetime.fromisoformat(FIRST)
+    assert last == datetime.fromisoformat(LAST)
+
+
+async def test_a_later_mention_moves_the_last_time_only(
+    inventory: Database,
+) -> None:
+    async with inventory.session() as session:
+        await seed(session, mentioning(10, FIRST), mentioning(11, LAST))
+    await derive_graph(inventory)
+
+    async with inventory.session() as session:
+        await seed(session, mentioning(12, LATER))
+    await derive_graph(inventory)
+
+    first, last, _ = await span_of(inventory)
+    assert first == datetime.fromisoformat(FIRST)
+    assert last == datetime.fromisoformat(LATER)
+
+
+async def test_re_derivation_moves_no_time_and_writes_no_row(
+    inventory: Database,
+) -> None:
+    async with inventory.session() as session:
+        await seed(session, mentioning(10, FIRST), mentioning(11, LAST))
+    await derive_graph(inventory)
+    before = await span_of(inventory)
+
+    await derive_graph(inventory)
+
+    # The same transaction id: the guarded upsert did not touch the row.
+    assert await span_of(inventory) == before
+
+
+async def test_a_source_stored_without_times_is_filled(
+    inventory: Database,
+) -> None:
+    """A row from before the revision takes the first pass's times."""
+    async with inventory.session() as session:
+        await seed(session, mentioning(10, FIRST), mentioning(11, LAST))
+    await derive_graph(inventory)
+    async with inventory.session() as session:
+        await session.execute(
+            update(PendingMentionSource).values(
+                first_referenced_at=None, last_referenced_at=None
+            )
+        )
+        await session.commit()
+
+    await derive_graph(inventory)
+
+    first, last, _ = await span_of(inventory)
+    assert first == datetime.fromisoformat(FIRST)
+    assert last == datetime.fromisoformat(LAST)
+
+
+async def test_a_rebuild_refills_the_times(inventory: Database) -> None:
+    async with inventory.session() as session:
+        await seed(session, mentioning(10, FIRST), mentioning(11, LAST))
+    await derive_graph(inventory)
+
+    await derive_graph(inventory, rebuild=True)
+
+    first, last, _ = await span_of(inventory)
+    assert first == datetime.fromisoformat(FIRST)
+    assert last == datetime.fromisoformat(LAST)

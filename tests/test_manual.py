@@ -6,6 +6,7 @@ request, which cost nothing, and what each answer does to the inventory.
 """
 
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 
 import pytest
 from fakes import FakeTelegramClient, tl_channel, tl_user
@@ -27,6 +28,9 @@ from itgraph.db.models import (
     FloodEvent,
     PendingMention,
     RejectReason,
+    Resolution,
+    ResolutionKind,
+    ResolutionOutcome,
 )
 from itgraph.db.session import Database
 from itgraph.tg import backfill as backfill_module
@@ -371,7 +375,14 @@ async def test_a_pending_mention_the_addition_makes_redundant_is_cleared(
 ) -> None:
     async with inventory.session() as session:
         await add_pending_mentions(
-            session, [MentionSource(channel_id=SRC, username="fake_new")]
+            session,
+            [
+                MentionSource(
+                    channel_id=SRC,
+                    username="fake_new",
+                    referenced_at=datetime(2026, 3, 14, tzinfo=UTC),
+                )
+            ],
         )
     client = FakeTelegramClient(
         entities={"fake_new": tl_channel(NEW, username="fake_new")}
@@ -564,3 +575,76 @@ async def test_a_failed_lookup_commits_nothing(
     await add_channels(client, inventory, usernames=["fake_missing"], delay=0)
 
     assert client.session.saves == 0
+
+
+# --- the journal ------------------------------------------------------
+
+
+async def journal_of(
+    database: Database,
+) -> list[tuple[CollectionCommand, ResolutionKind, ResolutionOutcome]]:
+    async with database.session() as session:
+        rows = await session.execute(
+            select(
+                Resolution.command, Resolution.kind, Resolution.outcome
+            ).order_by(Resolution.id)
+        )
+        return [(command, kind, outcome) for command, kind, outcome in rows]
+
+
+async def test_each_lookup_is_journaled_under_add(
+    inventory: Database, slept: list[float]
+) -> None:
+    client = FakeTelegramClient(
+        entities={
+            "fake_new": tl_channel(NEW, username="fake_new"),
+            "fake_person": tl_user(777),
+        }
+    )
+
+    await add_channels(
+        client,
+        inventory,
+        usernames=["fake_new", "fake_person", "fake_missing"],
+        delay=0,
+    )
+
+    add, by_name = CollectionCommand.ADD, ResolutionKind.USERNAME
+    assert await journal_of(inventory) == [
+        (add, by_name, ResolutionOutcome.CHANNEL),
+        (add, by_name, ResolutionOutcome.NOT_CHANNEL),
+        (add, by_name, ResolutionOutcome.FAILED),
+    ]
+
+
+async def test_a_known_username_journals_nothing(
+    inventory: Database, slept: list[float]
+) -> None:
+    """No request, no resolution: the cap is of what Telegram was asked."""
+    client = FakeTelegramClient()
+
+    await add_channels(client, inventory, usernames=["known_channel"], delay=0)
+
+    assert await journal_of(inventory) == []
+
+
+async def test_a_halt_is_journaled_as_failed(
+    inventory: Database, slept: list[float]
+) -> None:
+    client = FakeTelegramClient(
+        entities={"fake_new": tl_channel(NEW, username="fake_new")},
+        resolve_floods={"fake_new": 86400},
+    )
+
+    summary = await add_channels(
+        client, inventory, usernames=["fake_new"], delay=0
+    )
+
+    assert summary.halt is not None
+    assert await journal_of(inventory) == [
+        (
+            CollectionCommand.ADD,
+            ResolutionKind.USERNAME,
+            ResolutionOutcome.FAILED,
+        )
+    ]

@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 
 import pytest
 from fakes import FakeTelegramClient, tl_channel, tl_user
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from itgraph.db.channels import (
     DiscoveredChannel,
@@ -26,10 +26,14 @@ from itgraph.db.models import (
     Channel,
     ChannelKind,
     ChannelStatus,
+    CollectionCommand,
     DiscoverySource,
     Edge,
     PendingMention,
     PendingMentionSource,
+    Resolution,
+    ResolutionKind,
+    ResolutionOutcome,
 )
 from itgraph.db.raw import store_messages
 from itgraph.db.session import Database
@@ -42,6 +46,7 @@ SRC = 1000000001
 FWD_ID = 2000000001  # discovered by forward, resolved by id
 FAIL_ID = 2000000002  # an id the session cannot place yet
 NEWCOMER = 3000000001  # what @newcomer resolves to
+MENTIONED_AT = datetime(2026, 3, 14, tzinfo=UTC)  # when a source named one
 
 
 @pytest.fixture
@@ -89,7 +94,11 @@ async def add_pending(
         await add_pending_mentions(
             session,
             [
-                MentionSource(channel_id=channel_id, username=username)
+                MentionSource(
+                    channel_id=channel_id,
+                    username=username,
+                    referenced_at=MENTIONED_AT,
+                )
                 for username in usernames
                 for channel_id in sources
             ],
@@ -734,3 +743,104 @@ async def test_a_named_run_does_not_read_the_mention_queue(
         await resolve_inventory(client, inventory, delay=0, tg_id=FWD_ID)
 
     assert "no mention sources recorded" not in caplog.text
+
+
+# --- the journal ------------------------------------------------------
+
+
+async def journal_of(
+    database: Database,
+) -> list[tuple[CollectionCommand, ResolutionKind, ResolutionOutcome]]:
+    async with database.session() as session:
+        rows = await session.execute(
+            select(
+                Resolution.command, Resolution.kind, Resolution.outcome
+            ).order_by(Resolution.id)
+        )
+        return [(command, kind, outcome) for command, kind, outcome in rows]
+
+
+async def test_resolve_journals_each_answer_by_id_and_by_name(
+    inventory: Database, slept: list[float]
+) -> None:
+    await add_forward_channel(inventory, FWD_ID)
+    await add_forward_channel(inventory, FAIL_ID)
+    await add_pending(inventory, "newcomer", "someone", "nobody")
+    client = FakeTelegramClient(
+        entities_by_id={FWD_ID: tl_channel(FWD_ID, username="forwarded")},
+        entities={
+            "newcomer": tl_channel(NEWCOMER, username="newcomer"),
+            "someone": tl_user(999),
+        },
+    )
+
+    await resolve_inventory(client, inventory, delay=0)
+
+    resolve = CollectionCommand.RESOLVE
+    by_id, by_name = ResolutionKind.ID, ResolutionKind.USERNAME
+    assert sorted(await journal_of(inventory)) == sorted(
+        [
+            (resolve, by_id, ResolutionOutcome.CHANNEL),
+            (resolve, by_id, ResolutionOutcome.FAILED),
+            (resolve, by_name, ResolutionOutcome.CHANNEL),
+            (resolve, by_name, ResolutionOutcome.NOT_CHANNEL),
+            (resolve, by_name, ResolutionOutcome.FAILED),
+        ]
+    )
+
+
+async def test_a_person_leaves_a_row_naming_nothing(
+    inventory: Database, slept: list[float]
+) -> None:
+    await add_pending(inventory, "someone")
+    client = FakeTelegramClient(entities={"someone": tl_user(999)})
+
+    await resolve_inventory(client, inventory, delay=0)
+
+    assert await journal_of(inventory) == [
+        (
+            CollectionCommand.RESOLVE,
+            ResolutionKind.USERNAME,
+            ResolutionOutcome.NOT_CHANNEL,
+        )
+    ]
+    # The table has nowhere to put a name or an id, and nothing it holds
+    # spells either.
+    assert {column.name for column in Resolution.__table__.columns} == {
+        "id",
+        "requested_at",
+        "command",
+        "kind",
+        "outcome",
+    }
+    async with inventory.session() as session:
+        row = (
+            await session.execute(text("SELECT r::text FROM tg_resolutions r"))
+        ).scalar_one()
+    assert "someone" not in row
+    assert "999" not in row
+
+
+async def test_a_halt_is_journaled_as_failed(
+    inventory: Database, slept: list[float]
+) -> None:
+    await add_forward_channel(inventory, FWD_ID)
+    client = FakeTelegramClient(
+        entities_by_id={FWD_ID: tl_channel(FWD_ID, username="a")},
+        resolve_floods={FWD_ID: 86400},
+    )
+
+    summary = await resolve_inventory(client, inventory, delay=0)
+
+    assert summary.halt is not None
+    assert await journal_of(inventory) == [
+        (
+            CollectionCommand.RESOLVE,
+            ResolutionKind.ID,
+            ResolutionOutcome.FAILED,
+        )
+    ]
+    # Nothing else is recorded on the channel: it is tried after the wait.
+    waiting = await channel(inventory, FWD_ID)
+    assert waiting is not None
+    assert waiting.resolve_attempts == 0

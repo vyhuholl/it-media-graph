@@ -631,6 +631,7 @@ def test_no_job_runs_what_is_for_a_person_to_read(
     # subscriptions link to, and a job's output is kept in the cluster's logs;
     # search spends a bucket of its own. All of them are run by hand.
     manual = {
+        "rising",
         "mentions",
         "tg-lookup",
         "tg-candidates",

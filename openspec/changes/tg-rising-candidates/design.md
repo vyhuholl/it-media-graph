@@ -8,7 +8,7 @@ See proposal.md for why. What shapes the approach:
 - **`itgraph derive` reads everything, every 15 minutes.** It streams the whole raw layer through the parser and writes edges and pending rows additively. `tg_raw_messages` has no index on time, so reading "the last fortnight's posts" again for a ranking would be a scan of its own.
 - **Resolution has two daily quotas.** `contacts.resolveUsername` for a name and `channels.getChannels` for an id: Telethon's `get_entity` on a username or on a `PeerChannel`. Both are spent by `itgraph resolve` and `itgraph add` today. The account met the first three times in July, the longest wait 85,490 s.
 - **The poll loop holds the session.** It is the only process that can make a request unattended. Since `walk-new-seeds` it walks new seeds when nothing is due, so it has an idle path, and a turn at resolution fits after it.
-- **The resolution pass's own steps already do the right thing with an answer.** `_resolve_channel` and `_resolve_pending` record a failure, refuse a user or a bot, create a candidate channel from a name, clear the pending row and persist the peer. The loop needs those steps, not a second copy of them.
+- **The resolution pass's own steps already do the right thing with an answer.** `resolve_channel` and `resolve_pending` record a failure, refuse a user or a bot, create a candidate channel from a name, clear the pending row and persist the peer. The loop needs those steps, not a second copy of them.
 - **A long rate limit stops the loop's schedule today.** A wait past `flood_abort_threshold` postpones every poll, since a poll and a walk share `messages.getHistory`. A wait on resolution must not, because the limit is on another method.
 
 ## Goals / Non-Goals
@@ -63,7 +63,7 @@ A table `tg_resolutions`:
 
 It is indexed on `requested_at`, and holds no username and no id, since a name can be a person's.
 
-A row is written with the answer, in the transaction that records it: `_resolve_channel`, `_resolve_pending` and `itgraph add`'s lookup each write one. The cap is `count(*) where requested_at > now() - interval '24 hours'`, a rolling day rather than a calendar one: Telegram does not say when its counters reset, and a rolling window cannot be spent twice across a midnight.
+A row is written with the answer, in the transaction that records it: `resolve_channel`, `resolve_pending` and `itgraph add`'s lookup each write one. The cap is `count(*) where requested_at > now() - interval '24 hours'`, a rolling day rather than a calendar one: Telegram does not say when its counters reset, and a rolling window cannot be spent twice across a midnight.
 
 A process killed between sending a request and writing its answer leaves that request out of the count. It undercounts by one at most, and only for that one.
 
@@ -79,7 +79,7 @@ In `tg/watch.py`, when no poll is due and no walk has a page to take, the loop a
 - a recorded wait on resolution has not ended (Decision 6);
 - or nothing rising awaits an identity.
 
-Otherwise it takes the first awaiting candidate in rank order. Awaiting means a channel never resolved, with no failure recorded, or a pending username with no attempt. It resolves that one with the resolution pass's `_resolve_channel` or `_resolve_pending`, paced by `backfill_request_delay` as that pass is, and journals the answer.
+Otherwise it takes the first awaiting candidate in rank order. Awaiting means a channel never resolved, with no failure recorded, or a pending username with no attempt. It resolves that one with the resolution pass's `resolve_channel` or `resolve_pending`, paced by `backfill_request_delay` as that pass is, and journals the answer.
 
 A name that is a channel becomes a candidate record (`discovered_via = mention`). The next derivation turns its pending sources into edges, so the evidence carries over with their times. A failure is recorded where the resolution pass records it, which also takes it out of "awaiting": it is not tried again (proposal, "Not covered").
 
@@ -90,6 +90,12 @@ Ten resolutions 20 minutes apart take a little over three hours. At the measured
 `waiting_out_floods` gains a `halt_after` argument, defaulting to `flood_abort_threshold`. The loop passes `0`, so every `FloodWaitError` that reaches it — Telethon itself sleeps off those under `flood_sleep_threshold`, 60 s — is recorded and raised as `FloodWaitTooLong` at once. The loop catches it in `tg/rising.py` and does not postpone polls or the walk.
 
 Whether a wait holds is read from `tg_flood_events`: a row for `ResolveUsernameRequest` or `GetChannelsRequest` whose `occurred_at + seconds` is in the future, whichever command recorded it. A restart therefore asks nothing during a wait, and a manual run's wait holds the loop too, since the limit is the account's.
+
+The loop also holds resolution in memory until the wait's end, whatever method the wait named: one whose request Telegram did not name is recorded as `unknown`, which the record's question does not ask about. A restart forgets that hold, and then the gap and the cap bound what it could ask.
+
+A resolution by the loop that passes its request deadline is recorded as a failure, as `itgraph resolve` records one, so the loop does not try it again; the loop then drops its connection, as after a timed-out poll. Decided in apply and confirmed by the operator on 2026-11-17.
+
+**Not covered by the requirements** (decided in apply): after a ranking with nothing awaiting, the loop reads it again only after `rising_resolve_gap_minutes`, timed in memory, rather than on every idle minute; the gap, the cap and a recorded wait are asked of the journal every idle tick.
 
 ### 7. `itgraph rising` prints channels, never names
 

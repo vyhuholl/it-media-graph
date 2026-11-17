@@ -19,10 +19,13 @@ inside the horizon refreshes all four for one request.
 snapshots, and neither is interpreted. Edges are still the derivation
 pass's job, run over these rows afterwards exactly as over any others.
 
-**No request carries a daily quota.** The peer comes from the session
+**No poll carries a daily quota.** The peer comes from the session
 file's entity cache through ``cached_peer``, never from ``get_entity``.
 In a one-off walk that mistake costs a run; in a loop it would spend the
-tightest quota in the project every day until somebody noticed.
+tightest quota in the project every day until somebody noticed. The one
+request here that does is the turn at resolution (``tg/rising.py``):
+the head of the rising ranking, when nothing else is to be done, under a
+cap every command's resolutions count against.
 
 **A rate limit does not stop it.** ``waiting_out_floods`` is reused
 unchanged, halt and all — and the halt is caught here and converted into
@@ -104,6 +107,7 @@ from itgraph.tg.errors import WatchStalled
 from itgraph.tg.floods import FloodRecorder
 from itgraph.tg.pacing import channel_gap, pace
 from itgraph.tg.payload import encode_payload
+from itgraph.tg.rising import resolve_rising_once
 
 __all__ = [
     "PollAttempt",
@@ -186,6 +190,10 @@ class WatchStats:
     walk_stored: int = 0
     walks_done: int = 0
     walks_set_aside: int = 0
+    # The turn at resolution: requests made for rising candidates, and
+    # waits on resolution that held it (polls and walks went on).
+    resolutions: int = 0
+    resolution_holds: int = 0
 
     def line(self) -> str:
         line = (
@@ -217,6 +225,12 @@ class WatchStats:
             )
         if self.walks_set_aside:
             line += f", {self.walks_set_aside} set aside for an hour"
+        if self.resolutions:
+            line += f"; resolved {self.resolutions} rising candidate(s)"
+        if self.resolution_holds:
+            line += (
+                f"; resolution held by {self.resolution_holds} rate limit(s)"
+            )
         return line
 
 
@@ -454,8 +468,11 @@ async def watch(
 
     When nothing is due, walk the history of a new seed a page at a time
     (`_walk_once`): a seed whose walk is not complete, back to
-    ``history_walk_since``. ``walk_clock`` times the walk's pauses and
-    retries, and is a parameter only so that a test can move it.
+    ``history_walk_since``. When there is no page either, resolve the
+    head of the rising ranking (`tg/rising.py`); a ranking with nothing
+    awaiting is read again only after ``rising_resolve_gap_minutes``.
+    ``walk_clock`` times the walk's pauses and retries and that look, and
+    is a parameter only so that a test can move it.
 
     Concurrency is structurally absent and that is the point: Telegram's
     limits are per account, so parallel workers reach the same ceiling
@@ -552,6 +569,16 @@ async def _cycles(
     """The loop itself. See ``watch``, which owns the stall check."""
     recorder = FloodRecorder(database, CollectionCommand.WATCH)
     last_lease_check = 0.0
+    # When the ranking may next be read for a resolution after one that
+    # had nothing awaiting, on the walker's clock. In memory, as a
+    # throttle only: reading it costs a query of every seed's edges, and
+    # an idle loop ticks every minute. The gap, the cap and a recorded
+    # wait are asked first, from the journal, and cost next to nothing.
+    next_rising_look = 0.0
+    # The end of the last wait resolution met, held in memory as well as
+    # read from the record: a wait whose request Telegram did not name is
+    # recorded under no method the record's question asks about.
+    rising_held_until: datetime | None = None
 
     while not stop.is_set():
         if max_cycles is not None and stats.cycles >= max_cycles:
@@ -610,6 +637,32 @@ async def _cycles(
                 if walk.concluded:
                     progress.made()
                 continue
+            rising_held = (
+                rising_held_until is not None and now < rising_held_until
+            )
+            if walker.clock() >= next_rising_look and not rising_held:
+                turn = await resolve_rising_once(
+                    client, database, recorder=recorder, now=now
+                )
+                if turn.nothing_awaits:
+                    next_rising_look = (
+                        walker.clock()
+                        + settings.rising_resolve_gap_minutes * 60
+                    )
+                if turn.halt is not None:
+                    # Resolution alone is held, by the recorded wait and
+                    # here; polls and the walk are another method's.
+                    rising_held_until = turn.halt.resume_after
+                    stats.resolution_holds += 1
+                elif turn.asked:
+                    stats.resolutions += 1
+                if turn.timed_out:
+                    stats.timed_out += 1
+                    await _drop_connection(client)
+                    continue
+                if turn.asked:
+                    progress.made()
+                    continue
             progress.made()
             await _sleep(stop, settings.watch_tick_seconds)
             continue

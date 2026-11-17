@@ -39,6 +39,7 @@ from itgraph.db.models import (
     CollectionCommand,
     DiscoverySource,
     FailureKind,
+    FloodEvent,
     RawMessage,
     RejectReason,
 )
@@ -46,6 +47,7 @@ from itgraph.db.session import Database
 from itgraph.tg import backfill as backfill_module
 from itgraph.tg import pacing as pacing_module
 from itgraph.tg.backfill import (
+    FloodWaitTooLong,
     RequestTimedOut,
     backfill_channel,
     backfill_channels,
@@ -1329,3 +1331,53 @@ async def test_the_operations_own_timeout_is_not_relabelled(
 
 async def _answers() -> str:
     return "the answer"
+
+
+# --- a caller's own threshold -------------------------------------------
+
+
+async def test_halt_after_zero_records_and_raises_at_once(
+    inventory: Database, slept: list[float]
+) -> None:
+    """The poll loop's turn at resolution: a wait is never slept off."""
+    attempts = 0
+
+    async def flooded() -> str:
+        nonlocal attempts
+        attempts += 1
+        raise FloodWaitError(request=None, capture=30)
+
+    with pytest.raises(FloodWaitTooLong) as raised:
+        await waiting_out_floods(
+            flooded,
+            FloodRecorder(inventory, CollectionCommand.WATCH),
+            halt_after=0,
+        )
+
+    assert raised.value.seconds == 30
+    assert "0s halt threshold" in str(raised.value)
+    assert slept == []
+    assert attempts == 1
+    async with inventory.session() as session:
+        events = (await session.scalars(select(FloodEvent))).all()
+    assert [(event.seconds, event.halted) for event in events] == [(30, True)]
+
+
+async def test_without_halt_after_the_threshold_is_unchanged(
+    inventory: Database, slept: list[float]
+) -> None:
+    attempts = 0
+
+    async def flooded_once() -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise FloodWaitError(request=None, capture=30)
+        return "the answer"
+
+    got = await waiting_out_floods(
+        flooded_once, FloodRecorder(inventory, CollectionCommand.WATCH)
+    )
+
+    assert got == "the answer"
+    assert 30 in slept

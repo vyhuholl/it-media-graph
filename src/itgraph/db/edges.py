@@ -11,7 +11,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from sqlalchemy import Select, delete, func, select, text, update
+from sqlalchemy import Select, delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,15 +43,19 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class MentionSource:
-    """One channel mentioning one username that is not yet a channel.
+    """One message of a channel mentioning a username that is not yet a
+    channel, and when that message was published.
 
-    A pair rather than a tally, because derivation has to stay
-    re-runnable: a second pass over unchanged raw messages must write
-    nothing, and an increment always writes.
+    Stored as a pair with the first and the last of those times rather
+    than a tally, because derivation has to stay re-runnable: a second
+    pass over unchanged raw messages must write nothing, and an increment
+    always writes, where the least and the greatest of the same times do
+    not move.
     """
 
     channel_id: int
     username: str
+    referenced_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,26 +196,37 @@ async def insert_edges(session: AsyncSession, edges: Sequence[EdgeRow]) -> int:
 async def add_pending_mentions(
     session: AsyncSession, mentions: Iterable[MentionSource]
 ) -> int:
-    """Record usernames mentioned but not yet known as channels, and who
-    mentioned them.
+    """Record usernames mentioned but not yet known as channels, who
+    mentioned them, and when.
 
-    ``ON CONFLICT DO NOTHING`` on both inserts, which is what keeps
-    derivation re-runnable: the pending row keeps its original
-    ``first_seen_at`` and any resolution attempts already made against it,
-    and a source pair already recorded is not recorded twice however many
-    times the pass repeats.
+    ``ON CONFLICT DO NOTHING`` on the pending rows: each keeps its original
+    ``first_seen_at`` and any resolution attempts already made against it.
+    A source pair is upserted: its first time only ever moves earlier and
+    its last only later, and the ``WHERE`` writes a row only when one of
+    them would move — so a pass over unchanged raw messages writes nothing,
+    and a row stored before the times existed is filled by the first pass
+    that reads its messages.
+
+    The mentions are folded to one row per pair first, because one
+    statement may not update the same row twice.
 
     Returns how many usernames were newly pending — the sources are
-    bookkeeping for the ordering, not work the operator asked about.
+    bookkeeping for the ordering and the rising ranking, not work the
+    operator asked about.
 
     The pending rows go in first because the sources have a foreign key
     onto them, and both are in the caller's one transaction.
     """
-    pairs = {(item.username, item.channel_id) for item in mentions}
-    if not pairs:
+    spans: dict[tuple[str, int], tuple[datetime, datetime]] = {}
+    for item in mentions:
+        key = (item.username, item.channel_id)
+        moment = item.referenced_at
+        first, last = spans.get(key, (moment, moment))
+        spans[key] = (min(first, moment), max(last, moment))
+    if not spans:
         return 0
 
-    names = list(dict.fromkeys(username for username, _ in pairs))
+    names = list(dict.fromkeys(username for username, _ in spans))
     statement = (
         insert(PendingMention)
         .values([{"username": name} for name in names])
@@ -222,16 +237,43 @@ async def add_pending_mentions(
 
     sources = insert(PendingMentionSource).values(
         [
-            {"username": username, "channel_id": channel_id}
-            for username, channel_id in sorted(pairs)
+            {
+                "username": username,
+                "channel_id": channel_id,
+                "first_referenced_at": first,
+                "last_referenced_at": last,
+            }
+            for (username, channel_id), (first, last) in sorted(spans.items())
         ]
     )
+    # `least` and `greatest` skip a null, so a row from before the times
+    # existed takes the incoming ones whole.
+    earliest = func.least(
+        PendingMentionSource.first_referenced_at,
+        sources.excluded.first_referenced_at,
+    )
+    latest = func.greatest(
+        PendingMentionSource.last_referenced_at,
+        sources.excluded.last_referenced_at,
+    )
     await session.execute(
-        sources.on_conflict_do_nothing(
+        sources.on_conflict_do_update(
             index_elements=[
                 PendingMentionSource.username,
                 PendingMentionSource.channel_id,
-            ]
+            ],
+            set_={
+                "first_referenced_at": earliest,
+                "last_referenced_at": latest,
+            },
+            where=or_(
+                PendingMentionSource.first_referenced_at.is_distinct_from(
+                    earliest
+                ),
+                PendingMentionSource.last_referenced_at.is_distinct_from(
+                    latest
+                ),
+            ),
         )
     )
     return inserted

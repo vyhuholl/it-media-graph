@@ -18,6 +18,12 @@ waiting on it.
 
 Whatever resolves to a user or a bot rather than a channel is recorded as
 such and creates no channel row: this graph holds channels only.
+
+Every resolution is journaled with its answer, under the command of the
+recorder it was made with — by id or by username, a channel, not one, or
+a failure — and never with the name or the id it asked about. The poll
+loop's cap is read from that journal, so a resolution here spends the
+loop's share too.
 """
 
 import logging
@@ -32,6 +38,7 @@ from telethon.tl.types import PeerChannel
 
 from itgraph.config import settings
 from itgraph.db.channels import (
+    NOT_A_CHANNEL,
     DiscoveredChannel,
     channels_awaiting_resolution,
     create_resolved_channel,
@@ -44,14 +51,31 @@ from itgraph.db.edges import (
     pending_mentions_to_resolve,
     record_pending_failure,
 )
-from itgraph.db.models import CollectionCommand, DiscoverySource
+from itgraph.db.models import (
+    CollectionCommand,
+    DiscoverySource,
+    ResolutionKind,
+    ResolutionOutcome,
+)
+from itgraph.db.rising import record_resolution
 from itgraph.db.session import Database
-from itgraph.tg.backfill import FloodWaitTooLong, waiting_out_floods
+from itgraph.tg.backfill import (
+    FloodWaitTooLong,
+    RequestTimedOut,
+    waiting_out_floods,
+)
 from itgraph.tg.client import persist_peers
 from itgraph.tg.floods import FloodRecorder
 from itgraph.tg.pacing import pace
 
-__all__ = ["ResolveSummary", "channel_identity", "resolve_inventory"]
+__all__ = [
+    "ResolveSummary",
+    "channel_identity",
+    "journal_halt",
+    "resolve_channel",
+    "resolve_inventory",
+    "resolve_pending",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -68,12 +92,16 @@ class ResolveSummary:
 
     ``halt`` is set when a rate limit stopped the run short. Everything
     resolved before that point is committed and counted here.
+
+    ``timed_out`` counts the failures whose request never answered, among
+    ``failed``: the poll loop drops its connection after one.
     """
 
     resolved: int = 0
     discovered: int = 0
     not_channels: int = 0
     failed: int = 0
+    timed_out: int = 0
     halt: FloodWaitTooLong | None = None
 
     def line(self) -> str:
@@ -81,6 +109,19 @@ class ResolveSummary:
             f"resolved {self.resolved}, discovered {self.discovered}, "
             f"not channels {self.not_channels}, failed {self.failed}"
         )
+
+
+async def journal_halt(
+    session: AsyncSession, command: CollectionCommand, kind: ResolutionKind
+) -> None:
+    """Journal a resolution Telegram answered with a wait too long to hold.
+
+    It was asked, so it counts against the cap as a failure; nothing else
+    is recorded on the reference, which stays as it was for after the
+    wait. Committed here, because the caller rolls back on the halt.
+    """
+    await record_resolution(session, command, kind, ResolutionOutcome.FAILED)
+    await session.commit()
 
 
 def channel_identity(entity: Any) -> DiscoveredChannel | None:
@@ -163,7 +204,7 @@ async def resolve_inventory(
                 if remaining is not None and remaining <= 0:
                     break
                 await pace(pause)
-                await _resolve_channel(
+                await resolve_channel(
                     client, session, channel.tg_id, summary, recorder
                 )
                 if remaining is not None:
@@ -206,7 +247,7 @@ async def resolve_inventory(
                         "" if mention.sources == 1 else "s",
                     )
                     await pace(pause)
-                    await _resolve_pending(
+                    await resolve_pending(
                         client, session, mention.username, summary, recorder
                     )
                     if remaining is not None:
@@ -220,39 +261,52 @@ async def resolve_inventory(
     return summary
 
 
-async def _resolve_channel(
+async def resolve_channel(
     client: TelegramClient,
     session: AsyncSession,
     tg_id: int,
     summary: ResolveSummary,
     recorder: FloodRecorder,
+    *,
+    halt_after: float | None = None,
 ) -> None:
     """Resolve one channel by id, through the session's cached hash.
+
+    Shared with the poll loop's turn at resolution (``tg/rising.py``), so
+    an answer does the same to the inventory whoever asked.
+
+    ``halt_after`` is ``waiting_out_floods``'s: the poll loop passes ``0``.
 
     Clears any pending mention this resolution has just answered. A
     channel found both ways — forwarded from in one message, named in
     another — used to resolve by this cheap path and leave the expensive
-    path's row behind for good, because only ``_resolve_pending`` deleted
+    path's row behind for good, because only ``resolve_pending`` deleted
     from that queue. Those rows survive as requests that can only return a
     channel the inventory already has, and each one costs a
     ``contacts.resolveUsername``.
     """
     try:
         entity = await waiting_out_floods(
-            lambda: client.get_entity(PeerChannel(tg_id)), recorder
+            lambda: client.get_entity(PeerChannel(tg_id)),
+            recorder,
+            halt_after=halt_after,
         )
+    except FloodWaitTooLong:
+        await journal_halt(session, recorder.command, ResolutionKind.ID)
+        raise
     except _LOOKUP_ERRORS as exc:
         logger.warning("channel %d did not resolve: %s", tg_id, exc)
         await record_channel_resolve_failure(session, tg_id, str(exc))
+        await _journal(session, recorder, ResolutionKind.ID, failed=True)
         await session.commit()
         summary.failed += 1
+        summary.timed_out += isinstance(exc, RequestTimedOut)
         return
 
     identity = channel_identity(entity)
     if identity is None:
-        await record_channel_resolve_failure(
-            session, tg_id, "resolved to a user or bot, not a channel"
-        )
+        await record_channel_resolve_failure(session, tg_id, NOT_A_CHANNEL)
+        await _journal(session, recorder, ResolutionKind.ID, identity=None)
         await session.commit()
         summary.not_channels += 1
         return
@@ -268,37 +322,62 @@ async def _resolve_channel(
         # Normalised the way the queue stores it, or the delete silently
         # matches nothing for any channel Telegram spells with capitals.
         await delete_pending_mention(session, identity.username.lower())
+    await _journal(session, recorder, ResolutionKind.ID, identity=identity)
     # Before the database commit, never after: see `persist_peers`.
     await persist_peers(client)
     await session.commit()
     summary.resolved += 1
 
 
-async def _resolve_pending(
+async def resolve_pending(
     client: TelegramClient,
     session: AsyncSession,
     username: str,
     summary: ResolveSummary,
     recorder: FloodRecorder,
+    *,
+    halt_after: float | None = None,
+    log_name: bool = True,
 ) -> None:
-    """Resolve one pending username by public lookup."""
+    """Resolve one pending username by public lookup.
+
+    Shared with the poll loop's turn at resolution, as
+    ``resolve_channel`` is.
+
+    ``halt_after`` is ``waiting_out_floods``'s. ``log_name=False`` keeps
+    the name, and the error that would quote it, out of the log: the poll
+    loop's log is kept, and the name may be a person's.
+    """
     try:
         entity = await waiting_out_floods(
-            lambda: client.get_entity(username), recorder
+            lambda: client.get_entity(username),
+            recorder,
+            halt_after=halt_after,
         )
+    except FloodWaitTooLong:
+        await journal_halt(session, recorder.command, ResolutionKind.USERNAME)
+        raise
     except _LOOKUP_ERRORS as exc:
-        logger.warning("@%s did not resolve: %s", username, exc)
+        if log_name:
+            logger.warning("@%s did not resolve: %s", username, exc)
+        else:
+            logger.warning(
+                "a pending name did not resolve (%s)", type(exc).__name__
+            )
         await record_pending_failure(session, username, str(exc))
+        await _journal(session, recorder, ResolutionKind.USERNAME, failed=True)
         await session.commit()
         summary.failed += 1
+        summary.timed_out += isinstance(exc, RequestTimedOut)
         return
 
     identity = channel_identity(entity)
     if identity is None:
         # A person or a bot, not a channel: kept out of the inventory, and
         # marked so a routine re-run does not ask about it again.
-        await record_pending_failure(
-            session, username, "resolved to a user or bot, not a channel"
+        await record_pending_failure(session, username, NOT_A_CHANNEL)
+        await _journal(
+            session, recorder, ResolutionKind.USERNAME, identity=None
         )
         await session.commit()
         summary.not_channels += 1
@@ -318,7 +397,28 @@ async def _resolve_pending(
         discovered_via=DiscoverySource.MENTION,
     )
     await delete_pending_mention(session, username)
+    await _journal(
+        session, recorder, ResolutionKind.USERNAME, identity=identity
+    )
     # Before the database commit, never after: see `persist_peers`.
     await persist_peers(client)
     await session.commit()
     summary.discovered += 1
+
+
+async def _journal(
+    session: AsyncSession,
+    recorder: FloodRecorder,
+    kind: ResolutionKind,
+    *,
+    identity: DiscoveredChannel | None = None,
+    failed: bool = False,
+) -> None:
+    """Journal one answer under the recorder's command, naming nothing."""
+    if failed:
+        outcome = ResolutionOutcome.FAILED
+    elif identity is None:
+        outcome = ResolutionOutcome.NOT_CHANNEL
+    else:
+        outcome = ResolutionOutcome.CHANNEL
+    await record_resolution(session, recorder.command, kind, outcome)
