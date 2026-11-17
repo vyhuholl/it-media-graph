@@ -65,6 +65,7 @@ from itgraph.tg.payload import encode_payload
 __all__ = [
     "ChannelRun",
     "FloodWaitTooLong",
+    "PageOutcome",
     "PeerNotCached",
     "RequestTimedOut",
     "RunSummary",
@@ -73,6 +74,7 @@ __all__ = [
     "cached_peer",
     "ceiling_for",
     "classify",
+    "walk_page",
 ]
 
 logger = logging.getLogger(__name__)
@@ -150,6 +152,23 @@ class ChannelRun:
 
     stored: int = 0
     capped: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class PageOutcome:
+    """What one page of a walk did.
+
+    ``done`` means nothing will ask this channel for older history again:
+    the walk reached the cutoff, ran out of messages, or filled the
+    ceiling (``capped``). ``asked`` is false only when the channel already
+    held its ceiling before the page, so no request was made and nothing
+    was recorded — the caller decides what that means for it.
+    """
+
+    stored: int = 0
+    done: bool = False
+    capped: bool = False
+    asked: bool = True
 
 
 @dataclass(slots=True)
@@ -409,6 +428,51 @@ async def backfill_channel(
     An aggregator that posts fifty times a day would otherwise be most of
     the corpus, and it is the least informative node in the graph.
     """
+    stored = 0
+    while True:
+        page = await walk_page(
+            client,
+            session,
+            channel_id=channel_id,
+            username=username,
+            cutoff=cutoff,
+            batch_size=batch_size,
+            request_delay=request_delay,
+            max_messages=max_messages,
+            recorder=recorder,
+        )
+        stored += page.stored
+        if page.done:
+            return ChannelRun(stored=stored, capped=page.capped)
+
+
+async def walk_page(
+    client: TelegramClient,
+    session: AsyncSession,
+    *,
+    channel_id: int,
+    username: str | None,
+    cutoff: datetime,
+    batch_size: int | None = None,
+    request_delay: float | None = None,
+    max_messages: int | None = None,
+    recorder: FloodRecorder,
+) -> PageOutcome:
+    """Ask for one page of a channel's history, older than what is held.
+
+    One request at most, so that whoever calls it decides what comes
+    between two pages: `backfill_channel` asks for the next at once, the
+    poll loop only once nothing is due. Everything a page needs is read
+    from the database each time — the cursor, the rows held against the
+    ceiling — which is what lets the loop take one page, poll a dozen
+    channels, and take the next as if nothing had happened in between.
+
+    Commits what it stores, rows and cursor in one transaction, and
+    records the walk complete once nothing older is to be asked for: the
+    cutoff crossed, the history run out, or the ceiling filled. A channel
+    already at its ceiling makes no request and records nothing
+    (``asked`` false), as `itgraph backfill` has always left it.
+    """
     size = batch_size or settings.backfill_batch_size
     delay = (
         request_delay
@@ -422,13 +486,14 @@ async def backfill_channel(
             f"{channel_id} has no username; there is nothing to resolve"
         )
 
-    # Counted from the rows, so the ceiling holds across runs: what was
-    # collected last week still counts against this channel's share.
+    # Counted from the rows, so the ceiling holds across runs and across
+    # pages: what was collected last week, or by a poll a minute ago,
+    # still counts against this channel's share.
     held = 0 if ceiling is None else await count_messages(session, channel_id)
     remaining = None if ceiling is None else ceiling - held
     if remaining is not None and remaining <= 0:
         # Already at its ceiling: not a request's worth of anything.
-        return ChannelRun(capped=True)
+        return PageOutcome(done=True, capped=True, asked=False)
 
     state = await load_state(session, channel_id)
     await start_channel(session, channel_id)
@@ -439,91 +504,79 @@ async def backfill_channel(
     entity = await cached_peer(client, tg_id=channel_id, username=username)
 
     # 0 means "from the newest message"; a stored cursor means "carry on
-    # from where the last run stopped".
+    # from where the last page stopped".
     offset_id = state.oldest_fetched_id if state else None
     first_contact = state is None or state.newest_fetched_id is None
-    stored = 0
-    capped = False
-    oldest_date: datetime | None = None
 
-    while True:
-        if remaining is not None and remaining <= 0:
-            logger.info(
-                "@%s: at its %d-message ceiling — done with this channel",
-                username,
-                ceiling,
-            )
-            capped = True
-            break
-
-        # Never ask for more than the ceiling leaves: those messages are
-        # not going to be stored, so the request buys nothing.
-        want = size if remaining is None else min(size, remaining)
-        await pace(delay)
-        window = await _fetch_window(
-            client,
-            entity,
-            offset_id=offset_id or 0,
-            size=want,
-            recorder=recorder,
-        )
-        if not window:
-            break
-
-        # Media is never downloaded: what is stored is the metadata the
-        # payload already carries, and nothing touches the filesystem.
-        keep = []
-        reached_cutoff = False
-        for message in window:
-            if message.date < cutoff:
-                reached_cutoff = True
-                break
-            keep.append(message)
-
-        if keep:
-            payloads = {
-                message.id: encode_payload(message) for message in keep
-            }
-            stored += await store_messages(
-                session, channel_id=channel_id, payloads=payloads
-            )
-            newest = keep[0] if first_contact else None
-            await record_progress(
-                session,
-                channel_id,
-                oldest_fetched_id=keep[-1].id,
-                newest_fetched_id=newest.id if newest else None,
-            )
-            if newest is not None:
-                await session.execute(
-                    update(Channel)
-                    .where(Channel.tg_id == channel_id)
-                    .values(last_post_at=newest.date)
-                )
-                first_contact = False
-            # Rows and cursor together, or a killed process loses a
-            # window of history that no later run will ask for.
-            await session.commit()
-            offset_id = keep[-1].id
-            oldest_date = keep[-1].date
-            if remaining is not None:
-                remaining -= len(keep)
-
-        if reached_cutoff or len(window) < want:
-            break
-
-    if capped:
-        # Complete in the sense that counts: nothing will ask this
-        # channel for more history. The date recorded is how deep the
-        # rows actually go — writing the requested cutoff instead would
-        # have the listing claim a depth that was never collected.
-        await record_complete(session, channel_id, oldest_date or cutoff)
+    # Never ask for more than the ceiling leaves: those messages are not
+    # going to be stored, so the request buys nothing.
+    want = size if remaining is None else min(size, remaining)
+    await pace(delay)
+    window = await _fetch_window(
+        client,
+        entity,
+        offset_id=offset_id or 0,
+        size=want,
+        recorder=recorder,
+    )
+    if not window:
+        await record_complete(session, channel_id, cutoff)
         await session.commit()
-        return ChannelRun(stored=stored, capped=True)
+        return PageOutcome(done=True)
 
-    await record_complete(session, channel_id, cutoff)
-    await session.commit()
-    return ChannelRun(stored=stored)
+    # Media is never downloaded: what is stored is the metadata the
+    # payload already carries, and nothing touches the filesystem.
+    keep = []
+    reached_cutoff = False
+    for message in window:
+        if message.date < cutoff:
+            reached_cutoff = True
+            break
+        keep.append(message)
+
+    stored = 0
+    if keep:
+        payloads = {message.id: encode_payload(message) for message in keep}
+        stored = await store_messages(
+            session, channel_id=channel_id, payloads=payloads
+        )
+        newest = keep[0] if first_contact else None
+        await record_progress(
+            session,
+            channel_id,
+            oldest_fetched_id=keep[-1].id,
+            newest_fetched_id=newest.id if newest else None,
+        )
+        if newest is not None:
+            await session.execute(
+                update(Channel)
+                .where(Channel.tg_id == channel_id)
+                .values(last_post_at=newest.date)
+            )
+        # Rows and cursor together, or a killed process loses a window
+        # of history that no later page will ask for.
+        await session.commit()
+
+    if reached_cutoff or len(window) < want:
+        await record_complete(session, channel_id, cutoff)
+        await session.commit()
+        return PageOutcome(stored=stored, done=True)
+
+    if remaining is not None and remaining - stored <= 0:
+        logger.info(
+            "@%s: at its %d-message ceiling — done with this channel",
+            username,
+            ceiling,
+        )
+        # Complete in the sense that counts: nothing will ask this channel
+        # for more history. The date recorded is how deep the rows
+        # actually go — writing the requested cutoff instead would have
+        # the listing claim a depth that was never collected.
+        await record_complete(session, channel_id, keep[-1].date)
+        await session.commit()
+        return PageOutcome(stored=stored, done=True, capped=True)
+
+    return PageOutcome(stored=stored)
 
 
 async def backfill_channels(

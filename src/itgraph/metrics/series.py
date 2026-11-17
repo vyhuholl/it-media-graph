@@ -23,8 +23,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from itgraph.config import settings
 from itgraph.db import yt_alerts
 from itgraph.db.alerts import failing_alerts, outstanding_alerts
+from itgraph.db.backfill import awaiting_walk
 from itgraph.db.models import (
+    BackfillState,
     BaselineRun,
+    Channel,
     FloodEvent,
     Platform,
     PollState,
@@ -85,6 +88,20 @@ async def _telegram(session: AsyncSession, now: datetime) -> list[Family]:
         else 0.0
     )
     last_flood = await session.scalar(select(func.max(FloodEvent.occurred_at)))
+    # The seeds the poll loop still has to walk, by the loop's own
+    # predicate, and when the earliest of them was marked: its wait began
+    # then, not when it was first seen.
+    awaiting, earliest = (
+        await session.execute(
+            select(func.count(), func.min(Channel.reviewed_at))
+            .select_from(Channel)
+            .outerjoin(
+                BackfillState, BackfillState.channel_id == Channel.tg_id
+            )
+            .where(*awaiting_walk())
+        )
+    ).one()
+    waited = (now - earliest).total_seconds() if earliest is not None else 0.0
     return [
         _gauge(
             "itgraph_telegram_last_poll_timestamp_seconds",
@@ -110,6 +127,16 @@ async def _telegram(session: AsyncSession, now: datetime) -> list[Family]:
             "itgraph_telegram_last_flood_timestamp_seconds",
             "When a rate limit was last recorded.",
             _timestamp(last_flood),
+        ),
+        _gauge(
+            "itgraph_telegram_seeds_awaiting_history",
+            "Seeds in scope whose history walk is not complete.",
+            float(awaiting or 0),
+        ),
+        _gauge(
+            "itgraph_telegram_oldest_awaiting_history_seconds",
+            "How long ago the earliest seed awaiting its walk was marked.",
+            max(waited, 0.0),
         ),
     ]
 

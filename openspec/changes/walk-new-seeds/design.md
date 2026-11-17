@@ -56,12 +56,16 @@ Rejected:
 
 `itgraph backfill` loops over it, with the same results and the same report as today. Its tests are the regression check.
 
+One thing changes for the command, and it changes towards the spec. The ceiling is now counted from the rows before every page. The old loop took the count once and then subtracted every message a page kept, so a message already stored by a poll counted twice. A channel the loop had polled for a while would stop short of its ceiling by that overlap. Now it stops at the ceiling in rows, which is what "Per-Channel Message Ceiling" asks: the messages a channel holds are what is counted, and "rows collected by earlier runs count too". `itgraph backfill`'s tests pass unedited: none of them stored a message twice.
+
+A seed can already hold its ceiling before its first page. Its polls stored that many, which a busy channel marked late could do. Then `walk_page` asks for nothing and records nothing (`asked` false), as `itgraph backfill` has always left such a channel. The loop then records the walk complete at the date of the oldest message held, never at `history_walk_since`, which the rows do not reach. Without that record the seed would be chosen again on every idle tick.
+
 In the loop, after the due polls of a tick, if nothing is due:
 - take the seed awaiting its walk that was marked earliest (`reviewed_at`, then id), skipping any still inside its hour of retry (Decision 4);
 - ask for one page of it;
 - go round again: quiet hours, connection, due polls, then the next page.
 
-The loop sleeps only when there is neither a poll due nor a page to walk. One seed is walked to the end before the next is started. Starting a different seed waits out `backfill_channel_pause_*` since the last page, measured, not slept: until it has passed, the loop polls or idles. A page that stored something, or one that concluded a walk, is progress for the stall check.
+The loop sleeps only when there is neither a poll due nor a page to walk. One seed is walked to the end before the next is started. Starting a different seed waits out `backfill_channel_pause_*` since the last page, measured, not slept: until it has passed, the loop polls or idles. A page Telegram answered is progress for the stall check, as a poll is, whatever it stored.
 
 Scope is read anew before every page, so a seed rejected mid-walk gets no further page.
 

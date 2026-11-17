@@ -46,6 +46,8 @@ which is why it is deliberately incurious about the cause.
 
 import asyncio
 import logging
+import time
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -57,9 +59,17 @@ from telethon import TelegramClient
 from telethon.errors import RPCError
 
 from itgraph.config import settings
-from itgraph.db.backfill import advance_newest
+from itgraph.db.backfill import (
+    AwaitingWalk,
+    advance_newest,
+    oldest_held,
+    record_complete,
+    record_failure,
+    record_skip,
+    seeds_awaiting_walk,
+)
 from itgraph.db.metrics import latest_observations, store_metrics
-from itgraph.db.models import Channel, CollectionCommand
+from itgraph.db.models import Channel, CollectionCommand, FailureKind
 from itgraph.db.poll import (
     DueChannel,
     due_channels,
@@ -88,10 +98,11 @@ from itgraph.tg.backfill import (
     cached_peer,
     classify,
     waiting_out_floods,
+    walk_page,
 )
 from itgraph.tg.errors import WatchStalled
 from itgraph.tg.floods import FloodRecorder
-from itgraph.tg.pacing import pace
+from itgraph.tg.pacing import channel_gap, pace
 from itgraph.tg.payload import encode_payload
 
 __all__ = [
@@ -110,6 +121,11 @@ logger = logging.getLogger(__name__)
 # a batch of the whole inventory would be answering a question asked
 # hours ago by the time it reached the end.
 BATCH = 25
+
+# How long a seed whose walk could not run is left alone: long enough
+# that the loop does not ask the same question every idle tick, short
+# enough that a seed resolved in the meantime is walked within the hour.
+WALK_RETRY_SECONDS = 3600.0
 
 
 @dataclass(slots=True)
@@ -163,6 +179,13 @@ class WatchStats:
     postponed: int = 0
     cycles: int = 0
     skipped_channels: set[int] = field(default_factory=set)
+    # The walk of new seeds, said apart from the polls: pages asked for,
+    # what they stored, walks that reached their depth, and walks set
+    # aside for an hour because they could not run.
+    walked: int = 0
+    walk_stored: int = 0
+    walks_done: int = 0
+    walks_set_aside: int = 0
 
     def line(self) -> str:
         line = (
@@ -187,7 +210,52 @@ class WatchStats:
             line += f"; {self.reconnects} reconnect(s)"
         if self.postponed:
             line += f"; {self.postponed} rate-limit postponement(s)"
+        if self.walked or self.walks_set_aside:
+            line += (
+                f"; walked {self.walked} page(s), {self.walk_stored} "
+                f"messages, {self.walks_done} walk(s) complete"
+            )
+        if self.walks_set_aside:
+            line += f", {self.walks_set_aside} set aside for an hour"
         return line
+
+
+@dataclass(slots=True)
+class WalkAttempt:
+    """What one turn at walking a new seed amounted to.
+
+    ``walked`` is false when there was nothing the loop could walk now —
+    no seed waiting, every one set aside, a pause between seeds not yet
+    over, or a rate limit not yet waited out — which is the loop's cue to
+    sleep. ``concluded`` and ``halt`` mean what they mean for a poll.
+    """
+
+    walked: bool = False
+    concluded: bool = True
+    halt: FloodWaitTooLong | None = None
+
+
+@dataclass(slots=True)
+class _Walker:
+    """What the loop remembers between pages. None of it outlives the process.
+
+    In memory on purpose. A retry is timed here rather than in a column,
+    because the walk's row is touched by every poll and cannot time one;
+    a restart forgets it all, and costs at most one request per seed
+    still waiting.
+    """
+
+    clock: Callable[[], float]
+    # The seed under way: walked to its end before another is started.
+    current: int | None = None
+    # When the next seed's first page may be asked for, on ``clock``: the
+    # walk's pause between channels, waited out by polling or idling
+    # rather than by sleeping.
+    next_seed_at: float = 0.0
+    # Seeds whose walk could not run, and when they may be tried again.
+    not_before: dict[int, float] = field(default_factory=dict)
+    # A rate limit too long to sit through, on the wall clock it names.
+    held_until: datetime | None = None
 
 
 async def _window(
@@ -380,8 +448,14 @@ async def watch(
     lease: SessionLease | None = None,
     stop: asyncio.Event | None = None,
     max_cycles: int | None = None,
+    walk_clock: Callable[[], float] = time.monotonic,
 ) -> WatchStats:
     """Poll due channels, one at a time, until asked to stop.
+
+    When nothing is due, walk the history of a new seed a page at a time
+    (`_walk_once`): a seed whose walk is not complete, back to
+    ``history_walk_since``. ``walk_clock`` times the walk's pauses and
+    retries, and is a parameter only so that a test can move it.
 
     Concurrency is structurally absent and that is the point: Telegram's
     limits are per account, so parallel workers reach the same ceiling
@@ -422,6 +496,7 @@ async def watch(
             lease=lease,
             stop=stop or asyncio.Event(),
             max_cycles=max_cycles,
+            walker=_Walker(clock=walk_clock),
         )
     )
     watchdog = asyncio.create_task(_refuse_to_stall(progress))
@@ -472,6 +547,7 @@ async def _cycles(
     lease: SessionLease | None,
     stop: asyncio.Event,
     max_cycles: int | None,
+    walker: _Walker,
 ) -> None:
     """The loop itself. See ``watch``, which owns the stall check."""
     recorder = FloodRecorder(database, CollectionCommand.WATCH)
@@ -512,6 +588,28 @@ async def _cycles(
             lag = await queue_lag(session, now=now)
 
         if not batch:
+            # Nothing due, so a new seed's history may have a page. Then
+            # round again — quiet hours, the connection and due polls are
+            # asked before every page — and sleep only when there was
+            # nothing to walk either.
+            walk = await _walk_once(
+                client,
+                database,
+                walker,
+                stats=stats,
+                recorder=recorder,
+                now=now,
+            )
+            if walk.halt is not None:
+                await _postpone(
+                    database, walk.halt, walker=walker, stats=stats
+                )
+                progress.made()
+                continue
+            if walk.walked:
+                if walk.concluded:
+                    progress.made()
+                continue
             progress.made()
             await _sleep(stop, settings.watch_tick_seconds)
             continue
@@ -549,14 +647,165 @@ async def _cycles(
                 # the whole schedule slides past the wait and the loop
                 # carries on. A batch job would exit here; a loop that
                 # exited would stop being the product.
-                async with database.session() as session:
-                    await postpone_all(
-                        session, until=attempt.halt.resume_after
-                    )
-                stats.postponed += 1
+                await _postpone(
+                    database, attempt.halt, walker=walker, stats=stats
+                )
                 progress.made()
-                logger.warning("%s — postponing the schedule", attempt.halt)
                 break
+
+
+async def _postpone(
+    database: Database,
+    halt: FloodWaitTooLong,
+    *,
+    walker: _Walker,
+    stats: WatchStats,
+) -> None:
+    """Slide every poll past a rate limit, and hold every walk until then.
+
+    One limit for both: a poll and a page of a walk are the same method,
+    and whichever of them met the wait, the other would meet it next.
+    """
+    async with database.session() as session:
+        await postpone_all(session, until=halt.resume_after)
+    walker.held_until = halt.resume_after
+    stats.postponed += 1
+    logger.warning("%s — postponing the schedule", halt)
+
+
+async def _walk_once(
+    client: TelegramClient,
+    database: Database,
+    walker: _Walker,
+    *,
+    stats: WatchStats,
+    recorder: FloodRecorder,
+    now: datetime,
+) -> WalkAttempt:
+    """Ask for one page of the walk of the seed marked earliest, if any.
+
+    The seed under way is walked to its end before another is started,
+    and a new one's first page waits out the walk's pause between
+    channels. Scope is read anew every time, so a seed rejected part of
+    the way gets no further page. Every failure is contained here, as a
+    poll's is: none of them is the loop's.
+    """
+    if walker.held_until is not None and now < walker.held_until:
+        return WalkAttempt()
+    moment = walker.clock()
+
+    async with database.session() as session:
+        waiting = await seeds_awaiting_walk(session)
+    ready = [
+        seed
+        for seed in waiting
+        if walker.not_before.get(seed.tg_id, 0.0) <= moment
+    ]
+    if not ready:
+        return WalkAttempt()
+    seed = next((s for s in ready if s.tg_id == walker.current), ready[0])
+    if seed.tg_id != walker.current and moment < walker.next_seed_at:
+        return WalkAttempt()
+    walker.current = seed.tg_id
+
+    if not seed.username:
+        # As `itgraph backfill` leaves it: nothing to ask for by name, and
+        # nothing to resolve here either.
+        await _set_aside(database, walker, seed, skip="no username")
+        stats.walks_set_aside += 1
+        return WalkAttempt(walked=True)
+
+    cutoff = settings.history_walk_since
+    try:
+        async with database.session() as session:
+            page = await walk_page(
+                client,
+                session,
+                channel_id=seed.tg_id,
+                username=seed.username,
+                cutoff=cutoff,
+                max_messages=settings.backfill_max_messages,
+                recorder=recorder.for_channel(seed.tg_id),
+            )
+            if not page.asked:
+                # At its ceiling before the walk began, so nothing will
+                # ever be asked of it: closed at the depth its rows reach,
+                # never at a depth that was not collected.
+                depth = await oldest_held(session, seed.tg_id) or cutoff
+                await record_complete(session, seed.tg_id, depth)
+                await session.commit()
+    except PeerNotCached as exc:
+        # Not a failure, and no resolution: the session has never seen
+        # this channel, and resolving it is not this loop's to spend.
+        logger.info("not walking @%s: %s", seed.username, exc)
+        await _set_aside(database, walker, seed, skip="no cached peer")
+        stats.walks_set_aside += 1
+        return WalkAttempt(walked=True)
+    except FloodWaitTooLong as exc:
+        return WalkAttempt(walked=True, halt=exc)
+    except RequestTimedOut as exc:
+        # As for a poll: the connection that did not answer is not asked
+        # again, and the seed waits its hour like any transient failure.
+        logger.warning("walking @%s: %s", seed.username, exc)
+        await _set_aside(
+            database,
+            walker,
+            seed,
+            failure=(FailureKind.TRANSIENT, f"{type(exc).__name__}: {exc}"),
+        )
+        stats.walks_set_aside += 1
+        await _drop_connection(client)
+        return WalkAttempt(walked=True, concluded=False)
+    except (RPCError, OSError, ValueError, TypeError) as exc:
+        kind = classify(exc)
+        logger.warning(
+            "walking @%s failed (%s): %s", seed.username, kind.value, exc
+        )
+        await _set_aside(
+            database,
+            walker,
+            seed,
+            failure=(kind, f"{type(exc).__name__}: {exc}"),
+        )
+        stats.walks_set_aside += 1
+        return WalkAttempt(walked=True)
+
+    stats.walked += int(page.asked)
+    stats.walk_stored += page.stored
+    if page.done:
+        stats.walks_done += 1
+        walker.current = None
+        walker.next_seed_at = walker.clock() + channel_gap()
+        logger.info(
+            "@%s: history walked to its depth%s",
+            seed.username,
+            " (ceiling reached)" if page.capped else "",
+        )
+    return WalkAttempt(walked=True)
+
+
+async def _set_aside(
+    database: Database,
+    walker: _Walker,
+    seed: AwaitingWalk,
+    *,
+    skip: str | None = None,
+    failure: tuple[FailureKind, str] | None = None,
+) -> None:
+    """Record why a walk could not run, and leave the seed for an hour.
+
+    A permanent failure takes the channel out of scope, so the hour never
+    comes round for it: it is neither walked nor polled again.
+    """
+    async with database.session() as session:
+        if failure is not None:
+            kind, detail = failure
+            await record_failure(session, seed.tg_id, kind, detail)
+        else:
+            await record_skip(session, seed.tg_id, skip or "")
+        await session.commit()
+    walker.not_before[seed.tg_id] = walker.clock() + WALK_RETRY_SECONDS
+    walker.current = None
 
 
 class _Progress:

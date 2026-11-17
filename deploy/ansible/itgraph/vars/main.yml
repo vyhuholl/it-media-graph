@@ -413,7 +413,9 @@ __itgraph_cronjobs_youtube:
 __itgraph_cronjobs_walk:
   - name: itgraph-yt-backfill
     schedule: "{{ itgraph_yt_backfill_schedule }}"
-    starting_deadline: 82800
+    # Under the hour: a run that could not start in time gives way to the next
+    # hour's rather than meeting it.
+    starting_deadline: 3300
     # Fifty minutes: a walk of 500 channels is estimated at 11 to 21.
     active_deadline: 3000
     labels: "{{ __itgraph_youtube_labels }}"

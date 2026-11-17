@@ -13,7 +13,7 @@ from typing import Any
 
 import httpx
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from ytfakes import (
     FakeYouTube,
     channel_id,
@@ -40,6 +40,7 @@ from itgraph.db.models import (
     YtLang,
     YtRawVideo,
     YtRawVideoStat,
+    YtRequest,
 )
 from itgraph.db.session import Database
 from itgraph.db.yt_channels import create_channels, store_payloads
@@ -274,6 +275,24 @@ async def test_a_short_playlist_ends_the_walk(database: Database) -> None:
 
     assert len(fake.calls("playlistItems")) == 1
     assert (report.finished, report.videos) == (1, 30)
+
+
+async def test_nothing_due_spends_nothing(database: Database) -> None:
+    """Hourly, most runs find every seed walked: they must cost nothing."""
+    await seeds(database, 1)
+    ages = _years_of(30)
+    await walk(database, api({1: listing(*ages)}, resources(*ages)))
+    async with database.session() as session:
+        booked = await session.scalar(select(func.count(YtRequest.id)))
+    assert booked  # the first walk spent, so the second has something to match
+
+    again = api({1: listing(*ages)}, resources(*ages))
+    report = await walk(database, again)
+
+    assert again.requests == []
+    assert report.channels == 0
+    async with database.session() as session:
+        assert await session.scalar(select(func.count(YtRequest.id))) == booked
 
 
 async def test_a_whole_walk_goes_to_the_end(database: Database) -> None:

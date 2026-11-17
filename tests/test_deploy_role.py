@@ -280,8 +280,8 @@ SCHEDULES = {
     "itgraph-yt-weekly": ("0 10 * * 1", 518400, 1800),
     # Telegram's list, the same Monday morning and the same six days.
     "itgraph-weekly": ("0 10 * * 1", 518400, 1800),
-    # After the Pacific reset in either season.
-    "itgraph-yt-backfill": ("30 11 * * *", 82800, 3000),
+    # Hourly, for a new seed; a late start gives way to the next hour's.
+    "itgraph-yt-backfill": ("30 * * * *", 3300, 3000),
 }
 
 

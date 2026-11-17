@@ -4,11 +4,13 @@ Import ``settings`` from here; no other module reads ``os.environ``.
 """
 
 import shutil
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Self
 
 from pydantic import (
+    AwareDatetime,
     Field,
     HttpUrl,
     PostgresDsn,
@@ -171,6 +173,12 @@ class Settings(BaseSettings):
     # reposted by nobody. Reaching it ends that channel for good, not
     # just for this run. 0 means no ceiling.
     backfill_max_messages: int = 2000
+    # How deep the poll loop walks a new seed's history: the date every
+    # seed of the first inventory was walked to, so a new seed's graph
+    # covers the same period as everyone else's. A fixed date, not "a year
+    # back": the common window is the point. `itgraph backfill` takes its
+    # own `--since` and is not bound by this.
+    history_walk_since: AwareDatetime = datetime(2025, 7, 24, tzinfo=UTC)
 
     # Messages read per partition when deriving edges. Derivation touches
     # no network, so this is a memory/round-trip trade, not a pacing one:
@@ -1142,6 +1150,18 @@ class Settings(BaseSettings):
                     "nothing held would ever be delivered"
                 )
         return self
+
+    @field_validator("history_walk_since", mode="after")
+    @classmethod
+    def _the_walk_reaches_into_the_past(cls, value: datetime) -> datetime:
+        """A cutoff in the future would walk nothing and record the walk
+        complete, so every new seed would be closed with no history."""
+        if value > datetime.now(UTC):
+            raise ValueError(
+                f"history_walk_since ({value.isoformat()}) is in the future: "
+                "a walk to it would end at once and be recorded complete"
+            )
+        return value
 
     @field_validator(
         "youtube_alert_chat_id",

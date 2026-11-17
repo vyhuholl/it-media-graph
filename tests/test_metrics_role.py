@@ -107,7 +107,7 @@ def test_the_series_read_through_the_role(migrated: URL) -> None:
         finally:
             await engine.dispose()
 
-    assert len(asyncio.run(read())) == 19
+    assert len(asyncio.run(read())) == 21
 
 
 def test_the_role_reads_when_and_nothing_else_of_api_data(
@@ -144,6 +144,41 @@ def test_the_role_reads_when_and_nothing_else_of_api_data(
     ],
 )
 def test_the_role_cannot_read_what_it_has_no_use_for(
+    migrated: URL, statement: str
+) -> None:
+    with pytest.raises(DBAPIError, match="permission denied"):
+        asyncio.run(as_role(migrated, statement))
+
+
+def test_the_role_reads_when_a_seed_was_marked_and_how_its_walk_stands(
+    migrated: URL,
+) -> None:
+    asyncio.run(
+        as_role(
+            migrated,
+            "SELECT c.tg_id, c.status, c.is_chat, c.reviewed_at, b.status, "
+            "b.failure_kind FROM tg_channels c "
+            "LEFT JOIN tg_backfill_state b ON b.channel_id = c.tg_id",
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "SELECT username FROM tg_channels",
+        "SELECT title FROM tg_channels",
+        "SELECT kind FROM tg_channels",
+        "SELECT reject_reason FROM tg_channels",
+        "SELECT kind_note FROM tg_channels",
+        "SELECT reject_note FROM tg_channels",
+        "SELECT oldest_fetched_id FROM tg_backfill_state",
+        "SELECT newest_fetched_id FROM tg_backfill_state",
+        "SELECT cutoff_at FROM tg_backfill_state",
+        "SELECT failure_detail FROM tg_backfill_state",
+    ],
+)
+def test_the_role_reads_no_channel_s_name_notes_or_walk_cursor(
     migrated: URL, statement: str
 ) -> None:
     with pytest.raises(DBAPIError, match="permission denied"):

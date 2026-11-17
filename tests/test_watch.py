@@ -19,27 +19,36 @@ from fakes import (
     FakeMessageWith,
     FakeServiceMessage,
     FakeTelegramClient,
+    tl_channel,
 )
 from people_cases import fields_naming_people, names_nobody, peer_channel
 from sqlalchemy import text
 from telethon.errors import ChannelPrivateError, FloodWaitError
 
 from itgraph.config import settings
-from itgraph.db.channels import DiscoveredChannel, upsert_channels
+from itgraph.db.backfill import record_complete
+from itgraph.db.channels import (
+    DiscoveredChannel,
+    mark_channel,
+    upsert_channels,
+)
 from itgraph.db.metrics import store_metrics
-from itgraph.db.models import DiscoverySource
+from itgraph.db.models import ChannelKind, ChannelStatus, DiscoverySource
 from itgraph.db.poll import due_channels
 from itgraph.db.raw import store_messages
 from itgraph.db.session import Database
 from itgraph.derive.metrics import Counters
 from itgraph.tg import watch as watch_module
 from itgraph.tg.errors import WatchStalled
+from itgraph.tg.manual import Review, add_channels
 from itgraph.tg.payload import encode_payload
 from itgraph.tg.watch import watch
 
 FIRST = 1000000001
 SECOND = 1000000002
 NOW = datetime(2026, 8, 3, 12, 0, tzinfo=UTC)
+# The depth a walked seed is recorded at; any date in the past would do.
+WALKED_TO = datetime(2025, 7, 24, tzinfo=UTC)
 DAY = 24 * 60  # minutes, for `fresh`
 
 # A stall window a test can outlive, and enough cycles to outlive it.
@@ -58,13 +67,24 @@ def no_pacing(monkeypatch: pytest.MonkeyPatch) -> None:
     # The wait after a failed reconnect, for the same reason: a test
     # about what the loop does next should not sit out the real delay.
     monkeypatch.setattr(settings, "watch_reconnect_delay_seconds", 0.01)
+    # The walk of new seeds paces itself as `itgraph backfill` does, and
+    # pauses between seeds; neither is waited out here.
+    monkeypatch.setattr(settings, "backfill_request_delay", 0.0)
+    monkeypatch.setattr(settings, "backfill_channel_pause_min", 0.0)
+    monkeypatch.setattr(settings, "backfill_channel_pause_max", 0.0)
     # Quiet hours off, so a test's outcome does not depend on the hour it
     # happens to run at.
     monkeypatch.setattr(settings, "watch_quiet_from_hour", 0)
     monkeypatch.setattr(settings, "watch_quiet_to_hour", 0)
 
 
-async def seed(database: Database, *tg_ids: int) -> None:
+async def seed(database: Database, *tg_ids: int, walked: bool = True) -> None:
+    """Seeds, walked to their depth unless asked otherwise.
+
+    Walked, because that is what a seed in production is: the loop walks
+    a new one before long, and a test about polling should not have its
+    requests mixed with a walk's. The walk's own tests pass ``walked=False``.
+    """
     async with database.session() as session:
         await upsert_channels(
             session,
@@ -85,6 +105,9 @@ async def seed(database: Database, *tg_ids: int) -> None:
             ),
             {"ids": list(tg_ids)},
         )
+        if walked:
+            for tg_id in tg_ids:
+                await record_complete(session, tg_id, WALKED_TO)
 
 
 def client_for(
@@ -490,7 +513,7 @@ async def test_the_cursor_never_moves_backwards(
     database: Database,
 ) -> None:
     """A short window must not rewind a mark a walk has already set."""
-    await seed(database, FIRST)
+    await seed(database, FIRST, walked=False)
     async with database.session() as session:
         await session.execute(
             text(
@@ -775,7 +798,7 @@ async def test_a_capped_channel_is_still_polled_forward(
     The channels that reach it first are the most active in the
     inventory — precisely the ones a realtime product cannot be blind to.
     """
-    await seed(database, FIRST)
+    await seed(database, FIRST, walked=False)
     async with database.session() as session:
         await session.execute(
             text(
@@ -1089,3 +1112,409 @@ async def test_a_lost_lease_still_arrives_as_itself(
 
     with pytest.raises(LeaseLostError):
         await watch(client, database, lease=LostLease(), max_cycles=1)  # type: ignore[arg-type]
+
+
+# --- the walk of new seeds ---------------------------------------------
+#
+# A seed whose walk is not complete is walked by the loop, a page at a
+# time, when nothing is due. A poll asks for `watch_window_min` messages
+# and a page for `backfill_batch_size`, so a window's limit says which of
+# the two asked for it.
+
+PAGE = 3
+POLL = 10
+DEPTH = datetime(2026, 5, 1, tzinfo=UTC)
+
+
+@pytest.fixture
+def walking(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "backfill_batch_size", PAGE)
+    monkeypatch.setattr(settings, "watch_window_min", POLL)
+    monkeypatch.setattr(settings, "history_walk_since", DEPTH)
+
+
+def pages(client: FakeTelegramClient) -> list[tuple[int, int, int]]:
+    return [window for window in client.windows if window[2] <= PAGE]
+
+
+def polls(client: FakeTelegramClient) -> list[tuple[int, int, int]]:
+    return [window for window in client.windows if window[2] > PAGE]
+
+
+async def walk_state(database: Database, tg_id: int) -> tuple[Any, ...]:
+    async with database.session() as session:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT status, cutoff_at, failure_kind, failure_detail "
+                    "FROM tg_backfill_state WHERE channel_id = :id"
+                ),
+                {"id": tg_id},
+            )
+        ).one()
+    return tuple(row)
+
+
+async def held(database: Database, tg_id: int) -> int:
+    async with database.session() as session:
+        count = await session.scalar(
+            text(
+                "SELECT count(*) FROM tg_raw_messages WHERE channel_id = :id"
+            ),
+            {"id": tg_id},
+        )
+    return int(count or 0)
+
+
+def old_history(count: int) -> list[Any]:
+    """Posts a day apart from a month ago, all above `DEPTH`'s cutoff."""
+    newest = datetime.now(UTC) - timedelta(days=30)
+    return [
+        FakeHistoryMessage(1000 - i, newest - timedelta(days=i), f"post {i}")
+        for i in range(count)
+    ]
+
+
+async def test_a_new_seed_is_walked_to_its_depth(
+    database: Database, walking: None
+) -> None:
+    await seed(database, FIRST, walked=False)
+    client = client_for({FIRST: old_history(7)})
+
+    stats = await watch(client, database, max_cycles=10)
+
+    assert await walk_state(database, FIRST) == ("complete", DEPTH, None, None)
+    assert await held(database, FIRST) == 7
+    assert stats.walks_done == 1
+    assert client.resolved == []
+
+
+async def test_a_seed_marked_from_the_command_line_is_walked(
+    database: Database, walking: None
+) -> None:
+    """Through what `itgraph mark --seed` calls, not a hand-written status."""
+    async with database.session() as session:
+        await upsert_channels(
+            session,
+            [DiscoveredChannel(FIRST, f"example_{FIRST}", "Example", False)],
+            discovered_via=DiscoverySource.FORWARD,
+        )
+        await mark_channel(
+            session,
+            FIRST,
+            status=ChannelStatus.SEED,
+            kind=ChannelKind.PERSONAL,
+        )
+    client = client_for({FIRST: old_history(7)})
+
+    await watch(client, database, max_cycles=10)
+
+    assert await walk_state(database, FIRST) == ("complete", DEPTH, None, None)
+    assert await held(database, FIRST) == 7
+
+
+async def test_a_seed_added_with_its_review_is_walked(
+    database: Database, walking: None
+) -> None:
+    """Through what `itgraph add --seed` calls: its own review, not `mark`."""
+    username = f"example_{FIRST}"
+    client = FakeTelegramClient(
+        entities={username: tl_channel(FIRST, username=username)},
+        histories={FIRST: old_history(7)},
+    )
+    await add_channels(
+        client,
+        database,
+        usernames=[username],
+        review=Review(status=ChannelStatus.SEED, kind=ChannelKind.PERSONAL),
+        delay=0,
+    )
+    resolved_by_add = list(client.resolved)
+
+    await watch(client, database, max_cycles=10)
+
+    assert await walk_state(database, FIRST) == ("complete", DEPTH, None, None)
+    assert await held(database, FIRST) == 7
+    # The loop resolved nothing of its own.
+    assert client.resolved == resolved_by_add
+
+
+async def test_due_polls_come_before_any_page(
+    database: Database, walking: None
+) -> None:
+    await seed(database, FIRST, walked=False)
+    await seed(database, SECOND)
+    client = client_for(
+        {FIRST: old_history(7), SECOND: [fresh(20, 5, views=1)]}
+    )
+
+    await watch(client, database, max_cycles=10)
+
+    first_page = client.windows.index(pages(client)[0])
+    assert all(window[2] == POLL for window in client.windows[:first_page])
+    assert {window[0] for window in client.windows[:first_page]} == {
+        FIRST,
+        SECOND,
+    }
+
+
+async def test_one_page_a_cycle_then_the_polls_again(
+    database: Database, walking: None
+) -> None:
+    await seed(database, FIRST, walked=False)
+    client = client_for({FIRST: old_history(9)})
+
+    # The first cycle polls; each after it asks for one page at most.
+    stats = await watch(client, database, max_cycles=3)
+
+    assert len(polls(client)) == 1
+    assert len(pages(client)) == 2
+    assert stats.walked == 2
+
+
+async def test_an_empty_queue_and_a_seed_to_walk(
+    database: Database, walking: None
+) -> None:
+    await seed(database, FIRST, walked=False)
+    async with database.session() as session:
+        await session.execute(
+            text(
+                "INSERT INTO tg_poll_state (channel_id, due_at) "
+                "VALUES (:id, now() + interval '1 hour')"
+            ),
+            {"id": FIRST},
+        )
+    client = client_for({FIRST: old_history(9)})
+
+    await watch(client, database, max_cycles=1)
+
+    assert client.windows == [(FIRST, 0, PAGE)]
+
+
+async def test_no_page_in_quiet_hours(
+    database: Database, walking: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await seed(database, FIRST, walked=False)
+    monkeypatch.setattr(watch_module, "in_quiet_hours", lambda moment: True)
+    client = client_for({FIRST: old_history(7)})
+
+    await watch(client, database, max_cycles=5)
+
+    assert client.windows == []
+
+
+async def test_a_completed_walk_is_not_repeated(
+    database: Database, walking: None
+) -> None:
+    await seed(database, FIRST)  # walked, to a later depth than DEPTH
+    async with database.session() as session:
+        await record_complete(session, FIRST, datetime(2026, 6, 1, tzinfo=UTC))
+    client = client_for({FIRST: old_history(7)})
+
+    await watch(client, database, max_cycles=5)
+
+    assert pages(client) == []
+
+
+async def test_the_ceiling_ends_a_walk_at_its_oldest_post(
+    database: Database, walking: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "backfill_max_messages", 4)
+    monkeypatch.setattr(settings, "watch_window_min", 1)
+    monkeypatch.setattr(settings, "watch_window_max", 1)
+    await seed(database, FIRST, walked=False)
+    history_ = old_history(10)
+    client = client_for({FIRST: history_})
+
+    await watch(client, database, max_cycles=10)
+
+    assert await held(database, FIRST) == 4
+    status, cutoff, _, _ = await walk_state(database, FIRST)
+    assert status == "complete"
+    assert cutoff == history_[3].date
+
+
+async def test_a_seed_already_at_its_ceiling_is_closed_where_its_rows_end(
+    database: Database, walking: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The poll filled the ceiling first: nothing to ask, nothing to claim."""
+    monkeypatch.setattr(settings, "backfill_max_messages", 3)
+    await seed(database, FIRST, walked=False)
+    history_ = old_history(5)
+    client = client_for({FIRST: history_})
+
+    await watch(client, database, max_cycles=5)
+
+    assert pages(client) == []
+    status, cutoff, _, _ = await walk_state(database, FIRST)
+    assert status == "complete"
+    assert cutoff == history_[-1].date
+
+
+async def test_a_restart_resumes_the_walk_from_its_cursor(
+    database: Database, walking: None
+) -> None:
+    await seed(database, FIRST, walked=False)
+    before = client_for({FIRST: old_history(9)})
+    await watch(before, database, max_cycles=2)  # a poll, then one page
+    [(_, _, _)] = pages(before)
+
+    after = client_for({FIRST: old_history(9)})
+    await watch(after, database, max_cycles=3)
+
+    # The poll took 1000..991 and the first page re-read 1000..998; the
+    # restarted walk carries on below 998 rather than from the top.
+    assert pages(after)[0][1] == 998
+
+
+async def test_a_seed_rejected_mid_walk_gets_no_further_page(
+    database: Database, walking: None
+) -> None:
+    await seed(database, FIRST, walked=False)
+    client = client_for({FIRST: old_history(9)})
+    await watch(client, database, max_cycles=2)
+    walked = len(pages(client))
+    async with database.session() as session:
+        await session.execute(
+            text(
+                "UPDATE tg_channels SET status = 'rejected', "
+                "reject_reason = 'not_it' WHERE tg_id = :id"
+            ),
+            {"id": FIRST},
+        )
+
+    await watch(client, database, max_cycles=5)
+
+    assert len(pages(client)) == walked
+
+
+# --- a walk that could not run ------------------------------------------
+
+
+class Clock:
+    """The walk's clock, moved by hand."""
+
+    def __init__(self) -> None:
+        self.at = 0.0
+
+    def __call__(self) -> float:
+        return self.at
+
+
+async def walk_once(
+    client: FakeTelegramClient,
+    database: Database,
+    walker: Any,
+    stats: Any,
+) -> Any:
+    from itgraph.db.models import CollectionCommand
+    from itgraph.tg.floods import FloodRecorder
+
+    return await watch_module._walk_once(
+        client,
+        database,
+        walker,
+        stats=stats,
+        recorder=FloodRecorder(database, CollectionCommand.WATCH),
+        now=datetime.now(UTC),
+    )
+
+
+async def test_a_seed_the_session_does_not_know_waits_an_hour(
+    database: Database, walking: None
+) -> None:
+    await seed(database, FIRST, SECOND, walked=False)
+    # The session knows SECOND only.
+    client = client_for({SECOND: old_history(5)})
+    clock = Clock()
+    walker = watch_module._Walker(clock=clock)
+    stats = watch_module.WatchStats()
+
+    await walk_once(client, database, walker, stats)
+    assert (await walk_state(database, FIRST))[0] == "skipped"
+    assert (await walk_state(database, FIRST))[3] == "no cached peer"
+
+    # Within the hour FIRST is left alone and SECOND is walked meanwhile.
+    clock.at = 3599
+    for _ in range(4):
+        await walk_once(client, database, walker, stats)
+    assert {window[0] for window in client.windows} == {SECOND}
+    assert stats.walks_set_aside == 1
+
+    clock.at = 3601
+    for _ in range(3):
+        await walk_once(client, database, walker, stats)
+    assert stats.walks_set_aside == 2
+    assert client.resolved == []
+
+
+async def test_a_transient_failure_is_tried_again_after_an_hour(
+    database: Database, walking: None
+) -> None:
+    await seed(database, FIRST, walked=False)
+    client = client_for(
+        {FIRST: old_history(5)},
+        raises_for={FIRST: ConnectionError("connection reset")},
+    )
+    clock = Clock()
+    walker = watch_module._Walker(clock=clock)
+    stats = watch_module.WatchStats()
+
+    await walk_once(client, database, walker, stats)
+    status, _, kind, _ = await walk_state(database, FIRST)
+    assert (status, kind) == ("failed", "transient")
+
+    clock.at = 1800
+    await walk_once(client, database, walker, stats)
+    assert len(client.windows) == 1
+
+    clock.at = 3601
+    client.raises_for.pop(FIRST)
+    await walk_once(client, database, walker, stats)
+    assert len(client.windows) == 2
+    assert (await walk_state(database, FIRST))[0] == "running"
+
+
+async def test_a_permanent_failure_ends_walk_and_polls(
+    database: Database, walking: None
+) -> None:
+    await seed(database, FIRST, walked=False)
+    client = client_for(
+        {FIRST: old_history(5)},
+        raises_for={FIRST: ChannelPrivateError(request=None)},
+    )
+    walker = watch_module._Walker(clock=Clock())
+
+    await walk_once(client, database, walker, watch_module.WatchStats())
+
+    status, _, kind, _ = await walk_state(database, FIRST)
+    assert (status, kind) == ("failed", "permanent")
+    async with database.session() as session:
+        due = await due_channels(session, now=datetime.now(UTC))
+    assert FIRST not in {channel.tg_id for channel in due}
+
+
+# --- a rate limit -------------------------------------------------------
+
+
+async def test_a_long_rate_limit_stops_the_walk_with_the_polls(
+    database: Database, walking: None
+) -> None:
+    await seed(database, FIRST, walked=False)
+    seconds = int(settings.flood_abort_threshold) + 60
+    # Window 0 is FIRST's poll; window 1 is the walk's first page.
+    client = client_for({FIRST: old_history(9)}, flood_on_window={1: seconds})
+
+    stats = await watch(client, database, max_cycles=6)
+
+    assert stats.postponed == 1
+    assert len(client.windows) == 2
+    async with database.session() as session:
+        soonest = await session.scalar(
+            text("SELECT min(due_at) FROM tg_poll_state")
+        )
+        commands = (
+            await session.scalars(text("SELECT command FROM tg_flood_events"))
+        ).all()
+    assert soonest > datetime.now(UTC) + timedelta(seconds=seconds - 120)
+    assert list(commands) == ["watch"]

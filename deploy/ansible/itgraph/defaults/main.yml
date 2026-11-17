@@ -63,6 +63,8 @@ itgraph_yt_baselines_schedule: "30 5 * * *"
 # The weekly lists on Monday morning, for the week that ended at midnight.
 itgraph_yt_weekly_schedule: "0 10 * * 1"
 itgraph_weekly_schedule: "0 10 * * 1"
-# After the Pacific midnight in either season: 10:00 here in summer and 11:00 in
-# winter, so 11:30 is always early in a fresh quota day.
-itgraph_yt_backfill_schedule: "30 11 * * *"
+# Hourly, so a new seed is walked within the hour of being marked; a run with
+# nothing to walk makes no request. Once daily at 11:30, early in a fresh quota
+# day, while walks were whole rounds of seeds. Now one is a seed or two at about
+# nine units, which the general pool's floor guards whatever the hour.
+itgraph_yt_backfill_schedule: "30 * * * *"

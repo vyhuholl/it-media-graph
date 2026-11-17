@@ -14,9 +14,10 @@ eventually starts reading something nobody agreed to collect.
 """
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import ColumnElement, func, or_, select
+from sqlalchemy import ColumnElement, DateTime, cast, func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,20 +28,25 @@ from itgraph.db.models import (
     ChannelStatus,
     FailureKind,
     RawChannel,
+    RawMessage,
 )
 
 __all__ = [
+    "AwaitingWalk",
     "advance_newest",
+    "awaiting_walk",
     "channels_in_scope",
     "channels_needing_metadata",
     "count_deferred_chats",
     "count_stale_metadata",
     "in_scope",
     "load_state",
+    "oldest_held",
     "record_complete",
     "record_failure",
     "record_progress",
     "record_skip",
+    "seeds_awaiting_walk",
     "start_channel",
     "was_completed_to",
 ]
@@ -99,6 +105,52 @@ async def channels_in_scope(session: AsyncSession) -> Sequence[Channel]:
         .order_by(Channel.tg_id)
     )
     return (await session.scalars(statement)).all()
+
+
+def awaiting_walk() -> tuple[ColumnElement[bool], ...]:
+    """A seed in scope whose history walk is not complete.
+
+    Not complete, rather than not complete to some cutoff: a walk that
+    ended is done for the poll loop whatever its depth. Sixteen seeds of
+    the first inventory stopped at the ceiling, and a seed an operator
+    walked to a later `--since` keeps the depth they chose.
+
+    No row at all counts too — a seed marked a moment ago has none until
+    its first poll writes one — so this needs an outer join of
+    ``BackfillState``, as ``in_scope`` does. Shared with the series that
+    tells the monitoring how many wait, so the two cannot disagree.
+    """
+    return (
+        *in_scope(),
+        BackfillState.status.is_distinct_from(BackfillStatus.COMPLETE),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class AwaitingWalk:
+    tg_id: int
+    username: str | None
+
+
+async def seeds_awaiting_walk(session: AsyncSession) -> list[AwaitingWalk]:
+    """Every seed awaiting its walk, the one marked earliest first.
+
+    Marked earliest first so that a seed is never overtaken by those
+    marked after it; then by id, so the order is the same on every tick.
+    Plain values rather than mapped rows: the loop walks across commits
+    and rollbacks, which expire mapped instances.
+    """
+    statement = (
+        select(Channel.tg_id, Channel.username)
+        .outerjoin(BackfillState, BackfillState.channel_id == Channel.tg_id)
+        .where(*awaiting_walk())
+        .order_by(Channel.reviewed_at.asc().nulls_last(), Channel.tg_id)
+    )
+    rows = await session.execute(statement)
+    return [
+        AwaitingWalk(tg_id=tg_id, username=username)
+        for tg_id, username in rows.tuples()
+    ]
 
 
 async def channels_needing_metadata(
@@ -181,7 +233,33 @@ async def count_deferred_chats(session: AsyncSession) -> int:
 async def load_state(
     session: AsyncSession, channel_id: int
 ) -> BackfillState | None:
-    return await session.get(BackfillState, channel_id)
+    """The row as the database holds it now, not as this session last saw it.
+
+    Sessions here keep their objects across commits (``expire_on_commit``
+    is off), so a plain ``get`` answers from the identity map. A walk taken
+    a page at a time reads its cursor before every page, after committing
+    the last one through an upsert the map never saw — and an answer from
+    the map would ask for the same page for ever.
+    """
+    return await session.get(BackfillState, channel_id, populate_existing=True)
+
+
+async def oldest_held(
+    session: AsyncSession, channel_id: int
+) -> datetime | None:
+    """When the oldest message held for a channel was published.
+
+    What a walk records as its depth when the ceiling ended it, so that
+    the listing never claims a depth that was not collected. Read from the
+    payloads, which hold the publication date and nothing else does.
+    """
+    published = cast(
+        RawMessage.payload["date"].astext, DateTime(timezone=True)
+    )
+    oldest: datetime | None = await session.scalar(
+        select(func.min(published)).where(RawMessage.channel_id == channel_id)
+    )
+    return oldest
 
 
 def was_completed_to(state: BackfillState | None, cutoff: datetime) -> bool:

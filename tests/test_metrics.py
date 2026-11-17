@@ -14,14 +14,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from itgraph.db.models import (
     Alert,
     AlertKind,
+    BackfillState,
+    BackfillStatus,
     BaselineRun,
     Channel,
     ChannelStatus,
     CollectionCommand,
     DiscoverySource,
+    FailureKind,
     FloodEvent,
     PollState,
     RawMessage,
+    RejectReason,
     WeeklyList,
     YtAlertRoute,
     YtBaselineRun,
@@ -59,6 +63,8 @@ EXPECTED = {
     "itgraph_telegram_failing_channels",
     "itgraph_telegram_quiet_hours",
     "itgraph_telegram_last_flood_timestamp_seconds",
+    "itgraph_telegram_seeds_awaiting_history",
+    "itgraph_telegram_oldest_awaiting_history_seconds",
     "itgraph_youtube_quota_spent_units",
     "itgraph_youtube_quota_cap_units",
     "itgraph_youtube_quota_exhausted",
@@ -233,6 +239,8 @@ async def test_every_series_is_declared_on_an_empty_database(
     assert value(read, "itgraph_telegram_oldest_overdue_seconds") == 0
     assert value(read, "itgraph_telegram_failing_channels") == 0
     assert value(read, "itgraph_telegram_last_flood_timestamp_seconds") == 0
+    assert value(read, "itgraph_telegram_seeds_awaiting_history") == 0
+    assert value(read, "itgraph_telegram_oldest_awaiting_history_seconds") == 0
     for platform in ("telegram", "youtube"):
         assert (
             value(
@@ -814,3 +822,66 @@ async def test_no_telegram_list_reads_as_zero(database: Database) -> None:
         "itgraph_telegram_weekly_list_delivered_timestamp_seconds",
     ):
         assert value(read, name) == 0
+
+
+# --- seeds awaiting their walk -----------------------------------------
+
+
+def marked(
+    tg_id: int,
+    hours_ago: float,
+    *,
+    status: ChannelStatus = ChannelStatus.SEED,
+    is_chat: bool = False,
+) -> Channel:
+    seed = channel(tg_id, status=status)
+    seed.is_chat = is_chat
+    seed.reviewed_at = NOW - timedelta(hours=hours_ago)
+    if status is ChannelStatus.REJECTED:
+        seed.reject_reason = RejectReason.NOT_IT
+    return seed
+
+
+async def test_seeds_awaiting_their_walk(database: Database) -> None:
+    async with database.session() as session:
+        session.add_all([marked(1, 3), marked(2, 1), marked(3, 5)])
+        await session.flush()
+        session.add(
+            BackfillState(
+                channel_id=3,
+                status=BackfillStatus.COMPLETE,
+                cutoff_at=NOW - timedelta(days=400),
+            )
+        )
+
+    read = await families(database)
+
+    assert value(read, "itgraph_telegram_seeds_awaiting_history") == 2
+    assert (
+        value(read, "itgraph_telegram_oldest_awaiting_history_seconds")
+        == 3 * 3600
+    )
+
+
+async def test_what_is_out_of_scope_does_not_wait(database: Database) -> None:
+    async with database.session() as session:
+        session.add_all(
+            [
+                marked(1, 3, status=ChannelStatus.REJECTED),
+                marked(2, 3, is_chat=True),
+                marked(3, 3),
+            ]
+        )
+        await session.flush()
+        session.add(
+            BackfillState(
+                channel_id=3,
+                status=BackfillStatus.FAILED,
+                failure_kind=FailureKind.PERMANENT,
+            )
+        )
+
+    read = await families(database)
+
+    assert value(read, "itgraph_telegram_seeds_awaiting_history") == 0
+    assert value(read, "itgraph_telegram_oldest_awaiting_history_seconds") == 0

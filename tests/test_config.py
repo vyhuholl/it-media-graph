@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -94,6 +95,32 @@ def test_blank_credentials_are_no_credentials(
 
     assert settings.telegram_api_id is None
     assert settings.telegram_api_hash is None
+
+
+def test_new_seeds_are_walked_to_the_inventory_s_depth(
+    env: pytest.MonkeyPatch,
+) -> None:
+    settings = build()
+
+    assert settings.history_walk_since == datetime(2025, 7, 24, tzinfo=UTC)
+
+
+def test_a_walk_depth_without_a_zone_is_refused(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """Read in whose zone? The walk compares it with Telegram's UTC dates."""
+    env.setenv("HISTORY_WALK_SINCE", "2025-07-24T00:00:00")
+    with pytest.raises(ValidationError, match="timezone"):
+        build()
+
+
+def test_a_walk_depth_in_the_future_is_refused(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """It would end every walk at once and record it complete."""
+    env.setenv("HISTORY_WALK_SINCE", "2999-01-01T00:00:00Z")
+    with pytest.raises(ValidationError, match="in the future"):
+        build()
 
 
 def test_a_sample_outside_the_horizon_is_refused(
