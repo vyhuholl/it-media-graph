@@ -1151,8 +1151,8 @@ for gone in deployment/itgraph-console cronjob/itgraph-alerts cronjob/itgraph-sc
 	[ -z "$(kubectl -n "$takeover" get "$gone" -o name --ignore-not-found)" ] || fail "$gone is still there"
 done
 ok 'the old objects are gone, each by name'
-grep -q 'dump at /backups/weekly/full-' "$work/takeover.log" || fail 'the migration did not report its dump'
-ok 'the migration took a dump first, and said where'
+grep -q 'dump at /backups/premigration/premigration-' "$work/takeover.log" || fail 'the migration did not report its dump in its own tier'
+ok 'the migration took a dump first, in its own tier, and said where'
 [ "$(kubectl -n "$takeover" get namespace "$takeover" -o jsonpath='{.metadata.labels.pod-security\.kubernetes\.io/enforce}')" = restricted ] ||
 	fail 'the taken-over namespace does not enforce restricted'
 ok 'the taken-over namespace enforces restricted'

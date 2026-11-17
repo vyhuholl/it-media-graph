@@ -12,8 +12,8 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from itgraph.config import settings
 from itgraph.db.backup import (
     BackupError,
-    full_kind,
     is_empty_database,
+    premigration_kind,
     run_backup,
 )
 from itgraph.db.guard import (
@@ -143,6 +143,11 @@ def backup_before_upgrade(url: str) -> None:
     and deliberate enough to be worth the wait. Fails closed: if the dump
     cannot be taken, the migration does not run either.
 
+    The dump goes to a tier of its own, ``premigration/``, and stays on
+    the host. The full tier's schedule, bounds, pointer and off-site
+    copies never see it: while it shared that tier, migrations held
+    back the weekly dump and filled the off-site store.
+
     Except on a database that has no tables yet. That is the first
     ``alembic upgrade`` of a new installation, and it has nothing to lose
     — while pg_dump of it produces an archive the backup layer rejects as
@@ -163,7 +168,7 @@ def backup_before_upgrade(url: str) -> None:
 
     log.info("backing up %s before migrating", make_url(url).database)
     try:
-        taken = run_backup(kinds=[full_kind()])
+        taken = run_backup(kinds=[premigration_kind()])
     except BackupError as exc:
         raise CommandError(
             f"refusing to migrate: the backup failed ({exc}).\n"

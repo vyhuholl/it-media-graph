@@ -859,10 +859,16 @@ class Settings(BaseSettings):
     # dumps carry the raw layer, which is large and — expensively —
     # re-fetchable, so fewer are kept: every one from the last four
     # weeks, and never fewer than four. By days and not by count,
-    # because the tier also holds the dump each migration takes first.
+    # because the tier also holds every full dump taken by hand, and a
+    # few of those in a day would push the weekly ones out.
     backup_keep_inventory: int = 30
     backup_keep_full: int = 4
     backup_keep_full_days: int = 28
+    # The dump each migration takes first is a tier of its own, kept by
+    # count alone: migrations come in bursts, and a bound by age would
+    # hold as many as a burst brought. At least one, because pruning
+    # keeps the newest `keep` — zero would delete the dump just taken.
+    backup_keep_premigration: int = Field(default=5, ge=1)
     # Under 24 so a daily rhythm cannot drift later each run until it
     # slips past midnight and skips a day.
     backup_inventory_interval_hours: int = 20
@@ -872,9 +878,10 @@ class Settings(BaseSettings):
     #
     # None of these set — the operator's machine — means no off-site
     # pass at all. All four set — the collection host — means every
-    # verified dump is encrypted with `age` to `backup_age_recipient`
-    # and copied to the Backblaze B2 bucket the other three name, on a
-    # key that can add and list but never delete or read back.
+    # verified inventory and full dump is encrypted with `age` to
+    # `backup_age_recipient` and copied to the Backblaze B2 bucket the
+    # other three name, on a key that can add and list but never delete
+    # or read back. The dump a migration takes first stays on the host.
     #
     # The application key is a `SecretStr` on the api hash's footing:
     # whoever holds it can fill the store the account pays for.

@@ -1,7 +1,7 @@
 ---
 # Brings the schema to head from a pod of the deployed image, only when it is behind:
-# alembic takes a full dump first on a database with tables, which is why it is not
-# run by habit. The pod has the backups claim for that dump.
+# alembic first dumps a database with tables into the pre-migration tier, which is why it
+# is not run by habit. The pod has the backups claim for that dump; it stays on the host.
 
 - name: Bring the schema to head
   ansible.builtin.include_tasks: one_shot.yml

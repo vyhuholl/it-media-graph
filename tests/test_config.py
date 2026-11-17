@@ -594,6 +594,23 @@ B2_ENV = {
 }
 
 
+def test_five_premigration_dumps_are_kept_by_default(
+    env: pytest.MonkeyPatch,
+) -> None:
+    assert build().backup_keep_premigration == 5
+
+
+def test_keeping_no_premigration_dump_is_refused(
+    env: pytest.MonkeyPatch,
+) -> None:
+    """Pruning keeps the newest `keep`: zero would delete the dump just
+    taken, before the migration it was taken for has run."""
+    env.setenv("BACKUP_KEEP_PREMIGRATION", "0")
+
+    with pytest.raises(ValidationError, match="backup_keep_premigration"):
+        build()
+
+
 def test_no_offsite_configuration_is_the_default(
     env: pytest.MonkeyPatch,
 ) -> None:
@@ -608,7 +625,7 @@ def test_no_offsite_configuration_is_the_default(
 def test_a_complete_offsite_configuration_is_accepted(
     env: pytest.MonkeyPatch,
 ) -> None:
-    """The collection host: every verified dump leaves, encrypted."""
+    """The collection host: every verified scheduled dump leaves, encrypted."""
     for key, value in B2_ENV.items():
         env.setenv(key, value)
     settings = build()

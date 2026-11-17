@@ -26,8 +26,10 @@ from itgraph.db.backup import (
     is_due,
     is_empty_database,
     latest_link,
+    premigration_kind,
     prune,
     run_backup,
+    scheduled_kinds,
     take_backup,
 )
 
@@ -138,16 +140,18 @@ def test_pruning_keeps_the_newest(tmp_path: Path) -> None:
 
 
 def test_full_dumps_stay_four_weeks_however_many(tmp_path: Path) -> None:
-    """Migrations share the tier, so a count would measure migrations.
+    """Full dumps taken by hand share the tier, so a count would measure
+    the operator's hand.
 
-    On 2026-11-01 three migrations in one day left four full dumps, all
-    from that day, and every weekly one gone.
+    On 2026-11-01 three migrations in one day, whose dumps then shared
+    the tier, left four full dumps, all from that day, and every weekly
+    one gone. Dumps taken by hand would do the same.
     """
     weekly = [
         dump_at(tmp_path, "full", "weekly", NOW - timedelta(days=days))
         for days in (7, 14, 21, 27)
     ]
-    migrations = [
+    by_hand = [
         dump_at(tmp_path, "full", "weekly", NOW - timedelta(hours=hours))
         for hours in (3, 9, 15)
     ]
@@ -157,7 +161,7 @@ def test_full_dumps_stay_four_weeks_however_many(tmp_path: Path) -> None:
 
     assert removed == [expired]
     survivors = sorted(p.name for p in (tmp_path / "weekly").iterdir())
-    assert survivors == sorted(p.name for p in weekly + migrations)
+    assert survivors == sorted(p.name for p in weekly + by_hand)
 
 
 def test_the_newest_full_dumps_outlive_their_four_weeks(
@@ -480,6 +484,227 @@ def test_an_unwritable_pointer_does_not_lose_the_backup(
 
     assert second.path.exists()
     assert not latest_link(tmp_path / "weekly", full_kind()).exists()
+
+
+# --- the dump a migration takes first ----------------------------------
+
+
+def names_in(directory: Path) -> list[str]:
+    return sorted(path.name for path in directory.iterdir())
+
+
+def test_a_premigration_dump_is_read_with_its_stamp(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A dump's stamp is what follows the first hyphen of its name.
+
+    A tier named with a hyphen of its own would leave a stamp that does
+    not parse, and its dumps would be skipped: never pruned, never
+    pointed at.
+    """
+    dump = dump_at(
+        tmp_path, "premigration", "premigration", NOW - timedelta(hours=1)
+    )
+
+    with caplog.at_level("WARNING"):
+        found = existing(tmp_path / "premigration", premigration_kind())
+
+    assert found == [dump]
+    assert caplog.text == ""
+
+
+def test_the_premigration_tier_is_never_due(tmp_path: Path) -> None:
+    """It has no schedule: a migration asks for it, nothing else does."""
+    assert is_due(tmp_path, premigration_kind(), now=NOW) is False
+    assert [kind.name for kind in due_kinds(tmp_path, now=NOW)] == [
+        "inventory",
+        "full",
+    ]
+    assert "premigration" not in [kind.name for kind in scheduled_kinds()]
+
+
+def test_migrations_do_not_hold_back_the_weekly_dump(tmp_path: Path) -> None:
+    """While their dumps shared the tier, a migration each day meant no
+    weekly dump at all."""
+    dump_at(tmp_path, "full", "weekly", NOW - timedelta(days=7))
+    for days in range(7):
+        dump_at(
+            tmp_path,
+            "premigration",
+            "premigration",
+            NOW - timedelta(days=days, hours=1),
+        )
+
+    assert "full" in [kind.name for kind in due_kinds(tmp_path, now=NOW)]
+
+
+def test_a_day_of_migrations_leaves_the_full_dumps_alone(
+    tmp_path: Path, fake_run: Recorded
+) -> None:
+    for days in (7, 14, 21, 27):
+        dump_at(tmp_path, "full", "weekly", NOW - timedelta(days=days))
+    take_backup(full_kind(), tmp_path, now=NOW - timedelta(days=1))
+    before = names_in(tmp_path / "weekly")
+    pointer = latest_link(tmp_path / "weekly", full_kind()).resolve()
+
+    for hours in (3, 9, 15):
+        run_backup(
+            tmp_path,
+            kinds=[premigration_kind()],
+            now=NOW + timedelta(hours=hours),
+        )
+
+    assert names_in(tmp_path / "weekly") == before
+    assert latest_link(tmp_path / "weekly", full_kind()).resolve() == pointer
+    assert len(existing(tmp_path / "premigration", premigration_kind())) == 3
+
+
+def test_pruning_the_full_tier_leaves_premigration_dumps_alone(
+    tmp_path: Path,
+) -> None:
+    for days in (40, 47, 54, 61, 68, 75):
+        dump_at(tmp_path, "full", "weekly", NOW - timedelta(days=days))
+        dump_at(
+            tmp_path,
+            "premigration",
+            "premigration",
+            NOW - timedelta(days=days),
+        )
+    before = names_in(tmp_path / "premigration")
+
+    removed = prune(tmp_path, full_kind(), now=NOW)
+
+    assert removed
+    assert names_in(tmp_path / "premigration") == before
+
+
+def test_premigration_dumps_stay_whatever_their_age(tmp_path: Path) -> None:
+    """No migration for months is no reason to lose the last rollback
+    point before the next one."""
+    keep = premigration_kind().keep
+    for days in range(90, 90 + keep):
+        dump_at(
+            tmp_path,
+            "premigration",
+            "premigration",
+            NOW - timedelta(days=days),
+        )
+
+    assert prune(tmp_path, premigration_kind(), now=NOW) == []
+    assert len(names_in(tmp_path / "premigration")) == keep
+
+
+def test_scheduled_runs_leave_premigration_dumps_alone(
+    tmp_path: Path, fake_run: Recorded
+) -> None:
+    """The schedule takes and prunes its own tiers, never this one."""
+    keep = premigration_kind().keep
+    for days in range(90, 90 + keep):
+        dump_at(
+            tmp_path,
+            "premigration",
+            "premigration",
+            NOW - timedelta(days=days),
+        )
+    before = names_in(tmp_path / "premigration")
+
+    taken = run_backup(tmp_path, now=NOW)
+
+    assert [backup.kind for backup in taken] == ["inventory", "full"]
+    assert names_in(tmp_path / "premigration") == before
+
+
+def test_a_sixth_migration_removes_the_oldest_premigration_dump_alone(
+    tmp_path: Path, fake_run: Recorded
+) -> None:
+    keep = premigration_kind().keep
+    assert keep == 5
+    older = [
+        dump_at(
+            tmp_path,
+            "premigration",
+            "premigration",
+            NOW - timedelta(days=days),
+        )
+        for days in range(1, keep + 1)
+    ]
+    for days in range(60, 100):
+        dump_at(tmp_path, "inventory", "daily", NOW - timedelta(days=days))
+        dump_at(tmp_path, "full", "weekly", NOW - timedelta(days=days))
+    daily, weekly = names_in(tmp_path / "daily"), names_in(tmp_path / "weekly")
+
+    (taken,) = run_backup(tmp_path, kinds=[premigration_kind()], now=NOW)
+
+    survivors = existing(tmp_path / "premigration", premigration_kind())
+    assert survivors == [taken.path, *older[:-1]]
+    assert names_in(tmp_path / "daily") == daily
+    assert names_in(tmp_path / "weekly") == weekly
+
+
+def test_a_failed_premigration_dump_prunes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The migration it was for does not run either: that is env.py's."""
+    for days in range(1, 6):
+        dump_at(
+            tmp_path,
+            "premigration",
+            "premigration",
+            NOW - timedelta(days=days),
+        )
+    before = names_in(tmp_path / "premigration")
+
+    def failing(command: list[str], **kwargs: Any) -> Any:
+        return subprocess.CompletedProcess(command, 1, b"", b"disk full")
+
+    monkeypatch.setattr(backup_module.subprocess, "run", failing)
+
+    with pytest.raises(BackupError):
+        run_backup(tmp_path, kinds=[premigration_kind()], now=NOW)
+
+    assert names_in(tmp_path / "premigration") == before
+
+
+def test_each_of_the_two_whole_database_tiers_keeps_its_own_pointer(
+    tmp_path: Path, fake_run: Recorded
+) -> None:
+    full = take_backup(full_kind(), tmp_path, now=NOW)
+    first = take_backup(
+        premigration_kind(), tmp_path, now=NOW + timedelta(hours=1)
+    )
+
+    premigration_link = latest_link(
+        tmp_path / "premigration", premigration_kind()
+    )
+    full_link = latest_link(tmp_path / "weekly", full_kind())
+    assert premigration_link.name == "premigration-LATEST.dump"
+    assert premigration_link.resolve() == first.path.resolve()
+    assert full_link.resolve() == full.path.resolve()
+
+    take_backup(full_kind(), tmp_path, now=NOW + timedelta(days=7))
+
+    assert premigration_link.resolve() == first.path.resolve()
+
+
+def test_the_premigration_dump_is_read_back_before_it_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """And before its pointer moves."""
+
+    def run(command: list[str], **kwargs: Any) -> Any:
+        if "pg_restore" in command:
+            return subprocess.CompletedProcess(command, 1, "", "corrupt")
+        kwargs["stdout"].write(b"garbage")
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr(backup_module.subprocess, "run", run)
+
+    with pytest.raises(BackupError, match="not a readable archive"):
+        take_backup(premigration_kind(), tmp_path, now=NOW)
+
+    directory = tmp_path / "premigration"
+    assert existing(directory, premigration_kind()) == []
+    assert not latest_link(directory, premigration_kind()).exists()
 
 
 # --- the tools without a container -----------------------------------

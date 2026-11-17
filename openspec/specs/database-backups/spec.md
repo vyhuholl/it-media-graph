@@ -1,7 +1,7 @@
 # database-backups Specification
 
 ## Purpose
-Where the database's dumps live and what leaves the collection host: every verified dump is also copied off-site, encrypted before it leaves, into a store the host can add to but never delete from or read back, within a fixed budget that costs nothing.
+Where the database's dumps live and what leaves the collection host: every verified inventory and full dump is also copied off-site, encrypted before it leaves, into a store the host can add to but never delete from or read back, within a fixed budget that costs nothing; the dump a migration takes first stays on the host.
 
 ## Requirements
 

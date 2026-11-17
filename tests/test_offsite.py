@@ -19,7 +19,7 @@ from pydantic import SecretStr
 
 from itgraph.config import settings
 from itgraph.db import offsite as offsite_module
-from itgraph.db.backup import STAMP_FORMAT, inventory_kind
+from itgraph.db.backup import STAMP_FORMAT, full_kind, inventory_kind
 from itgraph.db.offsite import (
     FIRST_PAUSE,
     UPLOAD_ATTEMPTS,
@@ -243,6 +243,60 @@ def test_a_dump_past_the_window_is_not_uploaded(
 
     assert copied == []
     assert b2.uploads == []
+
+
+def test_a_premigration_dump_stays_on_the_host(
+    tmp_path: Path, configured: None, fake_age: None
+) -> None:
+    """Its tier has no schedule, so nothing would bound what it sends.
+
+    Sharing the full tier, fifteen of them reached the store in the
+    seventeen days before 2026-11-17, until the account met its cap.
+    """
+    dump_at(tmp_path, "premigration", "premigration", NOW - timedelta(hours=1))
+    b2 = FakeB2()
+
+    copied = copy_new_dumps(tmp_path, now=NOW, transport=b2.transport)
+
+    assert copied == []
+    assert b2.uploads == []
+    assert "premigration/" not in b2.listings
+
+
+def test_the_scheduled_tiers_leave_beside_a_premigration_dump(
+    tmp_path: Path, configured: None, fake_age: None
+) -> None:
+    inventory = dump_at(
+        tmp_path, "inventory", "daily", NOW - timedelta(hours=2)
+    )
+    full = dump_at(tmp_path, "full", "weekly", NOW - timedelta(hours=2))
+    dump_at(tmp_path, "premigration", "premigration", NOW - timedelta(hours=1))
+    b2 = FakeB2()
+
+    copied = copy_new_dumps(tmp_path, now=NOW, transport=b2.transport)
+
+    assert copied == [inventory, full]
+    assert [name for name, _, _ in b2.uploads] == [
+        remote_name(inventory_kind(), inventory),
+        remote_name(full_kind(), full),
+    ]
+    assert sorted(set(b2.listings)) == ["full/", "inventory/"]
+
+
+def test_a_full_dump_taken_by_hand_is_copied(
+    tmp_path: Path, configured: None, fake_age: None
+) -> None:
+    """At a moment no schedule would pick: the tier decides, not the clock."""
+    dump = dump_at(
+        tmp_path, "full", "weekly", NOW - timedelta(hours=5, minutes=13)
+    )
+    b2 = FakeB2()
+
+    copied = copy_new_dumps(tmp_path, now=NOW, transport=b2.transport)
+
+    assert copied == [dump]
+    [(name, _, _)] = b2.uploads
+    assert name == remote_name(full_kind(), dump)
 
 
 def test_listing_pages_until_the_end(

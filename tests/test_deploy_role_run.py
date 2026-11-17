@@ -813,7 +813,10 @@ def test_behind_it_migrates_from_the_image_with_its_dump(
         rules=[
             *pod_answers(
                 "itgraph-migrate",
-                logs="backed up to /backups/weekly/full-x.dump (1 bytes)\n",
+                logs=(
+                    "backed up to /backups/premigration/"
+                    "premigration-20261117T090000Z.dump (1 bytes)\n"
+                ),
             ),
             rule("version_num FROM alembic_version", HEAD + "\n"),
         ],

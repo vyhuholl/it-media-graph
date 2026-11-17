@@ -10,8 +10,8 @@ Rules for every task:
 
 ## 1. The pre-migration tier
 
-- [ ] 1.1 `config.py` gains `backup_keep_premigration: int = Field(default=5, ge=1)` (design.md, Decision 4). The comment above the full tier's bounds gives their reason as full dumps taken by hand, no longer migrations (Decision 5). The comment above the off-site settings says what is copied: inventory and full dumps. Verify in `tests/test_config.py`: the default is 5, and 0 is refused.
-- [ ] 1.2 `db/backup.py` (design.md, Decisions 1–3):
+- [x] 1.1 `config.py` gains `backup_keep_premigration: int = Field(default=5, ge=1)` (design.md, Decision 4). The comment above the full tier's bounds gives their reason as full dumps taken by hand, no longer migrations (Decision 5). The comment above the off-site settings says what is copied: inventory and full dumps. Verify in `tests/test_config.py`: the default is 5, and 0 is refused.
+- [x] 1.2 `db/backup.py` (design.md, Decisions 1–3):
   - `BackupKind.interval` becomes `timedelta | None`, and `is_due` answers `False` for a tier without one;
   - `premigration_kind()`: name and directory `premigration`, the whole database, `backup_keep_premigration`, no interval, no `keep_for`;
   - `scheduled_kinds()` returns the inventory and full tiers, and `due_kinds` reads it;
@@ -27,7 +27,7 @@ Rules for every task:
   - a pre-migration dump that fails its read-back raises, and the five before it remain;
   - three pre-migration dumps in a day leave `weekly/` the same files;
   - `test_full_dumps_stay_four_weeks_however_many` rests on full dumps taken by hand: its premise is no longer migrations.
-- [ ] 1.3 Docs for the tier:
+- [x] 1.3 Docs for the tier:
   - `CLAUDE.md`: the backup invariant says an `alembic upgrade` on the working database first takes a dump of the whole database into a tier of its own, which stays on the host.
   - `src/itgraph/CLAUDE.md`: the row of `db/backup.py`.
   - `src/itgraph/README.md`, «Резервные копии»: a third row in the table of tiers (`premigration/`, the whole database, before each `alembic upgrade` on a database with tables, the five newest); the paragraph on why full dumps are kept by age, its reason now the dumps taken by hand, with a sentence on the `full-…` pre-migration dumps from before the release ageing out of `weekly/`; three pointers instead of two; and where the dump before a migration goes.
@@ -36,27 +36,28 @@ Rules for every task:
 
 ## 2. The migration takes it
 
-- [ ] 2.1 `db/migrations/env.py`: `backup_before_upgrade` takes `premigration_kind()`, and its docstring says where the dump goes and that it stays on the host. `ITGRAPH_SKIP_BACKUP`, the empty-database exception and the `backed up to <path>` line are unchanged. Verify with a test (design.md, Decision 8). It runs `alembic upgrade head` in-process against a URL that is not a scratch database and does not exist, with `run_backup` and `is_empty_database` replaced, and checks:
+- [x] 2.1 `db/migrations/env.py`: `backup_before_upgrade` takes `premigration_kind()`, and its docstring says where the dump goes and that it stays on the host. `ITGRAPH_SKIP_BACKUP`, the empty-database exception and the `backed up to <path>` line are unchanged. Verify with a test (design.md, Decision 8). It runs `alembic upgrade head` in-process against a URL that is not a scratch database and does not exist, with `run_backup` and `is_empty_database` replaced, and checks:
   - the tiers asked for are exactly the pre-migration tier;
   - a `BackupError` from it refuses the migration with the message that names `ITGRAPH_SKIP_BACKUP`;
   - with `ITGRAPH_SKIP_BACKUP=1`, nothing is asked for.
 
   If Alembic cannot be driven in-process cleanly, use the subprocess form of `tests/test_guard.py` with the same three checks, and record why.
-- [ ] 2.2 The role and its checks:
+- [x] 2.2 The role and its checks:
   - the comment at the top of `migrate.yml` says the dump goes to the pre-migration tier;
   - `deploy/ansible/e2e.sh` checks the takeover's report for `dump at /backups/premigration/premigration-`;
   - the fake logs in `tests/test_deploy_role_run.py` name a path under `/backups/premigration/`.
 
   Verify: the tests that hold "A Migration Dump Only When Migrating" are green, as are `make ansible-lint` and `make test-e2e`, which shows the takeover's dump under `premigration/`.
+  - Note: only the migration pod's fake log moved to `premigration/`. The restore trial's fake log stays under `weekly/`: that pod runs `backup --full`, a full dump.
 
 ## 3. Off-site copies the scheduled tiers
 
-- [ ] 3.1 `db/offsite.py`: `copy_new_dumps` copies `scheduled_kinds()` and lists the store under their prefixes alone (design.md, Decision 3). The module's docstring and `copy_new_dumps`'s say inventory and full dumps, and why a dump with no schedule stays home. Verify in `tests/test_offsite.py`, with the scenarios of "Inventory And Full Dumps Are Copied Off-Site":
+- [x] 3.1 `db/offsite.py`: `copy_new_dumps` copies `scheduled_kinds()` and lists the store under their prefixes alone (design.md, Decision 3). The module's docstring and `copy_new_dumps`'s say inventory and full dumps, and why a dump with no schedule stays home. Verify in `tests/test_offsite.py`, with the scenarios of "Inventory And Full Dumps Are Copied Off-Site":
   - a pre-migration dump inside the window is not uploaded, and nothing under a `premigration/` prefix is listed or written;
   - in the same run, an inventory dump and a full dump inside the window are uploaded;
   - a full dump at a moment no schedule would pick, one taken by hand, is uploaded;
   - every existing test stays green unedited.
-- [ ] 3.2 Docs:
+- [x] 3.2 Docs:
   - `src/itgraph/README.md`, «Копии вне хоста»: each verified inventory and full dump leaves the host, and the dump before a migration does not.
   - `src/itgraph/CLAUDE.md`: the row of `db/offsite.py`.
 
@@ -64,8 +65,8 @@ Rules for every task:
 
 ## 4. Restoring by hand
 
-- [ ] 4.1 `src/itgraph/README.md`, «На хосте сбора», and the local restore above it: by hand over production, take the newer of `weekly/full-LATEST.dump` and `premigration/premigration-LATEST.dump`, and after a failed migration the pre-migration one, since `full-LATEST.dump` may be up to a week older (design.md, Decision 6). The streaming command takes the chosen path, and the note on `full-LATEST.dump` being the newest verified full dump says the same of each pointer. Verify: the commands name both paths, and no host, address or production value appears.
-- [ ] 4.2 `deploy/runbook.md`:
+- [x] 4.1 `src/itgraph/README.md`, «На хосте сбора», and the local restore above it: by hand over production, take the newer of `weekly/full-LATEST.dump` and `premigration/premigration-LATEST.dump`, and after a failed migration the pre-migration one, since `full-LATEST.dump` may be up to a week older (design.md, Decision 6). The streaming command takes the chosen path, and the note on `full-LATEST.dump` being the newest verified full dump says the same of each pointer. Verify: the commands name both paths, and no host, address or production value appears.
+- [x] 4.2 `deploy/runbook.md`:
   - «Восстановление»: the rehearsal still takes the newest full dump from `weekly/` or its copy in the store, and pre-migration dumps stay on the host and are not rehearsed;
   - «Поверх продакшена, руками»: which dump to take, pointing at the README.
 
@@ -73,8 +74,10 @@ Rules for every task:
 
 ## 5. Integration
 
-- [ ] 5.1 The Purpose of `openspec/specs/database-backups/spec.md` says that inventory and full dumps leave the host, where it said every verified dump. A delta cannot change it. Verify: `openspec validate --specs --strict` is green.
-- [ ] 5.2 `openspec validate separate-premigration-dumps --strict`, `make validate` and `make test-e2e`. Verify: all green, and the number of collected tests is not lower than before group 1.
+- [x] 5.1 The Purpose of `openspec/specs/database-backups/spec.md` says that inventory and full dumps leave the host, where it said every verified dump. A delta cannot change it. Verify: `openspec validate --specs --strict` is green.
+  - Note, run on 2026-11-17: `openspec validate database-backups --type spec --strict` is green. The run over every spec fails on 11 other specs, and it failed on the same 11 before this change; none of them is touched here.
+- [x] 5.2 `openspec validate separate-premigration-dumps --strict`, `make validate` and `make test-e2e`. Verify: all green, and the number of collected tests is not lower than before group 1.
+  - Note, run on 2026-11-17: `make validate` green at 2,836 tests, against 2,818 before group 1, with coverage at 96.5%; `make test-e2e` green at 72 checks, among them the takeover's dump in its own tier. The full `make validate` ran once, after groups 1–4, with each group's own tests run as it ended. An earlier run found the local Compose Postgres stopped and skipped every database test; it was started, and the run repeated.
 
 ## 6. Rollout
 

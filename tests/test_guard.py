@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -59,24 +60,31 @@ def test_a_merely_present_opt_in_is_not_enough() -> None:
 
 
 def _alembic(*args: str, **overrides: str) -> subprocess.CompletedProcess[str]:
-    """Run the real Alembic CLI, so env.py's wiring is exercised."""
-    env = {
-        **os.environ,
-        "TELEGRAM_API_ID": "0",
-        "TELEGRAM_API_HASH": "test-api-hash",
-        **overrides,
-    }
-    env.pop(ALLOW_DESTRUCTIVE, None)
-    env.update({k: v for k, v in overrides.items()})
-    return subprocess.run(
-        [sys.executable, "-m", "alembic", *args],
-        cwd=REPO_ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
+    """Run the real Alembic CLI, so env.py's wiring is exercised.
+
+    With a backup directory of its own, thrown away after: an upgrade
+    against a database that is not a scratch one tries its dump first,
+    and the default directory is the operator's real backups.
+    """
+    with tempfile.TemporaryDirectory() as backups:
+        env = {
+            **os.environ,
+            "TELEGRAM_API_ID": "0",
+            "TELEGRAM_API_HASH": "test-api-hash",
+            "BACKUP_DIR": backups,
+            **overrides,
+        }
+        env.pop(ALLOW_DESTRUCTIVE, None)
+        env.update({k: v for k, v in overrides.items()})
+        return subprocess.run(
+            [sys.executable, "-m", "alembic", *args],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
 
 
 def test_the_cli_refuses_a_downgrade_of_a_non_scratch_database() -> None:

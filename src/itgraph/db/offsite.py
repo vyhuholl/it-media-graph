@@ -1,6 +1,11 @@
 """Off-site copies of verified dumps: encrypted on the host, uploaded to
 a store the host can add to but never delete from or read back.
 
+Only the scheduled tiers leave, inventory and full. The dump a migration
+takes first stays on the host: the store's budget is the schedule times
+its lifecycle, and a tier taken once per migrating deploy has no bound
+there. Sharing the full tier, it filled the store in November 2026.
+
 Why the ``age`` CLI rather than a Python binding: it streams, where the
 bindings hold the plaintext and the ciphertext in memory at once — twice
 a 275 MB dump in a job with a memory limit — and it adds no dependency.
@@ -40,8 +45,7 @@ from itgraph.db.backup import (
     BackupKind,
     _timestamp_of,
     existing,
-    full_kind,
-    inventory_kind,
+    scheduled_kinds,
 )
 
 __all__ = [
@@ -398,7 +402,12 @@ def copy_new_dumps(
     transport: httpx.BaseTransport | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> list[Path]:
-    """Copy every local verified dump that has no off-site copy yet.
+    """Copy every local verified dump of a scheduled tier that has no
+    off-site copy yet.
+
+    Inventory and full dumps, a full dump taken by hand included; never
+    the dump a migration takes first, whose tier has no schedule and so
+    no bound on what it would send. Its prefix is not even listed.
 
     Returns the dumps copied, oldest tier's first. Raises
     ``OffsiteError`` naming every dump that was not copied; local dumps
@@ -408,7 +417,7 @@ def copy_new_dumps(
     root = root or settings.backup_dir
     when = now or datetime.now(UTC)
     key_id, application_key, _bucket_name, recipient = _configuration()
-    kinds = (inventory_kind(), full_kind())
+    kinds = scheduled_kinds()
 
     with httpx.Client(timeout=TIMEOUT, transport=transport) as client:
         session = _authorize(client, key_id, application_key)

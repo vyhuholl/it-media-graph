@@ -1,18 +1,24 @@
 """Dumps of the working database, and the pruning that keeps them bounded.
 
-Two kinds, because the two halves of this database are worth different
-amounts. The inventory is a few hundred rows of manual review that no
-amount of re-collecting reconstructs, so it is dumped often and kept
-deep. The raw layer is large and, at the cost of hours and of load on the
-account, re-fetchable — so full dumps are rarer and fewer are kept.
+Three tiers. Two are scheduled, because the two halves of this database
+are worth different amounts. The inventory is a few hundred rows of
+manual review that no amount of re-collecting reconstructs, so it is
+dumped often and kept deep. The raw layer is large and, at the cost of
+hours and of load on the account, re-fetchable — so full dumps are rarer
+and fewer are kept.
+
+The third is the dump of the whole database every ``alembic upgrade``
+takes first. It has no schedule, is kept by count, and never leaves the
+host: the off-site store is sized by the schedule, and a tier taken once
+per migrating deploy has no bound there. In its own directory under its
+own name, so that nothing of the full tier sees it.
 
 Every dump is read back with ``pg_restore --list`` before it counts. A
 file that cannot be restored is not a backup, and the failure has to
 surface when it is written rather than when it is needed.
 
 Each tier also keeps a ``…-LATEST.dump`` symlink to its newest verified
-dump, so that a restore — or the deploy playbook, which ships one of
-these to a new host — names a stable path instead of the operator
+dump, so that a restore names a stable path instead of the operator
 picking a timestamped file by eye. Picking by eye is not a cosmetic
 risk: choosing yesterday's dump for a migration silently loses a day of
 metric snapshots, and snapshots are the one thing here that cannot be
@@ -65,8 +71,8 @@ INVENTORY_TABLES = (
 STAMP_FORMAT = "%Y%m%dT%H%M%SZ"
 
 # What the stable pointer is called, per tier: `full-LATEST.dump`,
-# `inventory-LATEST.dump`. Not a timestamp, deliberately — the whole
-# point is a name that does not change.
+# `inventory-LATEST.dump`, `premigration-LATEST.dump`. Not a timestamp,
+# deliberately — the whole point is a name that does not change.
 LATEST = "LATEST"
 
 
@@ -76,13 +82,20 @@ class BackupError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class BackupKind:
-    """One tier of backup: what it covers, how often, how many stay."""
+    """One tier of backup: what it covers, how often, how many stay.
+
+    The name may not contain a hyphen: a dump's stamp is whatever
+    follows the first one, so ``pre-migration-<stamp>`` would read as
+    ``migration-<stamp>`` and be skipped — never pruned, never pointed
+    at.
+    """
 
     name: str
     subdirectory: str
     tables: tuple[str, ...] | None  # None means the whole database
     keep: int
-    interval: timedelta
+    # None means no schedule: the tier is taken when something asks.
+    interval: timedelta | None
     # Past `keep`, a dump younger than this stays too; None keeps by
     # count alone.
     keep_for: timedelta | None = None
@@ -110,6 +123,35 @@ def full_kind() -> BackupKind:
         interval=timedelta(days=settings.backup_full_interval_days),
         keep_for=timedelta(days=settings.backup_keep_full_days),
     )
+
+
+def premigration_kind() -> BackupKind:
+    """The dump of the whole database every ``alembic upgrade`` takes first.
+
+    Kept by count alone: migrations come in bursts — fifteen in the
+    seventeen days before 2026-11-17, three on one day — and a bound by
+    age would hold as many as a burst brought. History older than the
+    last few migrations is the full tier's.
+    """
+    return BackupKind(
+        name="premigration",
+        subdirectory="premigration",
+        tables=None,
+        keep=settings.backup_keep_premigration,
+        interval=None,
+    )
+
+
+def scheduled_kinds() -> tuple[BackupKind, ...]:
+    """The tiers the schedule takes, cheapest first.
+
+    Exactly the tiers copied off-site, too, and one list for both on
+    purpose: the store's budget is the schedule times its lifecycle, so
+    a tier without a schedule would send copies with no bound. That is
+    how, sharing the full tier, the pre-migration dump filled the store
+    in November 2026.
+    """
+    return (inventory_kind(), full_kind())
 
 
 def _docker(*args: str) -> list[str]:
@@ -198,7 +240,12 @@ def is_due(
     floor and not an appointment: a laptop asleep at the scheduled moment
     catches up on its next run instead of missing the window. That is
     also what makes it safe to run this often.
+
+    A tier with no interval is never due: it is taken when something
+    asks for it, never by the schedule.
     """
+    if kind.interval is None:
+        return False
     newest = existing(root / kind.subdirectory, kind)
     if not newest:
         return True
@@ -210,11 +257,7 @@ def is_due(
 
 def due_kinds(root: Path, *, now: datetime | None = None) -> list[BackupKind]:
     """Which tiers this run should take, cheapest first."""
-    return [
-        kind
-        for kind in (inventory_kind(), full_kind())
-        if is_due(root, kind, now=now)
-    ]
+    return [kind for kind in scheduled_kinds() if is_due(root, kind, now=now)]
 
 
 def _timestamp_of(path: Path) -> datetime | None:
@@ -403,8 +446,7 @@ def _point_latest_at(path: Path, kind: BackupKind) -> None:
 
     A reader that *sends* this file elsewhere has to resolve the link
     itself. ``rsync -a`` copies a symlink as a symlink and the copy then
-    dangles at a name that exists only here; the deploy playbook passes
-    ``copy_links`` for exactly this reason.
+    dangles at a name that exists only here.
 
     Replaced through a temporary name so the pointer is never briefly
     absent: ``symlink_to`` refuses an existing path, and unlinking first
@@ -441,11 +483,15 @@ def prune(
 
     A dump goes once it is not among the newest ``kind.keep`` and, on a
     tier with ``keep_for``, is older than that as well. The full tier
-    needs the age because it also holds the dump every ``alembic
-    upgrade`` takes first: kept by count alone, three migrations in a
-    day pushed out every weekly dump. The count stays as the floor, so
-    a host whose dumps stopped for a month still has its last few when
+    needs the age because it also holds every full dump taken by hand:
+    kept by count alone, a few of those in a day would push out every
+    weekly dump — as three migrations did on 2026-11-01, when their
+    dumps still shared the tier. The count stays as the floor, so a
+    host whose dumps stopped for a month still has its last few when
     the next one lands.
+
+    Only this tier's directory is read, so pruning one tier never
+    touches another's dumps.
     """
     surplus = existing(root / kind.subdirectory, kind)[kind.keep :]
     if kind.keep_for is not None:
