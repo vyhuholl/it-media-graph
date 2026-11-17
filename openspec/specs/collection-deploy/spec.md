@@ -153,9 +153,15 @@ Before reporting success, a deploy in an environment that collects SHALL check t
 
 #### Scenario: Polls advance
 
-- **GIVEN** an environment that collects, outside quiet hours
+- **GIVEN** an environment that collects, outside quiet hours, from which they do not begin before the wait for a poll would end
 - **WHEN** the deploy verifies
 - **THEN** it waits a bounded time for a poll newer than the collector's start, and fails if none comes
+
+#### Scenario: Quiet hours that would begin during the wait for a poll
+
+- **GIVEN** an environment that collects, outside quiet hours, from which they would begin before the wait for a poll ends
+- **WHEN** the deploy verifies
+- **THEN** it does not wait for a poll, and does not fail for the lack of one
 
 #### Scenario: A closed exit in a test environment
 
@@ -653,6 +659,12 @@ At the end of a deploy, the report SHALL state the release and image digests dep
 - **GIVEN** a deploy that ends inside the collector's quiet hours
 - **WHEN** it reports
 - **THEN** it says that polls advancing could not be checked, and until when
+
+#### Scenario: Quiet hours that would begin during the wait
+
+- **GIVEN** a deploy whose wait for a poll would reach the collector's quiet hours
+- **WHEN** it reports
+- **THEN** it says that polls advancing could not be checked, and from when quiet hours hold
 
 ### Requirement: The Deployed Code Is The Pinned Image
 

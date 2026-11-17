@@ -35,7 +35,7 @@ The system SHALL serve its series from one read-only process at `GET /metrics` o
 
 ### Requirement: The Series Come From What Is Already Recorded
 
-Every series SHALL be worked out at scrape time from durable state in the database or from settings, not from counters inside another process, so that a stopped or stuck collector is measured the same as a working one. A series SHALL NOT need a sequential scan of `raw_messages` or `message_metrics`.
+Every series SHALL be worked out at scrape time from durable state in the database or from settings, not from counters inside another process, so that a stopped or stuck collector is measured the same as a working one. A series SHALL NOT need a sequential scan of `tg_raw_messages` or `tg_message_metrics`.
 
 #### Scenario: A collector that stopped
 

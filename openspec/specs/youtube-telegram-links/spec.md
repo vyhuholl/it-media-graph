@@ -258,7 +258,7 @@ With `--add`, `itgraph yt tg-candidates` SHALL create a record for each of the r
 
 ### Requirement: Nothing Joined Is Stored
 
-The system SHALL work the links, families and ranking out of `raw_messages`, the stored payloads and the lookups each time it is asked, and MUST NOT store which families link a channel, a count, a rank, or anything else joined from Telegram and the API. A record created by `--add` holds only what any record holds.
+The system SHALL work the links, families and ranking out of `tg_raw_messages`, the stored payloads and the lookups each time it is asked, and MUST NOT store which families link a channel, a count, a rank, or anything else joined from Telegram and the API. A record created by `--add` holds only what any record holds.
 
 #### Scenario: Reporting writes nothing
 

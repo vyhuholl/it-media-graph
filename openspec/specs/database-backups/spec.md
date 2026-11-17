@@ -340,13 +340,13 @@ A restore SHALL end with real writes through the running service, under its read
 
 #### Scenario: A delivered alert
 
-- **GIVEN** a moment outside quiet hours
+- **GIVEN** a moment outside quiet hours, from which they do not begin before the trials' wait would end
 - **WHEN** the restore raises a synthetic alert on a restored post
 - **THEN** the bot delivers it to the environment's chat, and its delivery is recorded
 
 #### Scenario: A delivered YouTube alert per topic
 
-- **GIVEN** an environment that configures a YouTube chat and its two topics, and a moment outside their quiet hours
+- **GIVEN** an environment that configures a YouTube chat and its two topics, and a moment outside their quiet hours, from which they do not begin before the trials' wait would end
 - **WHEN** the restore raises a synthetic YouTube alert on a synthetic video of a restored English seed, and one of a restored Russian seed
 - **THEN** the bot delivers each to its topic of the environment's YouTube chat, and each delivery and route is recorded
 - **AND** the synthetic videos, their readings and their alerts are gone once the restore ends
@@ -362,6 +362,24 @@ A restore SHALL end with real writes through the running service, under its read
 - **GIVEN** a moment inside a destination's quiet hours
 - **WHEN** the restore reaches that destination's alert
 - **THEN** the alert is not sent, and the report says it could not be proven
+
+#### Scenario: Quiet hours that would begin during the wait
+
+- **GIVEN** a moment outside quiet hours, from which they would begin before the trials' wait ends — Telegram's, and YouTube's where the environment configures it
+- **WHEN** the restore reaches the alerts
+- **THEN** it raises no alert of either platform, and the report says each could not be proven and when quiet hours begin
+
+#### Scenario: Quiet hours past midnight
+
+- **GIVEN** quiet hours that start later in the day than they end, and a moment after their start or before their end
+- **WHEN** the restore reaches the alerts
+- **THEN** it raises no alert, and the report says it could not be proven
+
+#### Scenario: Quiet hours with equal bounds
+
+- **GIVEN** quiet hours whose start and end are the same hour, and a moment at that hour
+- **WHEN** the restore reaches the alerts
+- **THEN** it raises them and waits for their delivery, as at any other moment: equal bounds are no quiet hours
 
 ### Requirement: A Stale Copy Does Not Fail The Passes
 

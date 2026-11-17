@@ -78,14 +78,14 @@ Added after verification, at the operator's word (design.md, Decision 9). e2e is
 
 This change ships in one release with the three changes after it, so these are done at that release's deploy.
 
-- [ ] 6.1 **(operator)** Deploy the release to the test environment. Verify:
+- [x] 6.1 **(operator)** Deploy the release to the test environment. Verify:
   - the role's report names the channels counted under the old name before the migration;
   - the migration applies, the trials pass, and the CronJobs' next runs succeed;
   - in the test database, no old name is left (`\dt`, `\dv`, `\dT`).
-- [ ] 6.2 **(operator)** Run the restore rehearsal in the test environment from the newest full dump, which predates the rename. Verify: it loads under the old names, migrates to the new ones, and neutralisation and the read-back pass.
-- [ ] 6.3 **(operator)** Before production, close every reader session: DBeaver, and any agent's tunnel. Then deploy the release to production. Verify: the migration applies without waiting on a lock, and the collector and the bot are back.
-- [ ] 6.4 **(operator)** Right after 6.3: `scripts/on-host.sh --backups backup --full`. Verify: `full-LATEST.dump` is the new dump, and it lists `tg_channels` under `pg_restore --list`.
-- [ ] 6.5 **(operator)** Update saved queries outside the repository, such as DBeaver's, to the new names.
+- [x] 6.2 **(operator)** Run the restore rehearsal in the test environment from the newest full dump, which predates the rename. Verify: it loads under the old names, migrates to the new ones, and neutralisation and the read-back pass.
+- [x] 6.3 **(operator)** Before production, close every reader session: DBeaver, and any agent's tunnel. Then deploy the release to production. Verify: the migration applies without waiting on a lock, and the collector and the bot are back.
+- [x] 6.4 **(operator)** Right after 6.3: `scripts/on-host.sh --backups backup --full`. Verify: `full-LATEST.dump` is the new dump, and it lists `tg_channels` under `pg_restore --list`.
+- [x] 6.5 **(operator)** Update saved queries outside the repository, such as DBeaver's, to the new names.
 
 ## Workflow follow-up
 
