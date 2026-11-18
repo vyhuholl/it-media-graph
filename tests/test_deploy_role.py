@@ -272,6 +272,9 @@ SCHEDULES = {
     "itgraph-backup": ("40 */4 * * *", 10800, 7200),
     "itgraph-baselines": ("30 4 * * *", 82800, 10800),
     "itgraph-yt-refresh": ("0 5 * * *", 82800, 10800),
+    # Both lookup queues, an hour after the refresh; a missed run starts
+    # the same day, and the bounded pass needs no half hour.
+    "itgraph-yt-lookup": ("0 6 * * *", 82800, 1800),
     # Six minutes after each poll pass; ten to finish, as the pass it follows.
     "itgraph-yt-score": ("6-59/15 * * * *", 600, 600),
     # Half an hour after the refresh, which brings the settled readings.
@@ -420,6 +423,7 @@ SECRET_KEYS = {
         ("CronJob", "itgraph-backup", {"B2_APPLICATION_KEY"}),
         ("CronJob", "itgraph-yt-watch", {"YOUTUBE_API_KEY"}),
         ("CronJob", "itgraph-yt-refresh", {"YOUTUBE_API_KEY"}),
+        ("CronJob", "itgraph-yt-lookup", {"YOUTUBE_API_KEY"}),
         ("CronJob", "itgraph-yt-backfill", {"YOUTUBE_API_KEY"}),
         (
             "Deployment",
@@ -588,6 +592,7 @@ REACH = {
     "itgraph-backup": {"itgraph/database", "itgraph/internet"},
     "itgraph-yt-watch": {"itgraph/database", "itgraph/internet"},
     "itgraph-yt-refresh": {"itgraph/database", "itgraph/internet"},
+    "itgraph-yt-lookup": {"itgraph/database", "itgraph/internet"},
     "itgraph-yt-backfill": {"itgraph/database", "itgraph/internet"},
     "itgraph-proxy": {"itgraph/internet"},
     "itgraph-postgres": set(),
@@ -695,6 +700,12 @@ def test_no_job_runs_what_is_for_a_person_to_read(
         "containers"
     ]
     assert container["args"] == ["yt", "refresh"]
+    # The lookup itself runs unattended, and prints counts and no channel.
+    lookup = named(everything(rendered["a"]), "CronJob", "itgraph-yt-lookup")
+    [container] = lookup["spec"]["jobTemplate"]["spec"]["template"]["spec"][
+        "containers"
+    ]
+    assert container["args"] == ["yt", "rising-lookups"]
 
 
 @pytest.mark.parametrize("name", SETS)
