@@ -1657,15 +1657,27 @@ def affiliates(
 @app.command()
 def family(
     channel_refs: Annotated[
-        list[str],
+        # Optional because `--reject-all` names no channel: it answers
+        # the whole review list in one statement.
+        list[str] | None,
         typer.Argument(
             metavar="CHANNEL...",
             help="The channels, by Telegram id or @username.",
         ),
-    ],
+    ] = None,
     reject: Annotated[
         bool,
         typer.Option("--reject", help="Record that they are not affiliated."),
+    ] = False,
+    reject_all: Annotated[
+        bool,
+        typer.Option(
+            "--reject-all",
+            help=(
+                "Reject every pending pair the review list shows — a "
+                "seed on at least one side — after a typed confirmation."
+            ),
+        ),
     ] = False,
     withdraw: Annotated[
         bool,
@@ -1694,8 +1706,12 @@ def family(
 
     A rejection takes exactly two channels — it is a statement about a
     pair — and it is stored so that pair stops being proposed at every
-    subsequent run. `--withdraw` undoes either; a withdrawn pair splits
-    its family only if nothing else was connecting the two sides.
+    subsequent run. `--reject-all` is that statement made about every
+    pair the review list shows, for clearing a run whose noise outweighs
+    its findings: it names no channel, asks for the word `yes`, and
+    leaves hidden pairs and past decisions alone. `--withdraw` undoes
+    either decision, one pair at a time; a withdrawn pair splits its
+    family only if nothing else was connecting the two sides.
 
     Channels no signal ever paired can be confirmed directly — you may
     simply know. Those pairs are recorded as having come from you rather
@@ -1703,29 +1719,61 @@ def family(
     """
     from itgraph.db.channels import (
         confirm_affiliation,
+        count_shown_pending,
         reject_affiliation,
         withdraw_affiliation,
     )
+    from itgraph.db.channels import (
+        reject_all as reject_all_pairs,
+    )
     from itgraph.db.session import Database
 
-    if reject and withdraw:
-        raise typer.BadParameter("give at most one of --reject, --withdraw")
-    if len(channel_refs) < 2:
+    refs = [_channel_ref(ref) for ref in channel_refs or []]
+
+    if sum((reject, reject_all, withdraw)) > 1:
+        raise typer.BadParameter(
+            "give at most one of --reject, --reject-all, --withdraw"
+        )
+    if reject_all:
+        if refs:
+            raise typer.BadParameter("--reject-all takes no channels")
+    elif len(refs) < 2:
         raise typer.BadParameter("name at least two channels")
-    if (reject or withdraw) and len(channel_refs) != 2:
+    if (reject or withdraw) and len(refs) != 2:
         # Rejecting or withdrawing says something about one pair. A group
         # form would have to invent which pairs it meant.
         raise typer.BadParameter(
             "--reject and --withdraw take exactly two channels"
         )
 
-    refs = [_channel_ref(ref) for ref in channel_refs]
-
     async def run() -> None:
         database = Database()
         try:
             async with database.session() as session:
-                if withdraw:
+                if reject_all:
+                    count = await count_shown_pending(session)
+                    if not count:
+                        typer.echo("nothing awaits review")
+                        return
+                    typer.echo(
+                        f"{count} pairs await review. Rejecting records "
+                        "them all as not affiliated; undoing it afterwards "
+                        "is one pair at a time."
+                    )
+                    # The exact word, not a y/n default: this is one
+                    # statement retiring a whole list, so consent is
+                    # spelled out. EOF — a non-interactive context —
+                    # declines like anything else that is not `yes`.
+                    try:
+                        answer = input("Type yes to continue: ")
+                    except EOFError:
+                        answer = ""
+                    if answer != "yes":
+                        typer.echo("nothing written")
+                        raise typer.Exit(1)
+                    rejected = await reject_all_pairs(session, note=note)
+                    typer.echo(f"{rejected} pairs rejected")
+                elif withdraw:
                     pair = await withdraw_affiliation(session, *refs)
                     typer.echo(f"{pair[0]} and {pair[1]}: decision withdrawn")
                 elif reject:
@@ -3758,9 +3806,9 @@ def yt_affiliates(
 @yt_app.command("family")
 def yt_family(
     channel_refs: Annotated[
-        # Optional because `--reject-token` names no channel: a token
-        # rejection is a statement about pairs, and the token alone
-        # identifies them.
+        # Optional because `--reject-token` and `--reject-all` name no
+        # channel: a bulk rejection is a statement about pairs, and the
+        # token — or the whole review list — identifies them.
         list[str] | None,
         typer.Argument(
             metavar="CHANNEL...",
@@ -3770,6 +3818,16 @@ def yt_family(
     reject: Annotated[
         bool,
         typer.Option("--reject", help="Record that they are not affiliated."),
+    ] = False,
+    reject_all: Annotated[
+        bool,
+        typer.Option(
+            "--reject-all",
+            help=(
+                "Reject every pending pair the review list shows — a "
+                "seed on at least one side — after a typed confirmation."
+            ),
+        ),
     ] = False,
     reject_token: Annotated[
         str | None,
@@ -3813,9 +3871,13 @@ def yt_family(
     subsequent run. `--reject-token` declines every still-pending pair
     one corroborated token proposed: a noisy block costs one review
     instead of one per pair, and a channel that later starts carrying
-    the token asks its questions anew. `--withdraw` undoes any of these;
-    a withdrawn pair splits its family only if nothing else was
-    connecting the two sides.
+    the token asks its questions anew. `--reject-all` is that statement
+    made about every pair the review list shows, whatever token
+    proposed it, for clearing a run whose noise outweighs its findings:
+    it names no channel, asks for the word `yes`, and leaves hidden
+    pairs and past decisions alone. `--withdraw` undoes any of these,
+    one pair at a time; a withdrawn pair splits its family only if
+    nothing else was connecting the two sides.
 
     Channels no signal ever paired can be confirmed directly — you may
     simply know. Those pairs are recorded as having come from you rather
@@ -3824,21 +3886,31 @@ def yt_family(
     from itgraph.db.session import Database
     from itgraph.db.yt_channels import (
         confirm_affiliation,
+        count_shown_pending,
         reject_affiliation,
         withdraw_affiliation,
+    )
+    from itgraph.db.yt_channels import (
+        reject_all as reject_all_pairs,
     )
     from itgraph.db.yt_channels import (
         reject_token as reject_token_pairs,
     )
 
     refs = channel_refs or []
-    if sum((reject, withdraw, reject_token is not None)) > 1:
+    if sum((reject, reject_all, withdraw, reject_token is not None)) > 1:
         raise typer.BadParameter(
-            "give at most one of --reject, --reject-token, --withdraw"
+            "give at most one of --reject, --reject-all, --reject-token, "
+            "--withdraw"
         )
-    if reject_token is not None:
+    if reject_token is not None or reject_all:
         if refs:
-            raise typer.BadParameter("--reject-token takes no channels")
+            flag = (
+                "--reject-token"
+                if reject_token is not None
+                else "--reject-all"
+            )
+            raise typer.BadParameter(f"{flag} takes no channels")
     elif len(refs) < 2:
         raise typer.BadParameter("name at least two channels")
     if (reject or withdraw) and len(refs) != 2:
@@ -3852,7 +3924,30 @@ def yt_family(
         database = Database()
         try:
             async with database.session() as session:
-                if reject_token is not None:
+                if reject_all:
+                    count = await count_shown_pending(session)
+                    if not count:
+                        typer.echo("nothing awaits review")
+                        return
+                    typer.echo(
+                        f"{count} pairs await review. Rejecting records "
+                        "them all as not affiliated; undoing it afterwards "
+                        "is one pair at a time."
+                    )
+                    # The exact word, not a y/n default: this is one
+                    # statement retiring a whole list, so consent is
+                    # spelled out. EOF — a non-interactive context —
+                    # declines like anything else that is not `yes`.
+                    try:
+                        answer = input("Type yes to continue: ")
+                    except EOFError:
+                        answer = ""
+                    if answer != "yes":
+                        typer.echo("nothing written")
+                        raise typer.Exit(1)
+                    rejected = await reject_all_pairs(session, note=note)
+                    typer.echo(f"{rejected} pairs rejected")
+                elif reject_token is not None:
                     count = await reject_token_pairs(
                         session, reject_token, note=note
                     )

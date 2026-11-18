@@ -14,9 +14,19 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import ColumnElement, delete, func, or_, select, update
+from sqlalchemy import (
+    ColumnElement,
+    ColumnExpressionArgument,
+    and_,
+    delete,
+    func,
+    or_,
+    select,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from itgraph.db.models import (
     AffiliationDecision,
@@ -53,6 +63,7 @@ __all__ = [
     "YtChannelNotFoundError",
     "apply_review",
     "confirm_affiliation",
+    "count_shown_pending",
     "create_channels",
     "current_review",
     "due_for_refresh",
@@ -65,6 +76,7 @@ __all__ = [
     "mark_channel",
     "mark_gone",
     "reject_affiliation",
+    "reject_all",
     "reject_token",
     "store_payloads",
     "stored_handle",
@@ -717,6 +729,82 @@ async def reject_token(
         )
     )
     return int(count)
+
+
+def _shown_pending(
+    side_a: type[YtChannel], side_b: type[YtChannel]
+) -> ColumnExpressionArgument[bool]:
+    """A pair the review list shows, as one predicate: the pair's own
+    channels joined in, the decision pending, a seed on at least one side.
+
+    ``list_candidates``'s ``seeds_only`` reading, as a predicate. The
+    bulk rejection answers the list the operator reads, and this helper
+    is what keeps "what the list shows" and "what one statement rejects"
+    the same set. The joins live in the predicate rather than the query
+    because the UPDATE side has no ``join()``: ``UPDATE ... FROM``
+    arrives through the WHERE clause, and a predicate without them
+    would cross-join.
+    """
+    return and_(
+        side_a.channel_id == YtAffiliationCandidate.channel_a,
+        side_b.channel_id == YtAffiliationCandidate.channel_b,
+        YtAffiliationCandidate.decision == AffiliationDecision.PENDING,
+        or_(
+            side_a.status == ChannelStatus.SEED,
+            side_b.status == ChannelStatus.SEED,
+        ),
+    )
+
+
+async def count_shown_pending(session: AsyncSession) -> int:
+    """How many pairs the review list currently shows.
+
+    Asked before any prompting: the confirmation is informed or it is
+    theater, and an empty list has nothing to confirm.
+    """
+    side_a = aliased(YtChannel)
+    side_b = aliased(YtChannel)
+    return int(
+        await session.scalar(
+            select(func.count())
+            .select_from(YtAffiliationCandidate, side_a, side_b)
+            .where(_shown_pending(side_a, side_b))
+        )
+        or 0
+    )
+
+
+async def reject_all(session: AsyncSession, *, note: str | None = None) -> int:
+    """Reject every pair the review list shows, as one decision.
+
+    ``reject_token`` with the token removed: the first detection run
+    over the seeds proposed far more noise than families — blocks a
+    token cap could not split — and the operator's answer was one
+    statement clearing the list, not a review per pair. Everything the
+    list does not show — hidden pairs on which neither channel is a
+    seed, every decided pair, whatever token proposed it — is left
+    exactly as it was, and the rejection stays pair-scoped, so a later
+    run's new proposals are new questions.
+
+    Returns how many pairs were rejected, counted before the update
+    rather than off its row count: the number is the command's whole
+    point, and `reject_token`'s note on that applies here unchanged.
+    """
+    count = await count_shown_pending(session)
+    if not count:
+        return 0
+    side_a = aliased(YtChannel)
+    side_b = aliased(YtChannel)
+    await session.execute(
+        update(YtAffiliationCandidate)
+        .where(_shown_pending(side_a, side_b))
+        .values(
+            decision=AffiliationDecision.REJECTED,
+            decided_at=datetime.now(UTC),
+            decision_note=note if note is not None else "--reject-all",
+        )
+    )
+    return count
 
 
 async def withdraw_affiliation(

@@ -12,15 +12,19 @@ from typing import Any
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    ColumnExpressionArgument,
+    and_,
     column,
     func,
     literal_column,
+    or_,
     select,
     table,
     update,
 )
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from itgraph.affiliation.signals import Pair, ordered
 from itgraph.db.affiliation import family_keys, family_of
@@ -51,6 +55,7 @@ __all__ = [
     "confirm_affiliation",
     "count_by_status",
     "count_families",
+    "count_shown_pending",
     "create_resolved_channel",
     "existing_usernames",
     "families_subquery",
@@ -61,6 +66,7 @@ __all__ = [
     "record_channel_resolve_failure",
     "record_channel_resolved",
     "reject_affiliation",
+    "reject_all",
     "upsert_channels",
     "withdraw_affiliation",
 ]
@@ -559,6 +565,83 @@ async def withdraw_affiliation(
         )
     )
     return pair
+
+
+def _shown_pending(
+    side_a: type[Channel], side_b: type[Channel]
+) -> ColumnExpressionArgument[bool]:
+    """A pair the review list shows, as one predicate: the pair's own
+    channels joined in, the decision pending, a seed on at least one side.
+
+    ``list_candidates``'s ``seeds_only`` reading. The bulk rejection
+    answers the list the operator reads, and this helper is what keeps
+    "what the list shows" and "what one statement rejects" the same set
+    — written once instead of imitated twice. The joins live in the
+    predicate rather than the query because the UPDATE side has no
+    ``join()``: ``UPDATE ... FROM`` arrives through the WHERE clause,
+    and a predicate without them would cross-join.
+    """
+    return and_(
+        side_a.tg_id == AffiliationCandidate.channel_a,
+        side_b.tg_id == AffiliationCandidate.channel_b,
+        AffiliationCandidate.decision == AffiliationDecision.PENDING,
+        or_(
+            side_a.status == ChannelStatus.SEED,
+            side_b.status == ChannelStatus.SEED,
+        ),
+    )
+
+
+async def count_shown_pending(session: AsyncSession) -> int:
+    """How many pairs the review list currently shows.
+
+    Asked before any prompting: the confirmation is informed or it is
+    theater, and an empty list has nothing to confirm.
+    """
+    side_a = aliased(Channel)
+    side_b = aliased(Channel)
+    return int(
+        await session.scalar(
+            select(func.count())
+            .select_from(AffiliationCandidate, side_a, side_b)
+            .where(_shown_pending(side_a, side_b))
+        )
+        or 0
+    )
+
+
+async def reject_all(session: AsyncSession, *, note: str | None = None) -> int:
+    """Reject every pair the review list shows, as one decision.
+
+    ``--reject-token``'s move with the token removed: when a detection run
+    proposes far more noise than families, the operator's answer is one
+    statement clearing the list, not a threshold change and not a review
+    per pair. Everything the list does not show — hidden pairs on which
+    neither channel is a seed, every decided pair — is left exactly as it
+    was, and the rejection stays pair-scoped, so a later run's new
+    proposals are new questions.
+
+    Returns how many pairs were rejected, counted before the update rather
+    than off its row count: the typed result of an ``update`` carries no
+    count to read, and the number is the command's whole point.
+    """
+    count = await count_shown_pending(session)
+    if not count:
+        return 0
+    side_a = aliased(Channel)
+    side_b = aliased(Channel)
+    await session.execute(
+        # UPDATE ... FROM: the sides arrive in the WHERE clause, which is
+        # how SQLAlchemy renders a joined update on PostgreSQL.
+        update(AffiliationCandidate)
+        .where(_shown_pending(side_a, side_b))
+        .values(
+            decision=AffiliationDecision.REJECTED,
+            decided_at=datetime.now(UTC),
+            decision_note=note if note is not None else "--reject-all",
+        )
+    )
+    return count
 
 
 async def _record_decision(

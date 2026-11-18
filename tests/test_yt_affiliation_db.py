@@ -33,7 +33,10 @@ from itgraph.db.yt_affiliation import (
 )
 from itgraph.db.yt_channels import (
     confirm_affiliation,
+    count_shown_pending,
     create_channels,
+    reject_affiliation,
+    reject_all,
     store_payloads,
 )
 from itgraph.yt.affiliation.detect import Candidate, Detection
@@ -50,6 +53,7 @@ from itgraph.yt.affiliation.signals import (
 A = channel_id(1)
 B = channel_id(2)
 C = channel_id(3)
+D = channel_id(4)
 
 # Two ids whose two orders disagree: code points rank the uppercase B
 # of UCB… before the lowercase a of UCa…, a linguistic collation — the
@@ -343,6 +347,95 @@ async def test_a_decided_pair_leaves_the_review_list_but_stays_readable(
     assert [row.channel_b for row in pending] == [C]
     assert len(everything) == 2
     assert counts[AffiliationDecision.REJECTED] == 1
+
+
+async def test_reject_all_clears_the_list_and_only_the_list(
+    database: Database,
+) -> None:
+    """The bulk statement answers the list the operator reads: shown
+    pending pairs are rejected with when and why, a pair decided one by
+    one keeps that decision, and a hidden pair — no seed on either side —
+    stays pending for a channel accepted later."""
+    await seed(database, in_scope=False)
+    async with database.session() as session:
+        await create_channels(session, [D])
+        # A and B into scope, C and D left outside it.
+        for channel in (A, B):
+            record = await session.get(YtChannel, channel)
+            assert record is not None
+            record.status = ChannelStatus.SEED
+            record.kind = YtChannelKind.PERSONAL
+            record.lang = YtLang.EN
+    await store(
+        database,
+        [
+            Candidate(pair=ordered(A, B), score=0.9),
+            Candidate(pair=ordered(A, C), score=0.7),
+            Candidate(pair=ordered(B, C), score=0.6),
+            Candidate(pair=ordered(C, D), score=0.5),
+        ],
+    )
+    async with database.session() as session:
+        await reject_affiliation(session, A, B, note="one by one")
+
+    async with database.session() as session:
+        shown = await count_shown_pending(session)
+        rejected = await reject_all(session)
+
+    assert (shown, rejected) == (2, 2)
+    async with database.session() as session:
+        rows = (
+            await session.execute(
+                text(
+                    "SELECT channel_a, channel_b, decision::text, "
+                    "decided_at IS NOT NULL, decision_note "
+                    "FROM yt_affiliation_candidates "
+                    "ORDER BY channel_a, channel_b"
+                )
+            )
+        ).all()
+
+    assert rows == [
+        (A, B, "rejected", True, "one by one"),
+        (A, C, "rejected", True, "--reject-all"),
+        (B, C, "rejected", True, "--reject-all"),
+        (C, D, "pending", False, None),
+    ]
+
+
+async def test_reject_all_with_nothing_shown_writes_nothing(
+    database: Database,
+) -> None:
+    await seed(database, in_scope=False)
+    await store(database, [Candidate(pair=ordered(A, B), score=1.4)])
+
+    async with database.session() as session:
+        assert await count_shown_pending(session) == 0
+        assert await reject_all(session) == 0
+
+    async with database.session() as session:
+        rows = await list_candidates(
+            session, seeds_only=False, include_decided=True
+        )
+
+    assert [row.decision for row in rows] == [AffiliationDecision.PENDING]
+
+
+async def test_reject_all_note_is_the_operators_when_given(
+    database: Database,
+) -> None:
+    await seed(database)
+    await store(database, [Candidate(pair=ordered(A, B), score=0.9)])
+
+    async with database.session() as session:
+        await reject_all(session, note="first run, all noise")
+
+    async with database.session() as session:
+        note = await session.scalar(
+            text("SELECT decision_note FROM yt_affiliation_candidates")
+        )
+
+    assert note == "first run, all noise"
 
 
 async def test_candidates_come_back_ranked_and_bounded(

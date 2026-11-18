@@ -2,7 +2,7 @@
 
 ## 1. Telegram bulk rejection
 
-- [ ] 1.1 In `db/channels.py`, add a module-private shown-pending predicate
+- [x] 1.1 In `db/channels.py`, add a module-private shown-pending predicate
       (pending decision, `status = seed` on at least one side, over the
       channel joins) and the two functions built on it:
       `count_shown_pending(session)` and `reject_all(session, *, note)`,
@@ -11,7 +11,7 @@
       rejected with `decided_at` and the default note, hidden non-seed pairs
       stay pending, already-decided pairs are untouched, `--note` overrides
       the default, and an empty list returns 0 writing nothing.
-- [ ] 1.2 In `cli.py`, give `family` an optional `--reject-all`: channels
+- [x] 1.2 In `cli.py`, give `family` an optional `--reject-all`: channels
       become an optional argument, mutually exclusive with `--reject` and
       `--withdraw`, taking no channels. The prompt states the count and the
       per-pair undo, accepts only the exact word `yes` (anything else or EOF:
@@ -22,16 +22,16 @@
 
 ## 2. YouTube bulk rejection
 
-- [ ] 2.1 In `db/yt_channels.py`, add the same predicate and function pair
+- [x] 2.1 In `db/yt_channels.py`, add the same predicate and function pair
       next to `reject_token`, over `YtChannel` status. Verify in
       `tests/test_yt_affiliation_db.py` with the same cases as 1.1.
-- [ ] 2.2 In `cli.py`, give `yt family` the same `--reject-all`, mutually
+- [x] 2.2 In `cli.py`, give `yt family` the same `--reject-all`, mutually
       exclusive also with `--reject-token`. Verify in
       `tests/test_yt_affiliation_family.py` with the same cases as 1.2, plus
       the `--reject-token` combination failing.
 
 ## 3. Verification
 
-- [ ] 3.1 `make validate` green, and `uv run itgraph family --help` /
+- [x] 3.1 `make validate` green, and `uv run itgraph family --help` /
       `uv run itgraph yt family --help` show the flag with the confirmation
       and seed-scope wording on both commands.

@@ -566,6 +566,107 @@ def test_a_token_rejection_without_a_note_names_the_token(
     )
 
 
+def test_family_reject_all_clears_the_review_list(
+    monkeypatch: pytest.MonkeyPatch, database_url: str, offline: None
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    seed_affiliation_fixture(database_url)
+    runner.invoke(app, ["yt", "affiliates"])
+    # One pair decided beforehand: a bulk rejection never rewrites a
+    # decision, in either direction.
+    runner.invoke(app, ["yt", "family", B, C])
+
+    result = runner.invoke(
+        app, ["yt", "family", "--reject-all"], input="yes\n"
+    )
+    after = runner.invoke(app, ["yt", "affiliates"])
+
+    assert result.exit_code == 0, result.output
+    assert "2 pairs await review" in result.output
+    assert "Type yes to continue:" in result.output
+    assert "2 pairs rejected" in result.output
+    assert "0 awaiting review" in after.output
+    assert (
+        scalar(
+            database_url,
+            "SELECT count(*) FROM yt_affiliation_candidates "
+            "WHERE decision = 'confirmed'",
+        )
+        == 1
+    )
+    assert (
+        scalar(
+            database_url,
+            "SELECT decision_note FROM yt_affiliation_candidates "
+            "WHERE decision = 'rejected'",
+        )
+        == "--reject-all"
+    )
+
+
+def test_family_reject_all_declined_writes_nothing(
+    monkeypatch: pytest.MonkeyPatch, database_url: str, offline: None
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    seed_affiliation_fixture(database_url)
+    runner.invoke(app, ["yt", "affiliates"])
+
+    declined = runner.invoke(
+        app, ["yt", "family", "--reject-all"], input="no\n"
+    )
+    # Empty stdin is EOF: a non-interactive context declines rather than
+    # hangs.
+    eof = runner.invoke(app, ["yt", "family", "--reject-all"], input="")
+
+    assert declined.exit_code == 1
+    assert "3 pairs await review" in declined.output
+    assert "nothing written" in declined.output
+    assert eof.exit_code == 1
+    assert "nothing written" in eof.output
+    assert (
+        scalar(
+            database_url,
+            "SELECT count(*) FROM yt_affiliation_candidates "
+            "WHERE decision = 'rejected'",
+        )
+        == 0
+    )
+
+
+def test_family_reject_all_with_nothing_pending_prompts_nothing(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    seed_affiliation_fixture(database_url)
+
+    result = runner.invoke(app, ["yt", "family", "--reject-all"])
+
+    assert result.exit_code == 0, result.output
+    assert "nothing awaits review" in result.output
+    assert "Type yes" not in result.output
+
+
+def test_family_reject_all_refuses_other_decisions_and_channels(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    use_test_database(monkeypatch, database_url)
+    seed_affiliation_fixture(database_url)
+
+    with_token = runner.invoke(
+        app, ["yt", "family", "--reject-all", "--reject-token", "acme"]
+    )
+    with_channels = runner.invoke(app, ["yt", "family", A, "--reject-all"])
+    and_reject = runner.invoke(
+        app, ["yt", "family", A, B, "--reject", "--reject-all"]
+    )
+
+    assert with_token.exit_code != 0
+    assert "at most one" in with_token.output
+    assert with_channels.exit_code != 0
+    assert "--reject-all takes no channels" in with_channels.output
+    assert and_reject.exit_code != 0
+
+
 def test_family_withdraws_a_confirmation(
     monkeypatch: pytest.MonkeyPatch, database_url: str, offline: None
 ) -> None:
