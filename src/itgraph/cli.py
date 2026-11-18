@@ -1331,21 +1331,25 @@ def offer(
 def apply_reviews() -> None:
     """Apply the decisions taken on rising offers in the bot.
 
-    Each once, oldest first, as `itgraph mark` would apply it, to a
-    channel still a candidate or a maybe; a channel reviewed some other
-    way since keeps that review. Run by the detection job every 15
-    minutes. Prints counts only.
+    Both platforms', each once, oldest first, as `itgraph mark` and
+    `itgraph yt mark` would apply them, to a channel still a candidate
+    or a maybe; a channel reviewed some other way since keeps that
+    review. Run by the detection job every 15 minutes. Prints counts
+    only.
     """
     from itgraph.db.session import Database
     from itgraph.derive.offers import apply_reviews as run_apply
+    from itgraph.derive.yt_offers import apply_reviews as run_yt_apply
 
     async def run() -> None:
         database = Database()
         try:
-            summary = await run_apply(database)
+            telegram = await run_apply(database)
+            youtube = await run_yt_apply(database)
         finally:
             await database.dispose()
-        typer.echo(summary.line())
+        typer.echo(telegram.line())
+        typer.echo(youtube.line())
 
     _run(run())
 
@@ -2832,6 +2836,48 @@ def yt_rising(
             window_days=settings.rising_window_days,
             min_families=settings.rising_min_families,
         ):
+            typer.echo(line)
+
+    _run_yt(run())
+
+
+@yt_app.command("offer")
+def yt_offer(
+    preview: Annotated[
+        bool,
+        typer.Option(
+            "--preview",
+            help="Print the day's offers by id, and write nothing.",
+        ),
+    ] = False,
+    now: NowOption = None,
+) -> None:
+    """Select today's rising YouTube channels for review in the bot.
+
+    The two rankings' heads never offered before — at most
+    `youtube_rising_link_offers_per_day` of the links and
+    `youtube_rising_chart_offers_per_region` of each region's chart, a
+    channel both hold taken by the links — stored for the bot to send,
+    each offered channel becoming a candidate record without API data;
+    the refresh fetches that. An empty day is stored too. A day is
+    selected once. Makes no request, needs no API key and takes no
+    lease, so it runs in every environment. Prints counts only, since
+    the daily job's output is kept; `--preview` names the channels by
+    id and is for a person at a terminal.
+    """
+    from itgraph.db.session import Database
+    from itgraph.derive.yt_offers import run_offer
+
+    moment = _moment(now)
+
+    async def run() -> None:
+        database = Database()
+        try:
+            summary = await run_offer(database, now=moment, preview=preview)
+        finally:
+            await database.dispose()
+        typer.echo(summary.line())
+        for line in summary.preview():
             typer.echo(line)
 
     _run_yt(run())

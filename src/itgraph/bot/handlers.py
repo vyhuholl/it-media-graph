@@ -17,9 +17,10 @@ because this is where an outsider can first be seen:
 * **A chat the bot cannot reach stops it at start,** not at the first
   alert, hours or days later.
 
-A press on a rising offer's card is taken in Telegram's chat alone, and
-what it records names nobody: the handler reads the button's data and
-the message, never who pressed.
+A press on a rising offer's card is taken in its platform's chat alone —
+Telegram's `rv:` refusing the YouTube chat, YouTube's `yv:` the Telegram
+one — and what a press records names nobody: the handlers read the
+button's data and the message, never who pressed.
 """
 
 import logging
@@ -54,10 +55,43 @@ from itgraph.bot.review import (
     reasons,
 )
 from itgraph.bot.status import telegram_status, youtube_status
+from itgraph.bot.yt_review import (
+    Decision as YtDecision,
+)
+from itgraph.bot.yt_review import (
+    Press as YtPress,
+)
+from itgraph.bot.yt_review import (
+    PressKind as YtPressKind,
+)
+from itgraph.bot.yt_review import (
+    decision_line as yt_decision_line,
+)
+from itgraph.bot.yt_review import (
+    first_step as yt_first_step,
+)
+from itgraph.bot.yt_review import (
+    kinds as yt_kinds,
+)
+from itgraph.bot.yt_review import (
+    languages as yt_languages,
+)
+from itgraph.bot.yt_review import (
+    parse as yt_parse,
+)
+from itgraph.bot.yt_review import (
+    reasons as yt_reasons,
+)
 from itgraph.config import settings
-from itgraph.db.models import YtAlertRoute
+from itgraph.db.models import YtAlertRoute, YtChannelKind, YtLang
 from itgraph.db.offers import offer_state, record_decision
 from itgraph.db.session import Database
+from itgraph.db.yt_offers import (
+    offer_state as yt_offer_state,
+)
+from itgraph.db.yt_offers import (
+    record_decision as yt_record_decision,
+)
 
 __all__ = [
     "BotSender",
@@ -73,8 +107,10 @@ logger = logging.getLogger(__name__)
 # removed. Matched only to retire them.
 OLD_BUTTON = r"^(useful|boring):\d+$"
 
-# What a rising offer's buttons send; `bot/review.py` reads the rest.
+# What a rising offer's buttons send; `bot/review.py` and
+# `bot/yt_review.py` read the rest.
 REVIEW_BUTTON = r"^rv:"
+YT_REVIEW_BUTTON = r"^yv:"
 
 # What a press is answered with when it decides nothing.
 DECIDED = "уже размечено"
@@ -191,6 +227,12 @@ def build_dispatcher(
         for d in destinations
         if d.platform is Platform.YOUTUBE and d.route is not None
     }
+    # The YouTube chat the `yv:` buttons are taken in; both topics are
+    # the one chat.
+    youtube_chat = next(
+        (d.chat_id for d in destinations if d.platform is Platform.YOUTUBE),
+        None,
+    )
     chats = frozenset(platforms)
 
     # Applied as a filter rather than checked inside each handler: a
@@ -275,14 +317,18 @@ def build_dispatcher(
             return
         if recorded and decision is not None:
             await query.answer()
-            await _show_decision(bot, message, decision)
+            await _show_decision(bot, message, decision_line(decision))
             return
         if state.decision is not None:
             await query.answer(DECIDED)
             await _show_decision(
                 bot,
                 message,
-                Decision(state.decision, kind=state.kind, reason=state.reason),
+                decision_line(
+                    Decision(
+                        state.decision, kind=state.kind, reason=state.reason
+                    )
+                ),
             )
             return
         await query.answer()
@@ -291,6 +337,80 @@ def build_dispatcher(
                 chat_id=message.chat.id,
                 message_id=message.message_id,
                 reply_markup=markup(_step(press)),
+            )
+
+    @dispatcher.callback_query(F.data.regexp(YT_REVIEW_BUTTON))
+    async def yt_review(query: CallbackQuery) -> None:
+        """A press on a YouTube rising offer's card, in the YouTube chat
+        alone.
+
+        Seed opens the kinds and — only while the offer's language is
+        unknown or neither of the two a topic takes — the languages,
+        which carry the chosen kind; a payload's `defaultLanguage` of
+        `en` or `ru` fills the language silently. Reject opens the
+        reasons; maybe is one press. A deciding press records the
+        decision once, and the card then says it and loses its buttons.
+        Who pressed is never read.
+        """
+        message = query.message
+        press = yt_parse(query.data)
+        bot = query.bot
+        if (
+            press is None
+            or bot is None
+            or youtube_chat is None
+            or not isinstance(message, Message)
+            or message.chat.id != youtube_chat
+        ):
+            await query.answer()
+            return
+
+        decision: YtDecision | None = None
+        async with database.session() as session:
+            state = await yt_offer_state(session, press.offer_id)
+            recorded = False
+            if state is not None and state.sent and state.decision is None:
+                decision = press.decision(state.known_language)
+                if decision is not None:
+                    recorded = await yt_record_decision(
+                        session,
+                        press.offer_id,
+                        status=decision.status,
+                        kind=decision.kind,
+                        language=decision.language,
+                        reason=decision.reason,
+                    )
+            if decision is not None and not recorded:
+                state = await yt_offer_state(session, press.offer_id)
+
+        if state is None or not state.sent:
+            await query.answer(UNKNOWN)
+            return
+        if recorded and decision is not None:
+            await query.answer()
+            await _show_decision(bot, message, yt_decision_line(decision))
+            return
+        if state.decision is not None:
+            await query.answer(DECIDED)
+            await _show_decision(
+                bot,
+                message,
+                yt_decision_line(
+                    YtDecision(
+                        state.decision,
+                        kind=state.kind,
+                        language=state.language,
+                        reason=state.reason,
+                    )
+                ),
+            )
+            return
+        await query.answer()
+        with suppress(TelegramBadRequest):
+            await bot.edit_message_reply_markup(
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                reply_markup=markup(_yt_step(press, state.known_language)),
             )
 
     @dispatcher.callback_query(F.data.regexp(OLD_BUTTON))
@@ -323,16 +443,30 @@ def _step(press: Press) -> Keyboard:
     return first_step(press.offer_id)
 
 
-async def _show_decision(
-    bot: Bot, message: Message, decision: Decision
-) -> None:
+def _yt_step(press: YtPress, known_language: YtLang | None) -> Keyboard:
+    """The buttons a YouTube press that decides nothing shows."""
+    if press.kind is YtPressKind.SEED:
+        return yt_kinds(press.offer_id)
+    if press.kind is YtPressKind.REJECT:
+        return yt_reasons(press.offer_id)
+    # The offer's language is unknown or other than the two a topic
+    # takes: ask it, carrying the kind just chosen.
+    if (
+        press.kind is YtPressKind.KIND
+        and known_language is None
+        and isinstance(press.value, YtChannelKind)
+    ):
+        return yt_languages(press.offer_id, press.value)
+    return yt_first_step(press.offer_id)
+
+
+async def _show_decision(bot: Bot, message: Message, line: str) -> None:
     """The card with its decision said, and no buttons left.
 
     Its text as Telegram holds it, so the card is not read again; a card
     that already says it — the other of two presses — only loses its
     buttons.
     """
-    line = decision_line(decision)
     text = message.html_text
     with suppress(TelegramBadRequest):
         if text.endswith(line):

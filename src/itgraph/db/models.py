@@ -465,7 +465,9 @@ class YtDiscoverySource(enum.StrEnum):
     videos reference), ``FEATURED`` (what seeds list in their channel
     sections) and ``SEARCH`` (what the operator's queries returned) —
     each written by its own ``--add`` alone, so ``discovered_via`` by
-    status is the yield of each source.
+    status is the yield of each source. ``CHART`` is the rising review's
+    alone: the day's selection writes it for a channel of the chart, and
+    no command writes it by hand.
     """
 
     MANUAL = "manual"
@@ -473,6 +475,7 @@ class YtDiscoverySource(enum.StrEnum):
     MENTION = "mention"
     FEATURED = "featured"
     SEARCH = "search"
+    CHART = "chart"
 
 
 class YtLang(enum.StrEnum):
@@ -689,6 +692,18 @@ class YtRequestOutcome(enum.StrEnum):
     NOT_FOUND = "not_found"
     QUOTA_EXCEEDED = "quota_exceeded"
     ERROR = "error"
+
+
+class YtRisingRanking(enum.StrEnum):
+    """Which of the two rankings offered a channel.
+
+    A chart offer is a channel of the day's regional reading; a link
+    offer one the seeds' evidence named. A channel both rank is taken by
+    the link ranking, which is why the column exists at all.
+    """
+
+    LINK = "link"
+    CHART = "chart"
 
 
 def _pg_enum(members: type[enum.Enum], name: str) -> Enum:
@@ -3423,4 +3438,145 @@ class YtRequest(Base):
         return (
             f"YtRequest(method={self.method!r}, units={self.units}, "
             f"outcome={self.outcome})"
+        )
+
+
+class YtRisingOfferDay(Base):
+    """One day's selection of YouTube's rising channels, an empty one too.
+
+    Telegram's day, with the two sizes: which ranking could fill how
+    much is part of what the day says.
+    """
+
+    __tablename__ = "yt_rising_offer_days"
+
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # `youtube_rising_chart_offers_per_region` and
+    # `youtube_rising_link_offers_per_day` when it was computed.
+    size_chart: Mapped[int] = mapped_column(Integer)
+    size_links: Mapped[int] = mapped_column(Integer)
+
+
+class YtRisingOffer(Base):
+    """A rising YouTube channel offered for review in the bot, and what
+    came of it.
+
+    Telegram's offer, plus which ranking offered it and what it filled
+    — a chart offer's region and position, a link offer's evidence —
+    the discovery source the record it created carries, and the topic
+    its card goes to. A seed's decision here carries a language, as
+    ``itgraph yt mark`` records one. As on Telegram: a channel is
+    offered once, ever, nobody who pressed is recorded, and the bot
+    reads the channel at sending, never here.
+    """
+
+    __tablename__ = "yt_rising_offers"
+    __table_args__ = (
+        UniqueConstraint("channel_id", name="uq_yt_rising_offers_channel"),
+        CheckConstraint(
+            "decision IS NULL OR decision <> 'candidate'",
+            name="decision_is_a_review",
+        ),
+        CheckConstraint(
+            "coalesce(decision = 'seed', false) = (kind IS NOT NULL)"
+            " AND coalesce(decision = 'seed', false)"
+            " = (language IS NOT NULL)"
+            " AND coalesce(decision = 'rejected', false)"
+            " = (reject_reason IS NOT NULL)",
+            name="decision_has_its_choice",
+        ),
+        CheckConstraint(
+            "(decision IS NULL) = (decided_at IS NULL)",
+            name="decided_when_decided",
+        ),
+        CheckConstraint(
+            "(applied_at IS NULL) = (applied IS NULL)"
+            " AND (applied_at IS NULL OR decided_at IS NOT NULL)",
+            name="applied_after_decided",
+        ),
+        # What the bot asks on every poll, and the detection pass on
+        # every run.
+        Index(
+            "ix_yt_rising_offers_undelivered",
+            "day",
+            "id",
+            postgresql_where=text("delivered_at IS NULL"),
+        ),
+        Index(
+            "ix_yt_rising_offers_unapplied",
+            "decided_at",
+            postgresql_where=text(
+                "decided_at IS NOT NULL AND applied_at IS NULL"
+            ),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    day: Mapped[date] = mapped_column(
+        ForeignKey("yt_rising_offer_days.day", ondelete="CASCADE")
+    )
+    channel_id: Mapped[str] = mapped_column(
+        ForeignKey("yt_channels.channel_id", ondelete="CASCADE")
+    )
+    ranking: Mapped[YtRisingRanking] = mapped_column(
+        _pg_enum(YtRisingRanking, "yt_rising_ranking")
+    )
+    # A chart offer's place in its region's reading; a link offer's
+    # evidence — each whichever its ranking fills.
+    region: Mapped[str | None] = mapped_column(Text)
+    position: Mapped[int | None] = mapped_column(Integer)
+    families: Mapped[int | None] = mapped_column(Integer)
+    families_before: Mapped[int | None] = mapped_column(Integer)
+    first_in_window: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    # The discovery source the record was created with; `chart` for a
+    # chart offer, the strongest of the others for a link one.
+    discovered_via: Mapped[YtDiscoverySource] = mapped_column(
+        _pg_enum(YtDiscoverySource, "yt_discovery_source")
+    )
+    # Where the card goes: a chart offer's by its region, a link
+    # offer's the English default — its payload's language, once one is
+    # stored, may still move it at sending.
+    topic: Mapped[YtAlertRoute] = mapped_column(
+        _pg_enum(YtAlertRoute, "yt_alert_route")
+    )
+    offered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    # The bot's delivery.
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    attempts: Mapped[int] = mapped_column(Integer, server_default="0")
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+    # The decision pressed, as `itgraph yt mark` would record it.
+    decision: Mapped[ChannelStatus | None] = mapped_column(
+        _pg_enum(ChannelStatus, "channel_status")
+    )
+    kind: Mapped[YtChannelKind | None] = mapped_column(
+        _pg_enum(YtChannelKind, "yt_channel_kind")
+    )
+    language: Mapped[YtLang | None] = mapped_column(
+        _pg_enum(YtLang, "yt_lang")
+    )
+    reject_reason: Mapped[YtRejectReason | None] = mapped_column(
+        _pg_enum(YtRejectReason, "yt_reject_reason")
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+    # The detection pass's: when it looked, and whether the channel was
+    # still a candidate or a maybe so that the decision could land.
+    applied_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    applied: Mapped[bool | None] = mapped_column()
+
+    def __repr__(self) -> str:
+        return (
+            f"YtRisingOffer(day={self.day}, ranking={self.ranking}, "
+            f"decision={self.decision})"
         )

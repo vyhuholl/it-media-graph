@@ -37,6 +37,7 @@ __all__ = [
     "RisingChannel",
     "YtRising",
     "YtRisingRows",
+    "appearances",
     "rank_yt_rising",
     "report",
 ]
@@ -149,7 +150,7 @@ class _Evidence:
             self.first_in_window = at
 
 
-def _appearances(
+def appearances(
     rows: Sequence[FeaturedReadings],
     moment: datetime,
     answers_fresh_days: int,
@@ -202,7 +203,7 @@ def rank_yt_rising(
         evidence.setdefault(reference.channel, _Evidence()).saw(
             reference.family, reference.at, start
         )
-    for appearance in _appearances(rows.featured, moment, answers_fresh_days):
+    for appearance in appearances(rows.featured, moment, answers_fresh_days):
         evidence.setdefault(appearance.channel, _Evidence()).saw(
             appearance.family, appearance.at, start
         )

@@ -721,6 +721,12 @@ class Settings(BaseSettings):
     # list, a search run and its results. Past it the answer is no longer
     # read, and the question is asked again.
     youtube_answers_fresh_days: int = Field(default=30, ge=1)
+    # The rising review's daily sizes: how many channels of each region's
+    # chart and how many of the link ranking a day's selection offers,
+    # none offered before. The overflow waits for the next day's
+    # selection, which ranks again.
+    youtube_rising_chart_offers_per_region: int = Field(default=3, ge=1)
+    youtube_rising_link_offers_per_day: int = Field(default=3, ge=1)
     # One request. The API answers in well under a second; this bounds
     # only the request that never answers.
     youtube_request_timeout_seconds: float = Field(default=30.0, gt=0)

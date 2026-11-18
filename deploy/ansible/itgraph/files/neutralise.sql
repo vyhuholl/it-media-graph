@@ -33,8 +33,10 @@ UPDATE tg_weekly_entries SET delivered_at = now() WHERE delivered_at IS NULL;
 UPDATE tg_weekly_revivals SET delivered_at = now() WHERE delivered_at IS NULL;
 UPDATE yt_weekly_revivals SET delivered_at = now() WHERE delivered_at IS NULL;
 UPDATE tg_rising_offers SET delivered_at = now() WHERE delivered_at IS NULL;
+UPDATE yt_rising_offers SET delivered_at = now() WHERE delivered_at IS NULL;
 
 -- A decision pressed in production lands in production, not in the copy.
 UPDATE tg_rising_offers SET applied_at = now(), applied = false WHERE decided_at IS NOT NULL AND applied_at IS NULL;
+UPDATE yt_rising_offers SET applied_at = now(), applied = false WHERE decided_at IS NOT NULL AND applied_at IS NULL;
 
 COMMIT;

@@ -48,6 +48,12 @@ from itgraph.db.models import (
     YtWatchPass,
     YtWeeklyList,
 )
+from itgraph.db.models import (
+    YtRisingOffer as YtOffer,
+)
+from itgraph.db.models import (
+    YtRisingOfferDay as YtOfferDay,
+)
 from itgraph.db.poll import queue_lag
 from itgraph.db.rising import resolutions_since
 from itgraph.db.yt_quota import pool_cap
@@ -504,6 +510,56 @@ async def _rising_offers(session: AsyncSession, now: datetime) -> list[Family]:
     ]
 
 
+async def _yt_rising_offers(
+    session: AsyncSession, now: datetime
+) -> list[Family]:
+    """YouTube's rising selection and its decisions, from moments alone:
+    Telegram's three, over YouTube's tables — the exporter's role reads
+    the same four moments of them and nothing else."""
+    computed = await session.scalar(select(func.max(YtOfferDay.computed_at)))
+    undelivered = await session.scalar(
+        select(func.min(YtOffer.offered_at)).where(
+            YtOffer.delivered_at.is_(None)
+        )
+    )
+    unapplied = await session.scalar(
+        select(func.min(YtOffer.decided_at)).where(
+            YtOffer.decided_at.is_not(None),
+            YtOffer.applied_at.is_(None),
+        )
+    )
+
+    def waited(since: datetime | None) -> float:
+        return max((now - since).total_seconds(), 0.0) if since else 0.0
+
+    return [
+        _gauge(
+            "itgraph_youtube_rising_offers_computed_timestamp_seconds",
+            (
+                "When the newest day's selection of YouTube's rising "
+                "channels was computed, an empty one included; 0 when none."
+            ),
+            _timestamp(computed),
+        ),
+        _gauge(
+            "itgraph_youtube_rising_offers_oldest_undelivered_seconds",
+            (
+                "How long the oldest YouTube rising offer not yet "
+                "delivered has waited since it was offered; 0 when none."
+            ),
+            waited(undelivered),
+        ),
+        _gauge(
+            "itgraph_youtube_rising_decisions_oldest_unapplied_seconds",
+            (
+                "How long the oldest decision on a YouTube rising offer "
+                "has waited to be applied since it was taken; 0 when none."
+            ),
+            waited(unapplied),
+        ),
+    ]
+
+
 async def read_families(
     session: AsyncSession, *, now: datetime
 ) -> list[Family]:
@@ -516,6 +572,7 @@ async def read_families(
         *await _weekly_lists(session),
         *await _telegram_weekly_list(session),
         *await _rising_offers(session, now),
+        *await _yt_rising_offers(session, now),
     ]
 
 

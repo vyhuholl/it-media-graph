@@ -218,6 +218,23 @@ async def seed(connection: Any) -> None:
         f"'a fake note on a YouTube pair')",
         NOW,
     )
+    # YouTube's day of rising offers: one not yet sent, one decided and
+    # not applied, on channels the restore keeps.
+    await connection.execute(
+        "INSERT INTO yt_rising_offer_days (day, computed_at, size_chart, "
+        "size_links) VALUES ($1, $2, 3, 3)",
+        NOW.date(),
+        NOW,
+    )
+    await connection.execute(
+        "INSERT INTO yt_rising_offers (day, channel_id, ranking, "
+        "discovered_via, topic, offered_at, delivered_at, decision, "
+        "decided_at) VALUES "
+        f"($1, '{FAKE_YT}', 'link', 'telegram', 'en', $2, NULL, NULL, NULL), "
+        f"($1, '{FAKE_YT_OTHER}', 'chart', 'chart', 'ru', $2, $2, 'maybe', $2)",
+        NOW.date(),
+        NOW,
+    )
     list_id = await connection.fetchval(
         "INSERT INTO yt_weekly_lists (week_start, route, computed_at, "
         "threshold, size, comments_min, videos_scored, channels_above) "
@@ -339,6 +356,8 @@ async def test_a_seeded_database_fails_the_read_back(
         "undelivered YouTube second wind entries: 1",
         "undelivered rising offers: 1",
         "unapplied rising decisions: 1",
+        "undelivered YouTube rising offers: 1",
+        "unapplied YouTube rising decisions: 1",
         "users in posts: 2",
         "mentions by id in posts: 2",
         "names in posts: 1",
@@ -482,6 +501,16 @@ async def test_neutralising_passes_the_read_back_and_keeps_what_it_should(
         assert [tuple(row) for row in offers] == [
             (5, True, None),
             (4, True, False),
+        ]
+        # YouTube's too, both closed the same way: the never-decided
+        # first (FAKE_YT sorts before FAKE_YT_OTHER).
+        yt_offers = await connection.fetch(
+            "SELECT delivered_at IS NOT NULL AS sent, applied "
+            "FROM yt_rising_offers ORDER BY channel_id"
+        )
+        assert [tuple(row) for row in yt_offers] == [
+            (True, None),
+            (True, False),
         ]
         # YouTube data is what the copy is for, as posts are.
         assert (

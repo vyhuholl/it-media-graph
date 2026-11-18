@@ -34,7 +34,7 @@ See proposal.md for why. What shapes the approach:
 - `id`; `day` → the days; `channel_id` → `yt_channels`, **unique**: a channel is offered once, ever;
 - `ranking` (`link` or `chart`), `region` and `position` for a chart offer, `families`, `families_before`, `first_in_window` for a link offer — nullable each, whichever the ranking fills;
 - `discovered_via` — the source the record was created with;
-- `topic` (`en` or `ru`) — where the card goes, decided at selection so the bot never re-derives it;
+- `topic` (`en` or `ru`) — where the card goes, decided at selection: a chart offer's by its region, a link offer's the English default. At sending the bot may still re-derive a link offer's topic from a payload fetched since (the operator, 2026-11-19: a fresh offer's channel has no payload at selection, so a stored-at-selection topic alone could never route a known-language link offer, as the spec requires);
 - `offered_at`; `delivered_at`, `attempts`, `last_error`;
 - `decision` (`channel_status`), `kind` (`yt_channel_kind`), `language` (`yt_language`), `reject_reason` (`yt_reject_reason`), `decided_at`;
 - `applied_at`, `applied`.
@@ -57,7 +57,7 @@ The CronJob `itgraph-yt-offer` runs daily at 11:00 Moscow (`itgraph_yt_offer_sch
 
 ### 3. The card, and the topic it goes to
 
-The bot's delivery pass gains a step for the YouTube destination, mirroring Telegram's offers and the weekly lists: claim the undelivered offers (oldest day, then rank order), read each one's channel, close it unsent if the channel is no longer a candidate or a maybe, otherwise render and send to the offer's stored topic, outside that topic's quiet hours, uncapped, never digested. A refused topic fails the attempt and nothing goes anywhere else. Order everywhere: claim, commit, send, mark.
+The bot's delivery pass gains a step for the YouTube destination, mirroring Telegram's offers and the weekly lists: claim the undelivered offers (oldest day, then rank order), read each one's channel, close it unsent if the channel is no longer a candidate or a maybe, otherwise render and send to the offer's stored topic — a link offer's topic re-read from its payload's `defaultLanguage` when that is `en` or `ru` — outside that topic's quiet hours, uncapped, never digested. A refused topic fails the attempt and nothing goes anywhere else. Order everywhere: claim, commit, send, mark.
 
 The card, in HTML, everything escaped, the preview forced to the first link:
 
@@ -107,7 +107,7 @@ The shared reasons keep Telegram's labels, so the two chats read alike; the kind
 
 ### 7. Roles
 
-- **The bot:** `SELECT` on both tables; `UPDATE (delivered_at, attempts, last_error, decision, kind, language, reject_reason, decided_at)` on `yt_rising_offers`. Nothing on `yt_channels` beyond the `SELECT` it has. Role tests hold both halves, Telegram's pattern.
+- **The bot:** `SELECT` on both tables, and on `yt_raw_charts` — a chart offer's card reads the charting video from the stored reading at sending, beside the payloads it already renders from; `UPDATE (delivered_at, attempts, last_error, decision, kind, language, reject_reason, decided_at)` on `yt_rising_offers`. Nothing on `yt_channels` beyond the `SELECT` it has. Role tests hold both halves, Telegram's pattern.
 - **The exporter:** `SELECT (computed_at)` on the days; `SELECT (offered_at, delivered_at, decided_at, applied_at)` on the offers.
 - **The reader:** both tables through its default privileges.
 

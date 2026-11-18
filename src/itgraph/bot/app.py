@@ -38,6 +38,13 @@ part marking what it carried, so a resumed list sends neither twice.
 Telegram's chat, in rank order, with the buttons that review it — outside
 quiet hours, neither capped nor digested, each marked as it goes. An offer
 whose channel was reviewed some other way first is closed unsent.
+
+**And YouTube's** (`yt-rising-review`): the same cards into the YouTube
+chat's topics, each to the topic of its language — a chart offer's by its
+region, a link offer's read from its payload's `defaultLanguage` when that
+is one of the two, else the English topic — each topic claiming its own,
+so a topic that refuses fails the send and nothing of the offer goes
+anywhere else.
 """
 
 import asyncio
@@ -84,10 +91,24 @@ from itgraph.bot.review import (
     first_step,
     render_card,
 )
+from itgraph.bot.yt_review import (
+    ChannelView,
+    ChartCardView,
+    LinkCardView,
+    read_channel,
+    render_chart_card,
+    render_link_card,
+)
+from itgraph.bot.yt_review import (
+    channel_link as yt_channel_link,
+)
+from itgraph.bot.yt_review import (
+    first_step as yt_first_step,
+)
 from itgraph.config import settings
 from itgraph.db import weekly as tg_weekly
 from itgraph.db.alerts import alert_evidence, digest_is_due
-from itgraph.db.models import ChannelStatus, YtVideoFormat
+from itgraph.db.models import ChannelStatus, YtRisingRanking, YtVideoFormat
 from itgraph.db.offers import (
     PendingOffer,
     card_posts,
@@ -96,6 +117,22 @@ from itgraph.db.offers import (
     mark_offer_failed,
 )
 from itgraph.db.session import Database
+from itgraph.db.yt_offers import (
+    PendingOffer as YtPendingOffer,
+)
+from itgraph.db.yt_offers import (
+    charting_video,
+)
+from itgraph.db.yt_offers import (
+    claim_offers as claim_yt_offers,
+)
+from itgraph.db.yt_offers import (
+    mark_offer_delivered as mark_yt_offer_delivered,
+)
+from itgraph.db.yt_offers import (
+    mark_offer_failed as mark_yt_offer_failed,
+)
+from itgraph.db.yt_rising import moscow_day_start
 from itgraph.db.yt_weekly import (
     PendingList,
     claim_lists,
@@ -244,6 +281,9 @@ async def deliver_once(
                 now=moment,
             )
             await _deliver_offers(
+                database, destination, sender, stats, now=moment
+            )
+            await _deliver_yt_offers(
                 database, destination, sender, stats, now=moment
             )
         async with database.session() as session:
@@ -963,6 +1003,115 @@ async def _card(
             families_before=offer.families_before,
             first_in_window=offer.first_in_window,
             posts=posts,
+        ),
+        window_days=settings.rising_window_days,
+        zone=destination.zone,
+    )
+
+
+async def _deliver_yt_offers(
+    database: Database,
+    destination: Destination,
+    sender: Sender,
+    stats: BotStats,
+    *,
+    now: datetime,
+) -> None:
+    """Send this topic's undelivered YouTube rising offers, a card each,
+    in order.
+
+    Only outside this topic's quiet hours; no alert, so neither the cap
+    nor the digest counts it. A card that fails counts an attempt and
+    ends this pass's try, so the cards after it are not sent ahead of
+    it. An offer whose channel was reviewed some other way before its
+    card went is closed unsent. Each topic claims its own offers — the
+    offer's, by its payload's language when that names one — so a topic
+    that refuses fails the send and nothing of the offer goes to any
+    other topic or chat.
+    """
+    if (
+        destination.platform is not Platform.YOUTUBE
+        or destination.route is None
+        or destination.is_quiet(now)
+    ):
+        return
+    async with database.session() as session:
+        claimed = await claim_yt_offers(session, destination.route)
+    for offer in claimed:
+        if offer.status not in OFFERABLE:
+            logger.info(
+                "YouTube rising offer %d closed unsent: its channel was "
+                "reviewed some other way",
+                offer.id,
+            )
+            async with database.session() as session:
+                await mark_yt_offer_delivered(
+                    session, offer.id, at=datetime.now(UTC)
+                )
+            continue
+        view = read_channel(offer.payload)
+        try:
+            await sender.send(
+                await _yt_card(database, offer, view, destination),
+                destination=destination,
+                preview_url=yt_channel_link(view, offer.channel_id),
+                keyboard=yt_first_step(offer.id),
+            )
+        except Exception as exc:
+            # Everything, as for Telegram's cards: one that cannot be
+            # sent waits, and the bot goes on.
+            logger.warning(
+                "could not deliver YouTube rising offer %d to %s",
+                offer.id,
+                destination.key,
+                exc_info=True,
+            )
+            async with database.session() as session:
+                await mark_yt_offer_failed(
+                    session, offer.id, error=f"{type(exc).__name__}: {exc}"
+                )
+            stats.failed += 1
+            return
+        async with database.session() as session:
+            await mark_yt_offer_delivered(
+                session, offer.id, at=datetime.now(UTC)
+            )
+        stats.offers += 1
+
+
+async def _yt_card(
+    database: Database,
+    offer: YtPendingOffer,
+    view: ChannelView,
+    destination: Destination,
+) -> str:
+    """A YouTube offer's card, whichever ranking's shape it fills. The
+    charting video of a chart offer is read from the stored reading at
+    sending, like the channel's own payload."""
+    if offer.ranking is YtRisingRanking.CHART:
+        async with database.session() as session:
+            video = await charting_video(
+                session,
+                offer.channel_id,
+                region=offer.region or "",
+                day_start=moscow_day_start(offer.offered_at),
+            )
+        return render_chart_card(
+            ChartCardView(
+                channel_id=offer.channel_id,
+                channel=view,
+                region=offer.region or "",
+                position=offer.position or 0,
+                video_id=video,
+            )
+        )
+    return render_link_card(
+        LinkCardView(
+            channel_id=offer.channel_id,
+            channel=view,
+            families=offer.families or 0,
+            families_before=offer.families_before or 0,
+            first_in_window=offer.first_in_window,
         ),
         window_days=settings.rising_window_days,
         zone=destination.zone,

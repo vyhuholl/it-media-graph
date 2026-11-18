@@ -88,6 +88,9 @@ EXPECTED = {
     "itgraph_telegram_rising_offers_computed_timestamp_seconds",
     "itgraph_telegram_rising_offers_oldest_undelivered_seconds",
     "itgraph_telegram_rising_decisions_oldest_unapplied_seconds",
+    "itgraph_youtube_rising_offers_computed_timestamp_seconds",
+    "itgraph_youtube_rising_offers_oldest_undelivered_seconds",
+    "itgraph_youtube_rising_decisions_oldest_unapplied_seconds",
 }
 
 
@@ -259,6 +262,9 @@ async def test_every_series_is_declared_on_an_empty_database(
         "itgraph_telegram_rising_offers_computed_timestamp_seconds",
         "itgraph_telegram_rising_offers_oldest_undelivered_seconds",
         "itgraph_telegram_rising_decisions_oldest_unapplied_seconds",
+        "itgraph_youtube_rising_offers_computed_timestamp_seconds",
+        "itgraph_youtube_rising_offers_oldest_undelivered_seconds",
+        "itgraph_youtube_rising_decisions_oldest_unapplied_seconds",
     ):
         assert value(read, name) == 0, name
     for platform in ("telegram", "youtube"):
@@ -1096,6 +1102,72 @@ async def test_the_rising_selection_and_its_decisions(
     assert (
         value(
             read, "itgraph_telegram_rising_decisions_oldest_unapplied_seconds"
+        )
+        == 3600
+    )
+
+
+async def test_youtube_s_rising_selection_and_its_decisions(
+    database: Database,
+) -> None:
+    """YouTube's three: the newest day computed, the oldest offer
+    waiting to be sent, the oldest decision waiting to be applied —
+    from the moments alone, as the exporter's role reads them."""
+    today = NOW.replace(hour=8)  # 11:00 in Moscow
+    yesterday = today - timedelta(days=1)
+    async with database.session() as session:
+        await session.execute(
+            text(
+                "INSERT INTO yt_channels (channel_id, discovered_via) VALUES "
+                "('UCfakeRisingMetric000001', 'telegram'), "
+                "('UCfakeRisingMetric000002', 'telegram')"
+            )
+        )
+        await session.execute(
+            text(
+                "INSERT INTO yt_rising_offer_days "
+                "(day, computed_at, size_chart, size_links) VALUES "
+                "(:yesterday_day, :yesterday, 3, 3), (:today_day, :today, 3, 3)"
+            ),
+            {
+                "yesterday_day": yesterday.date(),
+                "yesterday": yesterday,
+                "today_day": today.date(),
+                "today": today,
+            },
+        )
+        await session.execute(
+            text(
+                "INSERT INTO yt_rising_offers (day, channel_id, ranking, "
+                "discovered_via, topic, offered_at, delivered_at, "
+                "decision, decided_at) VALUES "
+                "(:day, 'UCfakeRisingMetric000001', 'link', 'telegram', 'en', "
+                ":offered, NULL, NULL, NULL), "
+                "(:day, 'UCfakeRisingMetric000002', 'link', 'telegram', 'en', "
+                ":offered, :offered, 'maybe', :decided)"
+            ),
+            {
+                "day": yesterday.date(),
+                "offered": yesterday,
+                "decided": NOW - timedelta(hours=1),
+            },
+        )
+        await session.commit()
+
+    read = await families(database)
+
+    assert (
+        value(read, "itgraph_youtube_rising_offers_computed_timestamp_seconds")
+        == today.timestamp()
+    )
+    assert (
+        value(read, "itgraph_youtube_rising_offers_oldest_undelivered_seconds")
+        == (NOW - yesterday).total_seconds()
+    )
+    assert (
+        value(
+            read,
+            "itgraph_youtube_rising_decisions_oldest_unapplied_seconds",
         )
         == 3600
     )

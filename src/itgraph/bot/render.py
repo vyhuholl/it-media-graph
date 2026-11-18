@@ -40,6 +40,7 @@ __all__ = [
     "WeeklyEntryView",
     "age_phrase",
     "digest_parts",
+    "families_phrase",
     "message_parts",
     "render_cascade",
     "render_spike",
@@ -161,6 +162,23 @@ def age_phrase(age: timedelta) -> str:
     if hours < 24:
         return f"{hours} ч {rest:02d} мин назад"
     return f"{hours // 24} дн назад"
+
+
+def families_phrase(count: int) -> str:
+    """A count of families, with the noun as Russian declines it. Public
+    because both platforms' rising cards carry the same evidence line,
+    and two declensions of one number would read as two different
+    things."""
+    tail = count % 100
+    if 11 <= tail <= 14:
+        noun = "семей"
+    elif count % 10 == 1:
+        noun = "семья"
+    elif 2 <= count % 10 <= 4:
+        noun = "семьи"
+    else:
+        noun = "семей"
+    return f"{count} {noun}"
 
 
 def _excerpt(text: str | None) -> str:

@@ -333,7 +333,8 @@ async def test_a_command_for_another_bot_is_not_answered(
 
 
 async def test_the_interactions_are_registered(database_url: str) -> None:
-    """`/status`, a press on a rising offer, a press on a retired button."""
+    """`/status`, a press on a rising offer of either platform, a press
+    on a retired button."""
     database = Database(database_url)
     try:
         dispatcher = build_dispatcher(database, ALL)
@@ -341,7 +342,7 @@ async def test_the_interactions_are_registered(database_url: str) -> None:
         await database.dispose()
 
     assert len(dispatcher.message.handlers) == 1
-    assert len(dispatcher.callback_query.handlers) == 2
+    assert len(dispatcher.callback_query.handlers) == 3
 
 
 # --- the YouTube chat -----------------------------------------------

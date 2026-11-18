@@ -387,6 +387,25 @@ __itgraph_cronjobs_always:
         resources: "{{ __itgraph_job_resources }}"
     mounts: []
     volumes: []
+  # YouTube's rising channels, a day's selection for the bot to send: read
+  # from collected data alone and asking YouTube for nothing, so it runs in
+  # every environment, into that environment's own chat — no key, no
+  # session, the configuration and the database's URL alone. Counts only in
+  # its output, never `--preview`.
+  - name: itgraph-yt-offer
+    schedule: "{{ itgraph_yt_offer_schedule }}"
+    # Thirteen hours, as Telegram's: a missed run starts when the host is
+    # back, the same day.
+    starting_deadline: 46800
+    active_deadline: 1800
+    labels: "{{ __itgraph_may_reach_database }}"
+    containers:
+      - name: itgraph
+        args: [yt, offer]
+        env_from: ["{{ __itgraph_from_config }}", "{{ __itgraph_from_database }}"]
+        resources: "{{ __itgraph_job_resources }}"
+    mounts: []
+    volumes: []
   - name: itgraph-backup
     schedule: "{{ itgraph_backup_schedule }}"
     starting_deadline: 10800

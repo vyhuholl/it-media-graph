@@ -893,3 +893,23 @@ def test_a_day_without_room_for_an_offer_is_refused(
     env.setenv("RISING_OFFERS_PER_DAY", "0")
     with pytest.raises(ValidationError, match="rising_offers_per_day"):
         build()
+
+
+def test_the_youtube_selection_sizes(env: pytest.MonkeyPatch) -> None:
+    assert build().youtube_rising_chart_offers_per_region == 3
+    assert build().youtube_rising_link_offers_per_day == 3
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("YOUTUBE_RISING_CHART_OFFERS_PER_REGION", "0"),
+        ("YOUTUBE_RISING_LINK_OFFERS_PER_DAY", "0"),
+    ],
+)
+def test_a_youtube_day_without_room_for_an_offer_is_refused(
+    env: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    env.setenv(name, value)
+    with pytest.raises(ValidationError, match=name.lower()):
+        build()

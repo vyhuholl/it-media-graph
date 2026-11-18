@@ -285,6 +285,8 @@ SCHEDULES = {
     "itgraph-weekly": ("0 10 * * 1", 518400, 1800),
     # Telegram's rising channels, daily; a missed run starts the same day.
     "itgraph-offer": ("0 11 * * *", 46800, 1800),
+    # YouTube's, the same minute and the same thirteen hours.
+    "itgraph-yt-offer": ("0 11 * * *", 46800, 1800),
     # Hourly, for a new seed; a late start gives way to the next hour's.
     "itgraph-yt-backfill": ("30 * * * *", 3300, 3000),
 }
@@ -420,6 +422,7 @@ SECRET_KEYS = {
         ("CronJob", "itgraph-yt-weekly", set()),
         ("CronJob", "itgraph-weekly", set()),
         ("CronJob", "itgraph-offer", set()),
+        ("CronJob", "itgraph-yt-offer", set()),
         ("CronJob", "itgraph-backup", {"B2_APPLICATION_KEY"}),
         ("CronJob", "itgraph-yt-watch", {"YOUTUBE_API_KEY"}),
         ("CronJob", "itgraph-yt-refresh", {"YOUTUBE_API_KEY"}),
@@ -491,6 +494,7 @@ def test_a_key_absent_means_no_youtube_job_and_no_key(
         "itgraph-yt-weekly",
         "itgraph-weekly",
         "itgraph-offer",
+        "itgraph-yt-offer",
     }
     assert not [
         s
@@ -553,6 +557,32 @@ def test_telegram_s_rising_selection_runs_in_every_environment(
 
 
 @pytest.mark.parametrize("environment", SETS)
+def test_youtube_s_rising_selection_runs_in_every_environment(
+    rendered: dict[str, dict[str, Objects]], environment: str
+) -> None:
+    """Collecting or not, key or not: it reads collected data alone and
+    asks YouTube for nothing, so a test environment offers its restored
+    copy into its own chat."""
+    objects = everything(rendered[environment])
+    job = named(objects, "CronJob", "itgraph-yt-offer")
+    spec = job["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+    [container] = spec["containers"]
+    assert container["args"] == ["yt", "offer"]
+    assert job["spec"]["schedule"] == "0 11 * * *"
+    assert job["spec"]["timeZone"] == "Europe/Moscow"
+    keys = keys_of(objects, "CronJob", "itgraph-yt-offer")
+    assert keys & SECRET_KEYS == set()
+    assert "DATABASE_URL" in keys
+    assert not [m for m in spec.get("volumes", []) if "session" in m["name"]]
+    labels = job["spec"]["jobTemplate"]["spec"]["template"]["metadata"][
+        "labels"
+    ]
+    assert {k for k in labels if k.startswith("itgraph/")} == {
+        "itgraph/database"
+    }
+
+
+@pytest.mark.parametrize("environment", SETS)
 def test_no_job_previews_the_selection(
     rendered: dict[str, dict[str, Objects]], environment: str
 ) -> None:
@@ -589,6 +619,7 @@ REACH = {
     "itgraph-yt-weekly": {"itgraph/database"},
     "itgraph-weekly": {"itgraph/database"},
     "itgraph-offer": {"itgraph/database"},
+    "itgraph-yt-offer": {"itgraph/database"},
     "itgraph-backup": {"itgraph/database", "itgraph/internet"},
     "itgraph-yt-watch": {"itgraph/database", "itgraph/internet"},
     "itgraph-yt-refresh": {"itgraph/database", "itgraph/internet"},

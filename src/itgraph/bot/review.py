@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from itgraph.bot.render import MONTHS
+from itgraph.bot.render import MONTHS, families_phrase
 from itgraph.db.models import ChannelKind, ChannelStatus, RejectReason
 from itgraph.db.offers import SeedPost
 
@@ -241,20 +241,6 @@ def channel_link(username: str) -> str:
     return f"https://t.me/{username}"
 
 
-def _families(count: int) -> str:
-    """A count of families, with the noun as Russian declines it."""
-    tail = count % 100
-    if 11 <= tail <= 14:
-        noun = "семей"
-    elif count % 10 == 1:
-        noun = "семья"
-    elif 2 <= count % 10 <= 4:
-        noun = "семьи"
-    else:
-        noun = "семей"
-    return f"{count} {noun}"
-
-
 def _seed(post: SeedPost) -> str:
     if post.username:
         name = _escape(f"@{post.username}")
@@ -274,7 +260,9 @@ def render_card(view: CardView, *, window_days: int, zone: str) -> str:
         if view.families_before
         else "раньше ни одной"
     )
-    evidence = f"{_families(view.families)} за {window_days} дней, {before}"
+    evidence = (
+        f"{families_phrase(view.families)} за {window_days} дней, {before}"
+    )
     if view.first_in_window is not None:
         first = view.first_in_window.astimezone(ZoneInfo(zone))
         evidence += f" · впервые в окне {first.day} {MONTHS[first.month - 1]}"
