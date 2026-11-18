@@ -686,9 +686,16 @@ class Settings(BaseSettings):
     # search pool is this less the same margin: 90 by default.
     youtube_search_daily_quota: int = Field(default=100, ge=1)
     # How old a channel's payload may grow before the refresh asks for it
-    # again. The same age decides when a seed's featured list and a past
-    # upload are read again.
+    # again. The same age decides when a past upload is read again.
     youtube_refresh_after_days: int = Field(default=25, ge=1)
+    # How old a seed's newest featured reading may grow before its
+    # sections are read again — their own age, shorter than the
+    # refresh's: an appearance is dated by its reading, and a fortnight's
+    # rising window wants a channel that appears to be caught within a
+    # week of the change. ~130 units a day from the idle general pool.
+    # The reading still counts as evidence for
+    # `youtube_answers_fresh_days`, which is longer.
+    youtube_sections_after_days: int = Field(default=7, ge=1)
     # How long an answer from YouTube that decides what to ask next
     # counts as current: a lookup of a linked name, a seed's featured
     # list, a search run and its results. Past it the answer is no longer

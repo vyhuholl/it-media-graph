@@ -1,8 +1,8 @@
-"""Featured lists: the request, the reading, and where the answer lives.
+"""Featured lists: the request, the readings, and where the answers live.
 
 The request asks for the channel ids each section lists and nothing
-else; any section's ids are featured, whatever its type; and a list is
-replaced by every read.
+else; any section's ids are featured, whatever its type; and every read
+appends a reading, so the two newest of a seed tell what appeared.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -197,37 +197,69 @@ async def test_a_featured_list_holds_channel_ids_only(
     assert row.payload == sections_response([channel_id(2)])
 
 
-async def test_a_newer_list_replaces_the_old_one(database: Database) -> None:
+async def test_a_second_reading_is_stored_beside_the_first(
+    database: Database,
+) -> None:
+    """Every fetch appends; nothing is replaced, changed or removed."""
     await _channels(database, {1: ChannelStatus.SEED})
-    await _store(database, 1, [channel_id(2)], at=NOW - timedelta(days=26))
+    older = sections_response([channel_id(2)])
+    await _store(database, 1, [channel_id(2)], at=NOW - timedelta(days=7))
+    newer = sections_response([channel_id(3)])
     await _store(database, 1, [channel_id(3)])
 
     async with database.session() as session:
-        rows = list(await session.scalars(select(YtRawChannelSections)))
-    assert len(rows) == 1
-    assert featured_ids(rows[0].payload) == [channel_id(3)]
-    assert rows[0].fetched_at == NOW
+        rows = await session.scalars(
+            select(YtRawChannelSections).order_by(
+                YtRawChannelSections.fetched_at
+            )
+        )
+        rows_list = list(rows)
+    assert len(rows_list) == 2
+    assert rows_list[0].payload == older
+    assert rows_list[0].fetched_at == NOW - timedelta(days=7)
+    assert rows_list[1].payload == newer
+    assert rows_list[1].fetched_at == NOW
 
 
-async def test_seeds_due_are_those_without_a_fresh_list(
+async def test_evidence_reads_the_newest_in_date_reading(
     database: Database,
 ) -> None:
+    await _channels(database, {1: ChannelStatus.SEED})
+    await _store(database, 1, [channel_id(2)], at=NOW - timedelta(days=7))
+    await _store(database, 1, [channel_id(3)], at=NOW - timedelta(days=1))
+
+    async with database.session() as session:
+        lists = await featured_lists(session)
+    assert set(lists) == {channel_id(1)}
+    assert featured_ids(lists[channel_id(1)]) == [channel_id(3)]
+
+
+async def test_seeds_due_are_those_without_a_fresh_reading(
+    database: Database,
+) -> None:
+    """Due is decided by the newest reading of any age, not the newest
+    in-date one: an out-of-date list is still a list, and only its age
+    makes it due again."""
     await _channels(
         database,
         {
             1: ChannelStatus.SEED,
             2: ChannelStatus.SEED,
             3: ChannelStatus.SEED,
-            4: ChannelStatus.CANDIDATE,
-            5: ChannelStatus.MAYBE,
-            6: ChannelStatus.REJECTED,
+            4: ChannelStatus.SEED,
+            5: ChannelStatus.CANDIDATE,
+            6: ChannelStatus.MAYBE,
+            7: ChannelStatus.REJECTED,
         },
     )
     await _store(database, 2, [], at=NOW - timedelta(days=1))
     await _store(database, 3, [], at=NOW - timedelta(days=26))
+    # A seed whose newest reading is fresh, whatever an older one says.
+    await _store(database, 4, [], at=NOW - timedelta(days=40))
+    await _store(database, 4, [], at=NOW - timedelta(days=1))
 
     async with database.session() as session:
-        due = await sections_due(session, older_than=NOW - timedelta(days=25))
+        due = await sections_due(session, older_than=NOW - timedelta(days=7))
     # Never read, and read too long ago; other statuses never.
     assert due == [channel_id(1), channel_id(3)]
 

@@ -11,7 +11,7 @@ Rules for every task:
 
 ## 1. Schema
 
-- [ ] 1.1 One revision (design.md, Decisions 2 to 4):
+- [x] 1.1 One revision (design.md, Decisions 2 to 4):
   - `yt_raw_channel_sections` to the composite key `(channel_id, fetched_at)`, the rows present kept as they are;
   - the table `yt_raw_charts` (`region`, `fetched_at`, `payload`), keyed by both, the payload the trimmed answer in chart order;
   - the table `yt_lookup_runs` (`id`, `started_at`, `finished_at`, counts, outcome), the pattern of `yt_refresh_runs`;
@@ -21,7 +21,7 @@ Rules for every task:
 
 ## 2. Featured readings append
 
-- [ ] 2.1 `config.py` gains `youtube_sections_after_days` (7, at least 1). `db/yt_sections.py`: `store_sections` inserts and never updates; `featured_lists` reads each seed's newest in-date reading; `sections_due` compares against the newest of any age. `yt/refresh.py` passes the sections their own age, not the channels'. Verify against the modified requirements of `youtube-featured-channels`: a second reading is stored beside the first; a list younger than the setting costs nothing; evidence reads the newest in-date reading; the day's section count in the refresh summary still reads true.
+- [x] 2.1 `config.py` gains `youtube_sections_after_days` (7, at least 1). `db/yt_sections.py`: `store_sections` inserts and never updates; `featured_lists` reads each seed's newest in-date reading; `sections_due` compares against the newest of any age. `yt/refresh.py` passes the sections their own age, not the channels'. Verify against the modified requirements of `youtube-featured-channels`: a second reading is stored beside the first; a list younger than the setting costs nothing; evidence reads the newest in-date reading; the day's section count in the refresh summary still reads true.
 - [ ] 2.2 The first-reading baseline: a seed with one reading lists no appearance, and its ids still count as the standing queue reads them. Verify in the ranking's tests (group 5) and in `yt featured-candidates`' existing tests, which stay green.
 
 ## 3. The chart reading

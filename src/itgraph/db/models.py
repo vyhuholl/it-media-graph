@@ -82,11 +82,13 @@ __all__ = [
     "YtDiscoverySource",
     "YtLang",
     "YtLookupKind",
+    "YtLookupRun",
     "YtPassOutcome",
     "YtQuotaDay",
     "YtQuotaExhausted",
     "YtQuotaPool",
     "YtRawChannel",
+    "YtRawChart",
     "YtRawLookup",
     "YtRawVideo",
     "YtRawVideoStat",
@@ -2296,19 +2298,21 @@ class YtRawLookup(Base):
 
 
 class YtRawChannelSections(Base):
-    """A seed's channel sections as YouTube last returned them, and when.
+    """One reading of a seed's channel sections, and when it was taken.
 
     API data — ``channelSections.list`` trimmed to each section's listed
     channel ids, the section's type deliberately not read: the probe of
     2026-11-01 got lowercase and undocumented types back, and the
     reference says ``contentDetails.channels`` is the featured channels
-    whatever the type. Replaced by every read. A seed with no sections is
-    stored with an empty ``items``, so it is not asked again before the
-    refresh age.
+    whatever the type. Every fetch appends a reading and nothing is
+    replaced or removed, so the history is the raw layer's and an
+    appearance can be read from any two consecutive readings however much
+    later the second comes. A seed with no sections is stored with an
+    empty ``items``, so it is not asked again before the sections age.
 
     Kept when its channel stops being a seed — nothing reads it then.
-    What is worked out from it — which seeds feature which channel — is
-    never stored.
+    What is worked out from it — which seeds feature which channel, and
+    when a channel appeared — is never stored.
     """
 
     __tablename__ = "yt_raw_channel_sections"
@@ -2321,10 +2325,41 @@ class YtRawChannelSections(Base):
         primary_key=True,
     )
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
-    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True
+    )
 
     def __repr__(self) -> str:
         return f"YtRawChannelSections(channel_id={self.channel_id!r})"
+
+
+class YtRawChart(Base):
+    """One reading of a region's chart, and when it was taken.
+
+    The ``videos.list`` ``chart=mostPopular`` answer, trimmed by
+    ``fields`` to each video's id and its channel's id, in the order
+    YouTube ranked them — the position is the order, and the page token
+    is spent, not stored. Appended by every read and never rewritten,
+    like a statistics reading: the day's chart is whichever reading the
+    day holds, and an older one is history, not a lie.
+
+    No foreign key and no channel data: the chart names channels the
+    inventory mostly does not hold, and what is worked out from the
+    readings — which of them are rising — is never stored.
+    """
+
+    __tablename__ = "yt_raw_charts"
+
+    region: Mapped[str] = mapped_column(Text, primary_key=True)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True
+    )
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+
+    def __repr__(self) -> str:
+        return (
+            f"YtRawChart(region={self.region!r}, fetched_at={self.fetched_at})"
+        )
 
 
 class YtAffiliationRun(Base):
@@ -2607,6 +2642,47 @@ class YtRefreshRun(Base):
     def __repr__(self) -> str:
         return (
             f"YtRefreshRun(started_at={self.started_at}, "
+            f"outcome={self.outcome.value!r})"
+        )
+
+
+class YtLookupRun(Base):
+    """What one run of `yt rising-lookups` did, and how it ended.
+
+    ``YtRefreshRun``'s shape for the scheduled lookup pass: a run is a
+    daily job, its two passes can each stop at their own bound without
+    failing anything a cluster would notice, and this row is what says
+    whether the run happened at all. Written once, at the run's end, so a
+    process killed part way leaves no row; an empty run — nothing to look
+    up — is recorded like any other, which is what keeps quiet and broken
+    distinguishable. Counts of its own work and its error, no API data.
+    """
+
+    __tablename__ = "yt_lookup_runs"
+    __table_args__ = (Index("ix_yt_lookup_runs_started_at", "started_at"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    outcome: Mapped[YtPassOutcome] = mapped_column(
+        _pg_enum(YtPassOutcome, "yt_pass_outcome")
+    )
+    # Each pass's spend, and what it left: how many requests it made and
+    # how many names still awaited a lookup after it. A pass that could
+    # not start records its zeros.
+    tg_requests: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    tg_awaiting: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    mention_requests: Mapped[int] = mapped_column(
+        Integer, server_default=text("0")
+    )
+    mention_awaiting: Mapped[int] = mapped_column(
+        Integer, server_default=text("0")
+    )
+    error: Mapped[str | None] = mapped_column(Text)
+
+    def __repr__(self) -> str:
+        return (
+            f"YtLookupRun(started_at={self.started_at}, "
             f"outcome={self.outcome.value!r})"
         )
 

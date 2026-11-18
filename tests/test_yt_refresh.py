@@ -545,9 +545,37 @@ async def _seeds(
 
 
 async def _lists(database: Database) -> dict[str, list[str]]:
+    """Each seed's newest reading, by id — the shape `featured_lists`
+    reads, now that every fetch appends."""
     async with database.session() as session:
-        rows = await session.scalars(select(YtRawChannelSections))
-        return {row.channel_id: featured_ids(row.payload) for row in rows}
+        rows = await session.execute(
+            select(
+                YtRawChannelSections.channel_id,
+                YtRawChannelSections.payload,
+            )
+            .distinct(YtRawChannelSections.channel_id)
+            .order_by(
+                YtRawChannelSections.channel_id,
+                YtRawChannelSections.fetched_at.desc(),
+            )
+        )
+        return {
+            channel: featured_ids(payload)
+            for channel, payload in rows.tuples()
+        }
+
+
+async def _section_readings_of(
+    database: Database, number: int
+) -> list[datetime]:
+    """Every featured reading a seed holds, oldest first."""
+    async with database.session() as session:
+        rows = await session.scalars(
+            select(YtRawChannelSections.fetched_at)
+            .where(YtRawChannelSections.channel_id == channel_id(number))
+            .order_by(YtRawChannelSections.fetched_at)
+        )
+        return list(rows)
 
 
 async def test_a_seed_without_a_list_has_its_sections_read(
@@ -612,6 +640,7 @@ async def test_a_fresh_list_costs_nothing(database: Database) -> None:
 
 
 async def test_a_stale_list_is_read_again(database: Database) -> None:
+    """A reading older than the sections age is appended to, not replaced."""
     await _seeds(database, [1])
     async with database.session() as session:
         await store_sections(
@@ -626,9 +655,42 @@ async def test_a_stale_list_is_read_again(database: Database) -> None:
     )
 
     async with client(database, fake) as yt:
-        await refresh_channels(yt, database)
+        summary = await refresh_channels(yt, database)
 
+    assert summary.sections_read == 1
     assert await _lists(database) == {channel_id(1): [channel_id(6)]}
+    readings = await _section_readings_of(database, 1)
+    assert len(readings) == 2
+    assert readings == [STALE, readings[1]]  # the older one unchanged
+    assert readings[1] > STALE
+
+
+async def test_a_list_younger_than_the_sections_age_costs_nothing(
+    database: Database,
+) -> None:
+    """The sections have their own age: a week-old reading is fresh for
+    them though stale for a channel's payload."""
+    await _seeds(database, [1])
+    async with database.session() as session:
+        await store_sections(
+            session,
+            channel_id(1),
+            sections_response([channel_id(5)]),
+            fetched_at=datetime.now(UTC) - timedelta(days=8),
+        )
+        await store_sections(
+            session,
+            channel_id(1),
+            sections_response([channel_id(5)]),
+            fetched_at=datetime.now(UTC) - timedelta(days=6),
+        )
+    fake = FakeYouTube(channel_resource(1))
+
+    async with client(database, fake) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert summary.sections_due == 0
+    assert fake.calls("channelSections") == []
 
 
 @pytest.mark.parametrize(

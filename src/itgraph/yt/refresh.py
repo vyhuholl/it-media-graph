@@ -7,9 +7,10 @@ channel YouTube no longer returns is marked gone; one that comes back is
 restored.
 
 Then every seed's featured list — the channel ids its channel sections
-list — is read again once it is absent or older than the refresh age, a
-unit a seed. After the channels, so a seed just found gone is not asked
-about; before past uploads, which are the larger bill.
+list — is read again once its newest reading is absent or older than the
+sections age of its own, a unit a seed, every read appending a reading.
+After the channels, so a seed just found gone is not asked about; before
+past uploads, which are the larger bill.
 
 Each call's results are committed before the next call is made, so a
 spent quota or a failure part way keeps everything refreshed before it,
@@ -144,6 +145,9 @@ async def refresh_channels(
     """
     moment = now or datetime.now(UTC)
     older_than = moment - timedelta(days=settings.youtube_refresh_after_days)
+    sections_before = moment - timedelta(
+        days=settings.youtube_sections_after_days
+    )
     async with database.session() as session:
         due = await due_for_refresh(session, older_than=older_than)
 
@@ -179,7 +183,7 @@ async def refresh_channels(
             logger.info("YouTube returns %s again", channel_id)
 
     if summary.stopped is None:
-        await _refresh_sections(youtube, database, summary, older_than)
+        await _refresh_sections(youtube, database, summary, sections_before)
     if summary.stopped is None and settings.youtube_backfill_enabled:
         await _refresh_past_uploads(
             youtube, database, summary, older_than, moment
@@ -238,7 +242,11 @@ async def _refresh_sections(
     summary: RefreshSummary,
     older_than: datetime,
 ) -> None:
-    """Read again every seed's featured list that is absent or stale."""
+    """Read again every seed whose newest featured reading is stale.
+
+    ``older_than`` is the sections age, not the channels' — a list is
+    re-read on its own shorter cadence, and each read appends a reading.
+    """
     async with database.session() as session:
         due = await sections_due(session, older_than=older_than)
     summary.sections_due = len(due)
