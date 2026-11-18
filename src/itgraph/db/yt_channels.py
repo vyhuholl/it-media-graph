@@ -19,7 +19,10 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from itgraph.db.models import (
+    AffiliationDecision,
+    CandidateOrigin,
     ChannelStatus,
+    YtAffiliationCandidate,
     YtChannel,
     YtChannelKind,
     YtDiscoverySource,
@@ -27,7 +30,9 @@ from itgraph.db.models import (
     YtRawChannel,
     YtRejectReason,
 )
+from itgraph.db.yt_affiliation import family_keys, family_of
 from itgraph.db.yt_backfill import forget_walks
+from itgraph.yt.affiliation.signals import Pair, ordered
 from itgraph.yt_entries import CHANNEL_ID as CHANNEL_ID_SHAPE
 from itgraph.yt_review import (
     Decision,
@@ -39,6 +44,7 @@ from itgraph.yt_review import (
 __all__ = [
     "AmbiguousHandleError",
     "ApplySummary",
+    "ConfirmedGroup",
     "InventorySummary",
     "Listed",
     "Payload",
@@ -46,6 +52,7 @@ __all__ = [
     "YtChannelLookupError",
     "YtChannelNotFoundError",
     "apply_review",
+    "confirm_affiliation",
     "create_channels",
     "current_review",
     "due_for_refresh",
@@ -57,8 +64,11 @@ __all__ = [
     "list_channels",
     "mark_channel",
     "mark_gone",
+    "reject_affiliation",
+    "reject_token",
     "store_payloads",
     "stored_handle",
+    "withdraw_affiliation",
 ]
 
 Payload = Mapping[str, object]
@@ -561,4 +571,218 @@ async def inventory_summary(session: AsyncSession) -> InventorySummary:
         current=row[0],
         unfetched=row[1],
         gone=row[2],
+    )
+
+
+# --- affiliation review -----------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ConfirmedGroup:
+    """What one confirmation statement recorded, and the family it made.
+
+    The family can be larger than what was named, when a pair bridged
+    two of them; the counts say so without the operator having to check.
+    """
+
+    pairs: int
+    family: str
+    channels: int
+
+
+async def confirm_affiliation(
+    session: AsyncSession,
+    channels: Sequence[str],
+    *,
+    note: str | None = None,
+) -> ConfirmedGroup:
+    """Record that these channels share an owner.
+
+    ``db/channels.py``'s contract, unchanged: two or more, every pair
+    among them (not a chain — withdrawing a chain's middle link would
+    split a family the operator asserted as whole), no canonical
+    channel, and merging is what confirming a bridging pair means.
+
+    Channels are named by ``UC…`` id or by a handle stored data carries;
+    :func:`find_channel` resolves them, and an ambiguous handle or an
+    unknown name fails writing nothing.
+    """
+    resolved = [await find_channel(session, ref) for ref in channels]
+    if len(resolved) < 2:
+        raise ValueError("name at least two channels")
+
+    ids = [channel.channel_id for channel in resolved]
+    if len(set(ids)) != len(ids):
+        raise ValueError(
+            "a channel cannot be affiliated with itself; "
+            "the same channel is named more than once"
+        )
+
+    pairs = [
+        ordered(first, second)
+        for index, first in enumerate(ids)
+        for second in ids[index + 1 :]
+    ]
+    for pair in pairs:
+        await _record_decision(
+            session,
+            pair=pair,
+            decision=AffiliationDecision.CONFIRMED,
+            note=note,
+        )
+
+    # Read the family back rather than predicting it: a bridging pair
+    # merges whole families, so the group the operator named can be
+    # smaller than the family they just created, and the difference is
+    # the thing worth showing them.
+    await session.flush()
+    keys = await family_keys(session)
+    key = family_of(keys, ids[0])
+    return ConfirmedGroup(
+        pairs=len(pairs),
+        family=key,
+        channels=sum(1 for value in keys.values() if value == key) or 1,
+    )
+
+
+async def reject_affiliation(
+    session: AsyncSession,
+    first: str,
+    second: str,
+    *,
+    note: str | None = None,
+) -> Pair:
+    """Record that two channels do not share an owner.
+
+    A statement about a pair, which is why it takes exactly two. The row
+    is what stops the same pair being proposed at every subsequent run,
+    which is the only reason a rejection is stored — so it is kept and
+    never deleted.
+    """
+    left = await find_channel(session, first)
+    right = await find_channel(session, second)
+    if left.channel_id == right.channel_id:
+        raise ValueError("a channel cannot be affiliated with itself")
+
+    pair = ordered(left.channel_id, right.channel_id)
+    await _record_decision(
+        session, pair=pair, decision=AffiliationDecision.REJECTED, note=note
+    )
+    return pair
+
+
+async def reject_token(
+    session: AsyncSession,
+    token: str,
+    *,
+    note: str | None = None,
+) -> int:
+    """Reject every pending pair one corroborated token proposed.
+
+    A noisy group costs one review instead of one per pair: a name
+    token corroborated by cross-links (`david`, on the corpus) proposes
+    a block of pairs of which most are real and a few are strangers.
+
+    Pairs already decided are untouched — a rejection never rewrites a
+    decision, in either direction. Pairs a later run proposes between
+    the token's carriers and a new one are new questions and get
+    proposed; the rejection stays pair-scoped, as every rejection is.
+
+    Returns how many pairs were rejected, because that count is the
+    whole point of the command: it is what one statement saved. Counted
+    before the update rather than off its row count: this is an
+    operator's command, nothing else writes between the two, and the
+    typed result of an ``update`` carries no count to read anyway.
+    """
+    count = await session.scalar(
+        select(func.count())
+        .select_from(YtAffiliationCandidate)
+        .where(
+            YtAffiliationCandidate.decision == AffiliationDecision.PENDING,
+            YtAffiliationCandidate.corroborated_token == token,
+        )
+    )
+    if not count:
+        return 0
+    await session.execute(
+        update(YtAffiliationCandidate)
+        .where(
+            YtAffiliationCandidate.decision == AffiliationDecision.PENDING,
+            YtAffiliationCandidate.corroborated_token == token,
+        )
+        .values(
+            decision=AffiliationDecision.REJECTED,
+            decided_at=datetime.now(UTC),
+            decision_note=note if note is not None else f"token '{token}'",
+        )
+    )
+    return int(count)
+
+
+async def withdraw_affiliation(
+    session: AsyncSession, first: str, second: str
+) -> Pair:
+    """Undo a decision: the pair goes back to awaiting review.
+
+    Nothing else happens, and nothing else needs to. The family is the
+    connected components of the confirmed pairs, so removing one either
+    changes nothing — because another chain still connects the two — or
+    splits the family in exactly the place the withdrawn pair was
+    holding together.
+    """
+    left = await find_channel(session, first)
+    right = await find_channel(session, second)
+    pair = ordered(left.channel_id, right.channel_id)
+
+    await session.execute(
+        update(YtAffiliationCandidate)
+        .where(
+            YtAffiliationCandidate.channel_a == pair[0],
+            YtAffiliationCandidate.channel_b == pair[1],
+        )
+        .values(
+            decision=AffiliationDecision.PENDING,
+            decided_at=None,
+            decision_note=None,
+        )
+    )
+    return pair
+
+
+async def _record_decision(
+    session: AsyncSession,
+    *,
+    pair: Pair,
+    decision: AffiliationDecision,
+    note: str | None,
+) -> None:
+    """Write the review outcome onto the candidate, creating it if new.
+
+    A pair no signal ever proposed is still recordable — the operator
+    may simply know two channels share an owner. Such a row is marked as
+    having come from the operator rather than from a signal, so "how
+    much did detection actually catch" stays answerable.
+    """
+    values = {
+        "channel_a": pair[0],
+        "channel_b": pair[1],
+        "score": 0.0,
+        "origin": CandidateOrigin.OPERATOR,
+        "decision": decision,
+        "decided_at": datetime.now(UTC),
+        "decision_note": note,
+    }
+    statement = insert(YtAffiliationCandidate).values([values])
+    await session.execute(
+        statement.on_conflict_do_update(
+            index_elements=[
+                YtAffiliationCandidate.channel_a,
+                YtAffiliationCandidate.channel_b,
+            ],
+            set_={
+                "decision": statement.excluded.decision,
+                "decided_at": statement.excluded.decided_at,
+                "decision_note": statement.excluded.decision_note,
+            },
+        )
     )

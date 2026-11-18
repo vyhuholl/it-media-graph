@@ -57,12 +57,17 @@ logger = logging.getLogger(__name__)
 # because losing the cursors means walking every channel's history again
 # — the one operation this project treats as expensive. The YouTube
 # search queries are the operator's words too, and which were tried is
-# what steers the next round of candidates.
+# what steers the next round of candidates. The affiliation candidates
+# are the family review itself — every confirm and reject — on both
+# platforms; today only the weekly full dump carries Telegram's, which
+# this closes while the list is open.
 INVENTORY_TABLES = (
     "tg_channels",
     "tg_backfill_state",
+    "tg_affiliation_candidates",
     "yt_channels",
     "yt_search_queries",
+    "yt_affiliation_candidates",
 )
 
 # UTC, and said so in the name: a dump taken at 13:08 local is stamped

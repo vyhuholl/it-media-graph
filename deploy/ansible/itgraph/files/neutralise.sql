@@ -18,6 +18,7 @@ UPDATE tg_channels SET reject_note = NULL WHERE reject_note IS NOT NULL;
 UPDATE yt_channels SET kind_note = NULL WHERE kind_note IS NOT NULL;
 UPDATE yt_channels SET reject_note = NULL WHERE reject_note IS NOT NULL;
 UPDATE tg_affiliation_candidates SET decision_note = NULL WHERE decision_note IS NOT NULL;
+UPDATE yt_affiliation_candidates SET decision_note = NULL WHERE decision_note IS NOT NULL;
 
 -- Handles, many of them people's. Only `resolve` reads them, and it cannot run here.
 DELETE FROM tg_pending_mentions WHERE true;

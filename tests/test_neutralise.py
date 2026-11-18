@@ -205,9 +205,18 @@ async def seed(connection: Any) -> None:
     )
     # A weekly list half sent: its first part went, its second did not.
     await connection.execute(
-        "INSERT INTO yt_channels (channel_id, status, kind, lang, "
-        "discovered_via) "
+        f"INSERT INTO yt_channels (channel_id, status, kind, lang, "
+        f"discovered_via) "
         f"VALUES ('{FAKE_YT_OTHER}', 'seed', 'personal', 'en', 'manual')"
+    )
+    # A YouTube affiliation decision with its note, mirroring the
+    # Telegram pair above.
+    await connection.execute(
+        f"INSERT INTO yt_affiliation_candidates "
+        f"(channel_a, channel_b, score, decision, decided_at, decision_note) "
+        f"VALUES ('{FAKE_YT}', '{FAKE_YT_OTHER}', 0.5, 'confirmed', $1, "
+        f"'a fake note on a YouTube pair')",
+        NOW,
     )
     list_id = await connection.fetchval(
         "INSERT INTO yt_weekly_lists (week_start, route, computed_at, "
@@ -318,6 +327,7 @@ async def test_a_seeded_database_fails_the_read_back(
         "notes on channels",
         "notes on YouTube channels",
         "notes on affiliation decisions",
+        "notes on YouTube affiliation decisions",
         "pending mentions",
         "undelivered alerts",
         "undelivered YouTube alerts",
@@ -362,6 +372,18 @@ async def test_neutralising_passes_the_read_back_and_keeps_what_it_should(
         assert (
             await connection.fetchval(
                 "SELECT decision_note FROM tg_affiliation_candidates"
+            )
+            is None
+        )
+        # And so does the YouTube one, the same way.
+        assert (
+            await connection.fetchval(
+                "SELECT decision FROM yt_affiliation_candidates"
+            )
+        ) == "confirmed"
+        assert (
+            await connection.fetchval(
+                "SELECT decision_note FROM yt_affiliation_candidates"
             )
             is None
         )

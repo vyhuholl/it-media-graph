@@ -395,6 +395,19 @@ class AboutDirection(enum.StrEnum):
     MUTUAL = "mutual"
 
 
+class YtRefDirection(enum.StrEnum):
+    """Which way a description reference was found, between two channels.
+
+    The same anchor rule ``AboutDirection`` states for Telegram, against
+    the pair's lexicographic order: ``A_TO_B`` means the channel in
+    ``channel_a`` named the one in ``channel_b``.
+    """
+
+    A_TO_B = "a_to_b"
+    B_TO_A = "b_to_a"
+    MUTUAL = "mutual"
+
+
 class YtChannelKind(enum.StrEnum):
     """What a YouTube channel *is* — Telegram's rule, YouTube's values.
 
@@ -2312,6 +2325,125 @@ class YtRawChannelSections(Base):
 
     def __repr__(self) -> str:
         return f"YtRawChannelSections(channel_id={self.channel_id!r})"
+
+
+class YtAffiliationRun(Base):
+    """One YouTube affiliation detection run, and the parameters it used.
+
+    ``tg_affiliation_runs`' shape, minus the columns of the two signals
+    the YouTube corpus cannot support (see ``yt/affiliation/signals.py``
+    for the measurement) and plus ``with_payload``: a YouTube channel's
+    title and description exist only while its payload does, so the
+    denominator of every coverage number is the payloads, not the
+    inventory.
+    """
+
+    __tablename__ = "yt_affiliation_runs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    ran_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    # Thresholds, in the order the signals are described in the spec.
+    min_token_length: Mapped[int] = mapped_column(Integer)
+    max_token_channels: Mapped[int] = mapped_column(Integer)
+    max_corroborated_channels: Mapped[int] = mapped_column(Integer)
+
+    weight_reference: Mapped[float] = mapped_column(Float)
+    weight_group: Mapped[float] = mapped_column(Float)
+    weight_token: Mapped[float] = mapped_column(Float)
+
+    # What the run could see. `refs_outside_inventory` counts handles and
+    # channel ids parsed out of descriptions that name no channel the
+    # inventory holds — discovery leads, not failures.
+    channels_scored: Mapped[int] = mapped_column(Integer)
+    with_payload: Mapped[int] = mapped_column(Integer)
+    with_description: Mapped[int] = mapped_column(Integer)
+    refs_outside_inventory: Mapped[int] = mapped_column(Integer)
+
+    def __repr__(self) -> str:
+        return f"YtAffiliationRun(id={self.id}, ran_at={self.ran_at!r})"
+
+
+class YtAffiliationCandidate(Base):
+    """Two channels that may share an owner, and why anyone thinks so.
+
+    ``tg_affiliation_candidates`' design carried over whole: a proposal
+    never a conclusion, the confirmed rows the sole record of who shares
+    an owner, the family read through the ``yt_channel_families`` view,
+    and the pair unordered and stored once — lexicographically ordered,
+    because YouTube channel ids are text. Evidence is one nullable column
+    per signal; what YouTube said stays in ``yt_raw_*`` and is joined at
+    read time, so no title, handle or description text is copied here.
+
+    Three signals, three evidence groups: which way a description
+    reference was found, the rarity-capped shared title token, and the
+    token a reference between carriers corroborated.
+    """
+
+    __tablename__ = "yt_affiliation_candidates"
+    __table_args__ = (
+        # The unordered pair, made canonical.
+        CheckConstraint("channel_a < channel_b", name="pair_is_ordered"),
+        # A decision is exactly as timestamped as it is made.
+        CheckConstraint(
+            "(decision = 'pending') = (decided_at IS NULL)",
+            name="decided_has_timestamp",
+        ),
+        # The ranking is the table's one access path.
+        Index("ix_yt_affiliation_candidates_score", "score"),
+    )
+
+    channel_a: Mapped[str] = mapped_column(
+        ForeignKey("yt_channels.channel_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    channel_b: Mapped[str] = mapped_column(
+        ForeignKey("yt_channels.channel_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+    score: Mapped[float] = mapped_column(Float)
+    run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("yt_affiliation_runs.id", ondelete="SET NULL")
+    )
+
+    # --- evidence, one group per signal; null means it did not fire ---
+
+    ref_direction: Mapped[YtRefDirection | None] = mapped_column(
+        _pg_enum(YtRefDirection, "yt_ref_direction")
+    )
+    shared_token: Mapped[str | None] = mapped_column(Text)
+    shared_token_channels: Mapped[int | None] = mapped_column(Integer)
+    corroborated_token: Mapped[str | None] = mapped_column(Text)
+    corroborated_token_channels: Mapped[int | None] = mapped_column(Integer)
+
+    # --- the review ---
+
+    decision: Mapped[AffiliationDecision] = mapped_column(
+        _pg_enum(AffiliationDecision, "yt_affiliation_decision"),
+        server_default=AffiliationDecision.PENDING.value,
+    )
+    origin: Mapped[CandidateOrigin] = mapped_column(
+        _pg_enum(CandidateOrigin, "yt_candidate_origin"),
+        server_default=CandidateOrigin.SIGNAL.value,
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    decision_note: Mapped[str | None] = mapped_column(Text)
+
+    detected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"YtAffiliationCandidate(a={self.channel_a!r}, "
+            f"b={self.channel_b!r}, "
+            f"score={self.score:.3f}, decision={self.decision.value!r})"
+        )
 
 
 class YtSearchQuery(Base):

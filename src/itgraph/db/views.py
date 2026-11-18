@@ -1,15 +1,17 @@
 """Views: schema objects that hold no data of their own.
 
-One so far. It lives here rather than in ``models.py`` because a view is
-not a model — nothing maps to it, and it is read by explicit select.
+Two, one per platform, and the same shape: which channels share an
+owner, as the connected components of the confirmed affiliation pairs.
+They live here rather than in ``models.py`` because a view is not a
+model — nothing maps to it, and it is read by explicit select.
 
 Attached to ``Base.metadata`` through a DDL event so that
-``create_all`` builds it, which is what the test fixture uses. The
-Alembic revision that introduced it carries its own copy of the same
+``create_all`` builds them, which is what the test fixture uses. The
+Alembic revision that introduced each carries its own copy of the same
 SQL, deliberately: a revision is a historical snapshot and must keep
-working whatever this file becomes later. Changing the view means
-editing both, exactly as changing a column means editing a model and
-writing a revision.
+working whatever this file becomes later. Changing a view means editing
+both, exactly as changing a column means editing a model and writing a
+revision.
 """
 
 from typing import Any
@@ -19,7 +21,8 @@ from sqlalchemy.engine import Connection
 
 from itgraph.db.models import Base
 
-__all__ = ["CHANNEL_FAMILIES_VIEW"]
+__all__ = ["CHANNEL_FAMILIES_VIEW", "YT_CHANNEL_FAMILIES_VIEW"]
+
 
 # Which channels share an author, as the connected components of the
 # confirmed pairs. One row per channel that is in a family of more than
@@ -63,12 +66,39 @@ SELECT channel_id, LEAST(MIN(reached), channel_id) AS family_key
 """
 
 
+# The same view over the YouTube pairs. Every comment above says the
+# same thing about this one; `family_key` is the lexicographically
+# smallest id in the set, which is a label and not a canonical channel
+# for exactly the reasons the Telegram one is not.
+YT_CHANNEL_FAMILIES_VIEW = """
+CREATE VIEW yt_channel_families AS
+WITH RECURSIVE linked AS (
+    SELECT channel_a AS channel_id, channel_b AS reached
+      FROM yt_affiliation_candidates WHERE decision = 'confirmed'
+    UNION
+    SELECT channel_b AS channel_id, channel_a AS reached
+      FROM yt_affiliation_candidates WHERE decision = 'confirmed'
+),
+reach AS (
+    SELECT channel_id, reached FROM linked
+    UNION
+    SELECT r.channel_id, l.reached
+      FROM reach r JOIN linked l ON l.channel_id = r.reached
+)
+SELECT channel_id, LEAST(MIN(reached), channel_id) AS family_key
+  FROM reach
+ GROUP BY channel_id
+"""
+
+
 def _create_view(_target: Any, connection: Connection, **_kw: Any) -> None:
     connection.execute(text(CHANNEL_FAMILIES_VIEW))
+    connection.execute(text(YT_CHANNEL_FAMILIES_VIEW))
 
 
 def _drop_view(_target: Any, connection: Connection, **_kw: Any) -> None:
     connection.execute(text("DROP VIEW IF EXISTS tg_channel_families"))
+    connection.execute(text("DROP VIEW IF EXISTS yt_channel_families"))
 
 
 # Plain functions rather than `DDL(...)`: SQLAlchemy's `DDL` is untyped,

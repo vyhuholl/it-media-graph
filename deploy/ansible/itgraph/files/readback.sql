@@ -18,6 +18,8 @@ DECLARE
      $q$SELECT count(*) FROM yt_channels WHERE kind_note IS NOT NULL OR reject_note IS NOT NULL$q$],
     ['notes on affiliation decisions',
      $q$SELECT count(*) FROM tg_affiliation_candidates WHERE decision_note IS NOT NULL$q$],
+    ['notes on YouTube affiliation decisions',
+     $q$SELECT count(*) FROM yt_affiliation_candidates WHERE decision_note IS NOT NULL$q$],
     ['pending mentions',
      $q$SELECT count(*) FROM tg_pending_mentions$q$],
     ['undelivered alerts',

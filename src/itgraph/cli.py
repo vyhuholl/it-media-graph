@@ -6,7 +6,7 @@ bodies, so `itgraph --help` works on a machine with no `.env` yet.
 
 import asyncio
 import logging
-from collections.abc import Coroutine, Mapping
+from collections.abc import Coroutine, Mapping, Sequence
 from contextlib import suppress
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -20,7 +20,11 @@ if TYPE_CHECKING:
     # `.env` to read.
     from itgraph.affiliation.run import DetectionSummary
     from itgraph.db.affiliation import CandidateRow
+    from itgraph.db.yt_affiliation import CandidateRow as YtCandidateRow
     from itgraph.tg.backfill import FloodWaitTooLong
+    from itgraph.yt.affiliation.run import (
+        DetectionSummary as YtDetectionSummary,
+    )
     from itgraph.yt.lookup_pass import LookupSummary
 
 from itgraph import __version__
@@ -37,6 +41,12 @@ from itgraph.db.models import (
     YtLang,
     YtRejectReason,
     YtSearchType,
+)
+from itgraph.yt.affiliation.signals import (
+    DEFAULT_THRESHOLDS as YT_DEFAULT_THRESHOLDS,
+)
+from itgraph.yt.affiliation.signals import (
+    DEFAULT_WEIGHTS as YT_DEFAULT_WEIGHTS,
 )
 
 app = typer.Typer(
@@ -3490,3 +3500,385 @@ def yt_channels(
             await database.dispose()
 
     _run_yt(run())
+
+
+# --- YouTube affiliation ------------------------------------------------
+#
+# `affiliates`'s mirror, over the YouTube signals: the review list is
+# printed the same way — both sides, their statuses, the per-signal
+# evidence — with corroborated groups as blocks carrying the ready
+# `itgraph yt family` line. A family of twenty-eight channels is three
+# hundred and seventy-eight pairs and one decision.
+
+
+def _yt_side(title: str | None, handle: str | None, channel_id: str) -> str:
+    """One half of a candidate pair, as much of it as fits.
+
+    The handle where the stored payload carries one, the UC… id
+    otherwise — a channel whose payload is gone is still nameable, and
+    printing its id is what keeps the row reviewable.
+    """
+    name = f"@{handle}" if handle else channel_id
+    return f"{name} {(title or '-')[:28]}"
+
+
+def _yt_evidence(row: YtCandidateRow) -> str:
+    """Why this pair was proposed, in one column per signal that fired.
+
+    The same reason as Telegram's: the score alone is not reviewable,
+    and the answer to "do these two share an owner" depends entirely on
+    which signal said so.
+    """
+    parts = []
+    if row.ref_direction is not None:
+        parts.append(f"ref:{row.ref_direction}")
+    if row.shared_token is not None:
+        parts.append(f"token:{row.shared_token}/{row.shared_token_channels}")
+    if row.corroborated_token is not None:
+        parts.append(
+            f"group:{row.corroborated_token}/{row.corroborated_token_channels}"
+        )
+    return "  ".join(parts)
+
+
+def _yt_candidate_row(row: YtCandidateRow) -> str:
+    """One pair on one line: both sides, their statuses, and the why."""
+    return (
+        f"{row.score:>6.3f}  "
+        f"{_yt_side(row.title_a, row.handle_a, row.channel_a):<40}"
+        f"{row.status_a.value:<10} "
+        f"{_yt_side(row.title_b, row.handle_b, row.channel_b):<40}"
+        f"{row.status_b.value:<10} {_yt_evidence(row)}"
+    )
+
+
+def _yt_confirm_line(members: Sequence[str]) -> list[str]:
+    """The confirmation, ready to run — wrapped the way a shell reads it.
+
+    Retyping twenty-eight handles is where a decision of this shape gets
+    made wrong, and one unwrapped line of them is longer than any
+    terminal an operator reads it on. The backslashes keep the wrapped
+    command one command, so it is pastable as it stands.
+    """
+    words = ["itgraph", "yt", "family", *members]
+    wrapped: list[list[str]] = [[]]
+    for word in words:
+        line = wrapped[-1]
+        if line and len(" ".join([*line, word])) > 76:
+            wrapped.append([word])
+        else:
+            line.append(word)
+    return [
+        "  " + " ".join(line) + (" \\" if index + 1 < len(wrapped) else "")
+        for index, line in enumerate(wrapped)
+    ]
+
+
+def _yt_candidate_lines(summary: YtDetectionSummary) -> list[str]:
+    """The review list, with the pairs one token proposed kept together.
+
+    A corroborated group is one decision, so its pairs print as a block
+    rather than scattered down a list ordered by score. The block sits
+    where its highest-scoring pair sits, so nothing outranks it that did
+    not outrank that pair.
+
+    Grouping is presentation only. `--limit` still bounds *pairs*, which
+    is why a truncated block says how many of its own are missing rather
+    than quietly showing part of an organisation as if it were the whole
+    one.
+    """
+    lines: list[str] = []
+    emitted: set[str] = set()
+    for row in summary.rows:
+        token = row.corroborated_token
+        if token is None:
+            lines.append(_yt_candidate_row(row))
+            continue
+        if token in emitted:
+            # Pulled up into the block at its first appearance.
+            continue
+        emitted.add(token)
+        group = summary.groups[token]
+        shown = [
+            other
+            for other in summary.rows
+            if other.corroborated_token == token
+        ]
+        # "2 of 4 channels" where a filter has narrowed the group, so a
+        # heading beside evidence reading `group:…/4` cannot look like a
+        # miscount. Bare when nothing was narrowed.
+        channels = (
+            f"{len(group.members)} channels"
+            if len(group.members) == group.carriers
+            else f"{len(group.members)} of {group.carriers} channels"
+        )
+        pairs = "pair" if group.pairs == 1 else "pairs"
+        head = f"token {group.token} — {channels}, {group.pairs} {pairs}"
+        hidden = group.pairs - len(shown)
+        if hidden:
+            head += f", {hidden} not shown"
+        lines.append(head)
+        lines.extend(f"  {_yt_candidate_row(other)}" for other in shown)
+        lines.extend(_yt_confirm_line(group.members))
+    return lines
+
+
+@yt_app.command("affiliates")
+def yt_affiliates(
+    min_token_length: Annotated[
+        int,
+        typer.Option(
+            "--min-token-length",
+            help="Shortest title token, in characters of any script.",
+        ),
+    ] = YT_DEFAULT_THRESHOLDS.min_token_length,
+    max_token_channels: Annotated[
+        int,
+        typer.Option(
+            "--max-token-channels",
+            help=(
+                "A title token on more channels than this is a subject, "
+                "not an owner."
+            ),
+        ),
+    ] = YT_DEFAULT_THRESHOLDS.max_token_channels,
+    max_corroborated_channels: Annotated[
+        int,
+        typer.Option(
+            "--max-corroborated-channels",
+            help=(
+                "Most channels one corroborated token may be carried by. "
+                "Bounds the pairs it can propose, not its strength."
+            ),
+        ),
+    ] = YT_DEFAULT_THRESHOLDS.max_corroborated_channels,
+    weight_reference: Annotated[
+        float,
+        typer.Option(
+            "--weight-reference", help="Weight of a description reference."
+        ),
+    ] = YT_DEFAULT_WEIGHTS.reference,
+    weight_group: Annotated[
+        float,
+        typer.Option("--weight-group", help="Weight of a corroborated group."),
+    ] = YT_DEFAULT_WEIGHTS.group,
+    weight_token: Annotated[
+        float,
+        typer.Option("--weight-token", help="Weight of a shared title token."),
+    ] = YT_DEFAULT_WEIGHTS.token,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", help="Show at most this many pairs."),
+    ] = None,
+    show_decided: Annotated[
+        bool,
+        typer.Option("--all", help="Include pairs already decided."),
+    ] = False,
+    any_status: Annotated[
+        bool,
+        typer.Option(
+            "--any-status",
+            help="Also show pairs in which neither channel is a seed.",
+        ),
+    ] = False,
+) -> None:
+    """Find YouTube channels that may share an owner, and rank them.
+
+    Reads the inventory and the stored channel payloads; makes no
+    request to YouTube and spends no quota, so it is free to re-run
+    under different thresholds as often as you like — a re-run refreshes
+    every score and evidence column and never touches a decision you
+    have already made.
+
+    Three signals — title tokens shared rarely enough to mean something,
+    description references, and token groups a reference between
+    carriers corroborates — and any one of them is enough to propose a
+    pair. The weights order the list you read; they are not calibration.
+
+    A corroborated group is printed as one block with the
+    `itgraph yt family` line that would confirm it: an organisation's
+    twenty-eight channels are three hundred and seventy-eight pairs and
+    one decision. A noisy block is one `--reject-token` away.
+
+    Only pairs with at least one seed in them are shown; the rest are
+    still computed and stored, and `--any-status` shows them. Nothing is
+    lost by the default — a channel accepted later turns its stored
+    pairs into reviewable ones without recomputation.
+
+    It proposes and never decides: no run of this command writes a
+    family link. Confirm a pair with `itgraph yt family`.
+    """
+    from itgraph.db.session import Database
+    from itgraph.yt.affiliation.detect import InvalidParameterError
+    from itgraph.yt.affiliation.run import run_detection
+    from itgraph.yt.affiliation.signals import Thresholds, Weights
+
+    thresholds = Thresholds(
+        min_token_length=min_token_length,
+        max_token_channels=max_token_channels,
+        max_corroborated_channels=max_corroborated_channels,
+    )
+    weights = Weights(
+        reference=weight_reference,
+        group=weight_group,
+        token=weight_token,
+    )
+    if limit is not None and limit < 1:
+        raise typer.BadParameter("--limit must be at least 1")
+
+    async def run() -> None:
+        database = Database()
+        try:
+            summary = await run_detection(
+                database,
+                thresholds=thresholds,
+                weights=weights,
+                limit=limit,
+                include_decided=show_decided,
+                seeds_only=not any_status,
+            )
+        finally:
+            await database.dispose()
+
+        for line in summary.coverage_lines():
+            typer.echo(line)
+        typer.echo(summary.line())
+        if not summary.rows:
+            return
+        typer.echo("")
+        for line in _yt_candidate_lines(summary):
+            typer.echo(line)
+
+    try:
+        _run_yt(run())
+    except InvalidParameterError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+@yt_app.command("family")
+def yt_family(
+    channel_refs: Annotated[
+        # Optional because `--reject-token` names no channel: a token
+        # rejection is a statement about pairs, and the token alone
+        # identifies them.
+        list[str] | None,
+        typer.Argument(
+            metavar="CHANNEL...",
+            help="The channels, by UC… id or @handle.",
+        ),
+    ] = None,
+    reject: Annotated[
+        bool,
+        typer.Option("--reject", help="Record that they are not affiliated."),
+    ] = False,
+    reject_token: Annotated[
+        str | None,
+        typer.Option(
+            "--reject-token",
+            metavar="TOKEN",
+            help=(
+                "Reject every pending pair this corroborated token "
+                "proposed, with a note naming it."
+            ),
+        ),
+    ] = None,
+    withdraw: Annotated[
+        bool,
+        typer.Option(
+            "--withdraw", help="Undo a decision and reopen the pair."
+        ),
+    ] = False,
+    note: Annotated[
+        str | None,
+        typer.Option(
+            "--note", help="Free-text note stored with the decision."
+        ),
+    ] = None,
+) -> None:
+    """Record that YouTube channels share an owner — or that two do not.
+
+    The only command that records a YouTube family. `itgraph yt
+    affiliates` proposes pairs and ranks them; nothing it finds becomes
+    a fact until it is confirmed here.
+
+    A family is a set with no main channel. Name two channels or
+    twenty-eight — the statement is the same, and every pair among them
+    is recorded. The order does not matter, and neither does which pairs
+    detection happened to find: confirming a pair that bridges two
+    families merges them, which is what saying "these share an owner"
+    means.
+
+    A rejection takes exactly two channels — it is a statement about a
+    pair — and it is stored so that pair stops being proposed at every
+    subsequent run. `--reject-token` declines every still-pending pair
+    one corroborated token proposed: a noisy block costs one review
+    instead of one per pair, and a channel that later starts carrying
+    the token asks its questions anew. `--withdraw` undoes any of these;
+    a withdrawn pair splits its family only if nothing else was
+    connecting the two sides.
+
+    Channels no signal ever paired can be confirmed directly — you may
+    simply know. Those pairs are recorded as having come from you rather
+    than from a signal.
+    """
+    from itgraph.db.session import Database
+    from itgraph.db.yt_channels import (
+        confirm_affiliation,
+        reject_affiliation,
+        withdraw_affiliation,
+    )
+    from itgraph.db.yt_channels import (
+        reject_token as reject_token_pairs,
+    )
+
+    refs = channel_refs or []
+    if sum((reject, withdraw, reject_token is not None)) > 1:
+        raise typer.BadParameter(
+            "give at most one of --reject, --reject-token, --withdraw"
+        )
+    if reject_token is not None:
+        if refs:
+            raise typer.BadParameter("--reject-token takes no channels")
+    elif len(refs) < 2:
+        raise typer.BadParameter("name at least two channels")
+    if (reject or withdraw) and len(refs) != 2:
+        # Rejecting or withdrawing says something about one pair. A group
+        # form would have to invent which pairs it meant.
+        raise typer.BadParameter(
+            "--reject and --withdraw take exactly two channels"
+        )
+
+    async def run() -> None:
+        database = Database()
+        try:
+            async with database.session() as session:
+                if reject_token is not None:
+                    count = await reject_token_pairs(
+                        session, reject_token, note=note
+                    )
+                    typer.echo(
+                        f"{count} pairs rejected over token '{reject_token}'"
+                    )
+                elif withdraw:
+                    pair = await withdraw_affiliation(session, *refs)
+                    typer.echo(f"{pair[0]} and {pair[1]}: decision withdrawn")
+                elif reject:
+                    pair = await reject_affiliation(session, *refs, note=note)
+                    typer.echo(f"{pair[0]} and {pair[1]}: not affiliated")
+                else:
+                    group = await confirm_affiliation(session, refs, note=note)
+                    # The family can be larger than what was named, when a
+                    # pair bridged two of them. Saying so is what keeps a
+                    # merge from being silent.
+                    typer.echo(
+                        f"{group.pairs} pairs recorded; "
+                        f"family of {group.channels} channels"
+                    )
+        finally:
+            await database.dispose()
+
+    try:
+        _run_yt(run())
+    except ValueError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from exc

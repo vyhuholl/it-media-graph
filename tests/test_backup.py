@@ -226,6 +226,24 @@ def test_the_inventory_dump_keeps_the_search_queries(
     assert "yt_raw_search_results" not in tables
 
 
+def test_the_inventory_dump_keeps_the_affiliation_reviews(
+    tmp_path: Path, fake_run: list[list[str]]
+) -> None:
+    """The family review itself — every confirm and reject, on both
+    platforms; the runs that proposed the pairs are re-computable."""
+    take_backup(inventory_kind(), tmp_path, now=NOW)
+
+    tables = [
+        fake_run[0][index + 1]
+        for index, arg in enumerate(fake_run[0])
+        if arg == "--table"
+    ]
+    assert "tg_affiliation_candidates" in tables
+    assert "yt_affiliation_candidates" in tables
+    assert "tg_affiliation_runs" not in tables
+    assert "yt_affiliation_runs" not in tables
+
+
 @pytest.mark.parametrize("kind", [inventory_kind, full_kind])
 def test_no_dump_leaves_table_data_out(
     tmp_path: Path, fake_run: list[list[str]], kind: Any
