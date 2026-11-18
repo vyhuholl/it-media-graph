@@ -15,6 +15,7 @@ known and pending.
 """
 
 import logging
+from collections.abc import AsyncIterator
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,6 +45,7 @@ __all__ = [
     "read_known",
     "read_mention_queue",
     "read_references",
+    "video_sources",
 ]
 
 logger = logging.getLogger(__name__)
@@ -86,17 +88,12 @@ async def read_known(session: AsyncSession) -> Known:
     )
 
 
-async def read_references(session: AsyncSession) -> References:
-    """Every reference the seeds' videos make, as the payloads stand now.
+async def video_sources(session: AsyncSession) -> AsyncIterator[Source]:
+    """Every seed's video as a source, streamed a batch at a time.
 
-    Must be the first thing done in the session's transaction: the
-    isolation level is set on it.
+    The stream behind the mention graph and the rising ranking alike.
+    Sets no isolation level: the caller opens the snapshot.
     """
-    await session.connection(
-        execution_options={"isolation_level": "REPEATABLE READ"}
-    )
-    known = await read_known(session)
-
     snippet = YtRawVideo.payload["snippet"]
     rows = await session.stream(
         select(
@@ -111,7 +108,6 @@ async def read_references(session: AsyncSession) -> References:
         .order_by(YtRawVideo.channel_id, YtRawVideo.video_id)
         .execution_options(yield_per=_BATCH)
     )
-    sources: list[Source] = []
     async for video_id, channel, title, description, published in rows:
         named = read_text(f"{title or ''}\n{description or ''}")
         logger.debug(
@@ -124,14 +120,25 @@ async def read_references(session: AsyncSession) -> References:
             len(named.video_ids),
             len(named.mentions),
         )
-        sources.append(
-            Source(
-                video_id=video_id,
-                channel_id=channel,
-                published_at=moment_of(published),
-                named=named,
-            )
+        yield Source(
+            video_id=video_id,
+            channel_id=channel,
+            published_at=moment_of(published),
+            named=named,
         )
+
+
+async def read_references(session: AsyncSession) -> References:
+    """Every reference the seeds' videos make, as the payloads stand now.
+
+    Must be the first thing done in the session's transaction: the
+    isolation level is set on it.
+    """
+    await session.connection(
+        execution_options={"isolation_level": "REPEATABLE READ"}
+    )
+    known = await read_known(session)
+    sources = [source async for source in video_sources(session)]
 
     featured = {
         seed: featured_ids(payload)

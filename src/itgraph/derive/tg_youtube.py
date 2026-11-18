@@ -43,11 +43,14 @@ __all__ = [
     "NameKind",
     "Post",
     "PostLinks",
+    "PostNamed",
     "Ranked",
     "Reading",
     "Scanned",
     "is_own",
     "name_channels",
+    "name_links",
+    "name_post",
     "post_urls",
     "ranking",
     "read_post",
@@ -193,6 +196,60 @@ class Reading:
 
 
 @dataclass(frozen=True, slots=True)
+class PostNamed:
+    """One post's links named against what is stored.
+
+    ``named`` maps each channel the post links — by id, or through an
+    answer — to the handles and legacy names it wrote for it;
+    ``awaiting`` and ``not_found`` are the names that could not be
+    named. What the rising ranking reads out of a post, and what the
+    standing queue credits, come from the one reading.
+    """
+
+    named: Mapping[str, tuple[frozenset[str], frozenset[str]]]
+    awaiting: tuple[Name, ...]
+    not_found: tuple[Name, ...]
+
+
+def name_links(links: PostLinks, known: Known) -> PostNamed:
+    """One set of links, named: the channels it links, and what could
+    not be named. Pure, and the one reading every queue shares — a
+    Telegram post's links and a YouTube video's references resolve by
+    the same rule, through the same stored answers."""
+    named: dict[str, tuple[set[str], set[str]]] = {}
+    awaiting: list[Name] = []
+    not_found: list[Name] = []
+    for channel_id in links.channel_ids:
+        _credit(named, channel_id)
+    names = [
+        *(Name(NameKind.HANDLE, value) for value in links.handles),
+        *(Name(NameKind.LEGACY, value) for value in links.legacy_names),
+        *(Name(NameKind.VIDEO, value) for value in links.video_ids),
+    ]
+    for name in names:
+        answered, owner = _answer(name, known)
+        if not answered:
+            awaiting.append(name)
+        elif owner is None:
+            not_found.append(name)
+        else:
+            _credit(named, owner, name)
+    return PostNamed(
+        named={
+            channel: (frozenset(handles), frozenset(legacies))
+            for channel, (handles, legacies) in named.items()
+        },
+        awaiting=tuple(awaiting),
+        not_found=tuple(not_found),
+    )
+
+
+def name_post(post: Post, known: Known) -> PostNamed:
+    """One post's links, named — `name_links` over the post's links."""
+    return name_links(post.links, known)
+
+
+@dataclass(frozen=True, slots=True)
 class Ranked:
     """One channel outside the inventory, in ranking order."""
 
@@ -322,27 +379,15 @@ def _read_one(post: Post, known: Known, into: Reading) -> None:
     into.linking_posts += 1
     into.linking_families.add(post.family)
 
-    # channel id -> the handles and legacy names this post wrote for it
-    named: dict[str, tuple[set[str], set[str]]] = {}
-    for channel_id in links.channel_ids:
-        _credit(named, channel_id)
-    names = [
-        *(Name(NameKind.HANDLE, value) for value in links.handles),
-        *(Name(NameKind.LEGACY, value) for value in links.legacy_names),
-        *(Name(NameKind.VIDEO, value) for value in links.video_ids),
-    ]
-    for name in names:
-        answered, owner = _answer(name, known)
-        if not answered:
-            into.awaiting.setdefault(name, set()).add(post.family)
-        elif owner is None:
-            into.not_found.setdefault(name, set()).add(post.family)
-        else:
-            _credit(named, owner, name)
+    named = name_post(post, known)
+    for name in named.awaiting:
+        into.awaiting.setdefault(name, set()).add(post.family)
+    for name in named.not_found:
+        into.not_found.setdefault(name, set()).add(post.family)
     for custom in links.custom_urls:
         into.custom_urls.setdefault(custom, set()).add(post.family)
 
-    for channel, (handles, legacies) in named.items():
+    for channel, (handles, legacies) in named.named.items():
         evidence = into.channels.setdefault(channel, Evidence())
         evidence.families.add(post.family)
         if evidence.newest is None or post.posted_at > evidence.newest:

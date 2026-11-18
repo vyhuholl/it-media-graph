@@ -17,6 +17,7 @@ scanned are counted over every own post regardless.
 """
 
 import logging
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -43,6 +44,8 @@ from itgraph.derive.tg_youtube import (
 __all__ = [
     "TELEGRAM_LINK_SOURCE_STATUSES",
     "TelegramLinks",
+    "known_answers",
+    "own_seed_posts",
     "read_telegram_links",
 ]
 
@@ -83,8 +86,9 @@ def _own_seed_posts() -> list[ColumnElement[bool]]:
     ]
 
 
-async def _known(session: AsyncSession, now: datetime) -> Known:
-    """The inventory, stored payloads' handles, stored videos, lookups."""
+async def known_answers(session: AsyncSession, now: datetime) -> Known:
+    """What answers a linked name without a request: the inventory,
+    stored payloads' handles, stored videos, lookups in date."""
     stored = await read_known(session)
     lookups = await lookups_in_date(session, now=now)
     return Known(
@@ -121,22 +125,16 @@ def _posted_at(raw: Any) -> datetime | None:
     return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
-async def read_telegram_links(
-    session: AsyncSession, *, now: datetime | None = None
-) -> TelegramLinks:
-    """Every seed's own YouTube links, named against what is stored now.
+async def own_seed_posts(
+    session: AsyncSession, families: Mapping[int, int]
+) -> AsyncIterator[Post]:
+    """Every own post of a seed that is not a chat and can link
+    YouTube, with its family, streamed a batch at a time.
 
-    Must be the first thing done in the session's transaction: the
-    isolation level is set on it.
+    The stream behind the standing queue and the rising ranking alike;
+    a post without a date is skipped, as both readers do. Sets no
+    isolation level: the caller opens the snapshot.
     """
-    await session.connection(
-        execution_options={"isolation_level": "REPEATABLE READ"}
-    )
-    moment = now or datetime.now(UTC)
-    known = await _known(session, moment)
-    families = await family_keys(session)
-    scanned = await _scanned(session, families)
-
     payload = RawMessage.payload
     text = func.concat_ws(
         " ",
@@ -158,7 +156,6 @@ async def read_telegram_links(
         .order_by(RawMessage.channel_id, RawMessage.msg_id)
         .execution_options(yield_per=_BATCH)
     )
-    posts: list[Post] = []
     async for channel, msg_id, message, entities, preview, date in rows:
         posted_at = _posted_at(date)
         if posted_at is None:
@@ -171,14 +168,30 @@ async def read_telegram_links(
                 "media": {"webpage": {"url": preview}} if preview else None,
             }
         )
-        posts.append(
-            Post(
-                channel=channel,
-                family=family_of(families, channel),
-                posted_at=posted_at,
-                links=links,
-            )
+        yield Post(
+            channel=channel,
+            family=family_of(families, channel),
+            posted_at=posted_at,
+            links=links,
         )
+
+
+async def read_telegram_links(
+    session: AsyncSession, *, now: datetime | None = None
+) -> TelegramLinks:
+    """Every seed's own YouTube links, named against what is stored now.
+
+    Must be the first thing done in the session's transaction: the
+    isolation level is set on it.
+    """
+    await session.connection(
+        execution_options={"isolation_level": "REPEATABLE READ"}
+    )
+    moment = now or datetime.now(UTC)
+    known = await known_answers(session, moment)
+    families = await family_keys(session)
+    scanned = await _scanned(session, families)
+    posts = [post async for post in own_seed_posts(session, families)]
 
     reading = name_channels(posts, known, scanned=scanned)
     logger.info(

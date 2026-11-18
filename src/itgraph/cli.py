@@ -26,6 +26,7 @@ if TYPE_CHECKING:
         DetectionSummary as YtDetectionSummary,
     )
     from itgraph.yt.lookup_pass import LookupSummary
+    from itgraph.yt.rising_lookups import RisingLookupsSummary
 
 from itgraph import __version__
 from itgraph.affiliation.signals import DEFAULT_THRESHOLDS, DEFAULT_WEIGHTS
@@ -2725,6 +2726,113 @@ def yt_mention_lookup(
             await database.dispose()
 
         _say_looked_up(summary)
+
+    _run_yt(run())
+
+
+@yt_app.command("rising-lookups")
+def yt_rising_lookups() -> None:
+    """Look up both queues' names, bounded by the day's settings.
+
+    The scheduled counterpart of `tg-lookup` and `mention-lookup`: the
+    same passes, each through its own code, most evidence first, the
+    Telegram links first and the video references after — each stopped
+    after `youtube_tg_lookup_daily_requests` and
+    `youtube_mention_lookup_daily_requests` requests (10 each by
+    default). Each answer is committed as it arrives, so a bounded or
+    stopped run keeps what it learned and the next one goes on. Every
+    run is recorded, an empty one included. Prints counts, never names.
+
+    Runs daily from a timer on the host, after the refresh.
+    """
+    from itgraph.db.session import Database
+    from itgraph.yt.rising_lookups import (
+        run_rising_lookups,
+    )
+
+    async def run() -> None:
+        database = Database()
+        try:
+            summary = await run_rising_lookups(database)
+        finally:
+            await database.dispose()
+
+        _say_rising_lookups(summary)
+
+    _run_yt(run())
+
+
+def _say_rising_lookups(summary: RisingLookupsSummary) -> None:
+    """A scheduled run's report: counts only, and why it stopped."""
+    for name, part in (
+        ("telegram links", summary.tg),
+        ("mentions", summary.mention),
+    ):
+        typer.echo(name + ":")
+        for line in part.lines() if part else ["not run"]:
+            typer.echo(line)
+    stopped = summary.stopped
+    if stopped is None:
+        for part in (summary.tg, summary.mention):
+            if part is not None and part.stopped is not None:
+                stopped = part.stopped
+                break
+    if stopped is not None:
+        typer.secho(str(stopped), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+
+
+@yt_app.command("rising")
+def yt_rising(
+    top: Annotated[
+        int,
+        typer.Option("--top", min=0, help="Link-ranked rows shown."),
+    ] = 30,
+) -> None:
+    """Which YouTube channels are rising: links and the day's charts.
+
+    The link ranking — channels outside the inventory referred to by at
+    least `rising_min_families` distinct families, Telegram's and
+    YouTube's both counting, within `rising_window_days`, evidence dated
+    by its content — then the chart ranking, every channel of the day's
+    regional mostPopular reading the inventory does not hold, in chart
+    order. Then what could not be counted: references awaiting a lookup,
+    looked up as none, seeds whose featured list is out of date.
+
+    Ids, numbers and dates only: what a channel *is* is read in the
+    review round, from the API. Makes no request, writes nothing, needs
+    no API key.
+    """
+    from datetime import UTC, datetime
+
+    from itgraph.config import settings
+    from itgraph.db.session import Database
+    from itgraph.db.yt_rising import load_yt_rising_rows
+    from itgraph.derive.yt_rising import rank_yt_rising, report
+
+    async def run() -> None:
+        moment = datetime.now(UTC)
+        database = Database()
+        try:
+            async with database.session() as session:
+                rows = await load_yt_rising_rows(session, now=moment)
+        finally:
+            await database.dispose()
+
+        ranked = rank_yt_rising(
+            rows,
+            moment,
+            window_days=settings.rising_window_days,
+            min_families=settings.rising_min_families,
+            answers_fresh_days=settings.youtube_answers_fresh_days,
+        )
+        for line in report(
+            ranked,
+            top=top,
+            window_days=settings.rising_window_days,
+            min_families=settings.rising_min_families,
+        ):
+            typer.echo(line)
 
     _run_yt(run())
 

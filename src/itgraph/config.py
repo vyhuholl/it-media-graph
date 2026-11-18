@@ -706,6 +706,16 @@ class Settings(BaseSettings):
     # endpoint ever die for good.
     youtube_chart_regions: tuple[str, ...] = ("US", "RU")
     youtube_chart_category: int = Field(default=28, ge=1)
+    # The scheduled lookup pass (`yt rising-lookups`) stops each of its
+    # two passes after this many requests: first the names the Telegram
+    # seeds link, then the ones the seeds' videos reference — most
+    # evidence first, as each pass orders itself, one answer committed
+    # before the next request. About 0.3% of the daily quota each at the
+    # defaults. 0 keeps a pass from asking anything; the manual
+    # `tg-lookup` and `mention-lookup` are bounded by their own --limit
+    # and never by these.
+    youtube_tg_lookup_daily_requests: int = Field(default=10, ge=0)
+    youtube_mention_lookup_daily_requests: int = Field(default=10, ge=0)
     # How long an answer from YouTube that decides what to ask next
     # counts as current: a lookup of a linked name, a seed's featured
     # list, a search run and its results. Past it the answer is no longer
