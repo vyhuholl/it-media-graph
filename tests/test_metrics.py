@@ -11,6 +11,7 @@ import pytest
 from sqlalchemy import event, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from itgraph.config import settings
 from itgraph.db.models import (
     Alert,
     AlertKind,
@@ -33,12 +34,14 @@ from itgraph.db.models import (
     YtCommand,
     YtDiscoveryPath,
     YtDiscoverySource,
+    YtLookupRun,
     YtPassOutcome,
     YtQuotaBucket,
     YtQuotaDay,
     YtQuotaExhausted,
     YtQuotaPool,
     YtRawChannel,
+    YtRawChart,
     YtRawVideo,
     YtRawVideoStat,
     YtRefreshRun,
@@ -72,6 +75,8 @@ EXPECTED = {
     "itgraph_youtube_last_complete_pass_timestamp_seconds",
     "itgraph_youtube_last_complete_refresh_timestamp_seconds",
     "itgraph_youtube_oldest_payload_age_seconds",
+    "itgraph_youtube_chart_read_timestamp_seconds",
+    "itgraph_youtube_rising_lookups_timestamp_seconds",
     "itgraph_alerts_oldest_undelivered_seconds",
     "itgraph_alerts_failing",
     "itgraph_baselines_completed_timestamp_seconds",
@@ -374,6 +379,105 @@ async def test_no_refresh_yet_reads_as_zero(database: Database) -> None:
     )
 
 
+async def test_the_chart_and_the_lookups_of_the_day(
+    database: Database,
+) -> None:
+    """Both regions' readings fetched at five, the lookup pass ended at
+    six: the moments the shared monitoring alerts on."""
+    five = NOW.replace(hour=5, minute=0, second=0, microsecond=0)
+    six = NOW.replace(hour=6, minute=0, second=0, microsecond=0)
+    async with database.session() as session:
+        session.add_all(
+            [
+                YtRawChart(
+                    region="US", payload={"items": []}, fetched_at=five
+                ),
+                YtRawChart(
+                    region="RU", payload={"items": []}, fetched_at=five
+                ),
+                YtLookupRun(
+                    started_at=five,
+                    finished_at=six,
+                    outcome=YtPassOutcome.COMPLETE,
+                ),
+            ]
+        )
+
+    read = await families(database)
+
+    assert (
+        value(
+            read, "itgraph_youtube_chart_read_timestamp_seconds", region="US"
+        )
+        == five.timestamp()
+    )
+    assert (
+        value(
+            read, "itgraph_youtube_chart_read_timestamp_seconds", region="RU"
+        )
+        == five.timestamp()
+    )
+    assert (
+        value(read, "itgraph_youtube_rising_lookups_timestamp_seconds")
+        == six.timestamp()
+    )
+
+
+async def test_a_region_whose_chart_failed_is_measured_by_its_age(
+    database: Database,
+) -> None:
+    """US read this morning, RU last read two days ago: RU's reading is
+    the last one there was, and the alert on its age is the signal."""
+    two_days_ago = NOW - timedelta(days=2)
+    this_morning = NOW.replace(hour=5, minute=0, second=0, microsecond=0)
+    async with database.session() as session:
+        session.add_all(
+            [
+                YtRawChart(
+                    region="RU", payload={"items": []}, fetched_at=two_days_ago
+                ),
+                YtRawChart(
+                    region="US", payload={"items": []}, fetched_at=this_morning
+                ),
+            ]
+        )
+
+    read = await families(database)
+
+    assert (
+        value(
+            read, "itgraph_youtube_chart_read_timestamp_seconds", region="US"
+        )
+        == this_morning.timestamp()
+    )
+    assert (
+        value(
+            read, "itgraph_youtube_chart_read_timestamp_seconds", region="RU"
+        )
+        == two_days_ago.timestamp()
+    )
+
+
+async def test_no_chart_and_no_lookups_read_as_zero(
+    database: Database,
+) -> None:
+    read = await families(database)
+
+    assert (
+        value(
+            read, "itgraph_youtube_chart_read_timestamp_seconds", region="US"
+        )
+        == 0
+    )
+    assert (
+        value(
+            read, "itgraph_youtube_chart_read_timestamp_seconds", region="RU"
+        )
+        == 0
+    )
+    assert value(read, "itgraph_youtube_rising_lookups_timestamp_seconds") == 0
+
+
 async def test_the_oldest_channel_payload_s_age(database: Database) -> None:
     """Channels only: an old video, lookup or search run is old by design."""
     name = "itgraph_youtube_oldest_payload_age_seconds"
@@ -508,6 +612,8 @@ async def test_no_series_reads_the_big_tables_and_no_label_comes_from_data(
             "in_scope",
             "with_baseline",
         }
+        # The chart's regions: the settings' own values, not a table's.
+        | set(settings.youtube_chart_regions)
         | {route.value for route in YtAlertRoute}
     )
     body = render(read)
