@@ -70,6 +70,12 @@ SELECT channel_id, LEAST(MIN(reached), channel_id) AS family_key
 # same thing about this one; `family_key` is the lexicographically
 # smallest id in the set, which is a label and not a canonical channel
 # for exactly the reasons the Telegram one is not.
+#
+# "Smallest" is said out loud as `COLLATE "C"`: ids are text, and the
+# smallest under the database locale's collation is not the smallest by
+# code points — the order every Python reader of the ids sorts by. The
+# label would still be deterministic without it, but it would be a
+# different channel than the one any in-memory sort would name.
 YT_CHANNEL_FAMILIES_VIEW = """
 CREATE VIEW yt_channel_families AS
 WITH RECURSIVE linked AS (
@@ -85,7 +91,8 @@ reach AS (
     SELECT r.channel_id, l.reached
       FROM reach r JOIN linked l ON l.channel_id = r.reached
 )
-SELECT channel_id, LEAST(MIN(reached), channel_id) AS family_key
+SELECT channel_id,
+       LEAST(MIN(reached COLLATE "C"), channel_id COLLATE "C") AS family_key
   FROM reach
  GROUP BY channel_id
 """

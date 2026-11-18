@@ -51,6 +51,15 @@ A = channel_id(1)
 B = channel_id(2)
 C = channel_id(3)
 
+# Two ids whose two orders disagree: code points rank the uppercase B
+# of UCB… before the lowercase a of UCa…, a linguistic collation — the
+# working database's en_US.utf8 — ranks a before B, the other way
+# round. About a fifth of all pairs of real ids disagree like this,
+# which is why the pair-order comparison and the family key are
+# collated to bytes.
+DIVERGENT_LOWER = "UCa" + "x" * 20 + "1"
+DIVERGENT_UPPER = "UCB" + "x" * 20 + "2"
+
 
 def payload(number: int, *, handle: str | None = None) -> dict[str, object]:
     return channel_resource(number, handle=handle or f"example{number}")
@@ -372,6 +381,68 @@ async def test_a_pair_stored_the_wrong_way_round_is_refused(
                 ),
                 {"a": A, "b": B, "run": run_id},
             )
+
+
+async def test_a_pair_the_locale_orders_the_other_way_is_stored(
+    database: Database,
+) -> None:
+    """The stored order is Python's code-point order, whatever the
+    database's collation makes of it.
+
+    `ordered()` compares code points, so it stores UCB… before UCa… —
+    and under a linguistic collation that pair reads as the wrong way
+    round. The first production run of `yt affiliates` died on exactly
+    this: one bulk insert of hundreds of pairs, one disagreement with
+    the en_US.utf8 database, the whole run rolled back. On a database
+    whose locale is a linguistic collation — production's, and the
+    compose and CI instances match it — this test fails without the
+    collation; on a byte-order locale it passes either way, which is
+    what the introspection below is for.
+    """
+    async with database.session() as session:
+        await create_channels(session, [DIVERGENT_LOWER, DIVERGENT_UPPER])
+
+    await store(
+        database,
+        [Candidate(pair=ordered(DIVERGENT_UPPER, DIVERGENT_LOWER), score=1.0)],
+    )
+
+    async with database.session() as session:
+        rows = await list_candidates(session, seeds_only=False)
+
+    assert [(row.channel_a, row.channel_b) for row in rows] == [
+        (DIVERGENT_UPPER, DIVERGENT_LOWER)
+    ]
+
+
+async def test_the_pair_order_comparisons_are_collated_to_bytes(
+    database: Database,
+) -> None:
+    """The constraint and the family key say their collation out loud.
+
+    A behaviour test only bites where the database locale is a
+    linguistic collation; this one reads what was built, and bites on
+    every locale. The view is named too because a view keeps the
+    collation it was created with — recreating it under a different
+    default says nothing to the reader that relies on its keys being
+    the code-point-smallest id, the order every Python reader sorts
+    ids by.
+    """
+    async with database.session() as session:
+        constraint = await session.scalar(
+            text(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                "WHERE conrelid = 'yt_affiliation_candidates'::regclass "
+                "AND conname = "
+                "'ck_yt_affiliation_candidates_pair_is_ordered'"
+            )
+        )
+        view = await session.scalar(
+            text("SELECT pg_get_viewdef('yt_channel_families'::regclass)")
+        )
+
+    assert constraint is not None and 'COLLATE "C"' in constraint
+    assert view is not None and 'COLLATE "C"' in view
 
 
 async def test_the_inventory_load_builds_the_family_key(

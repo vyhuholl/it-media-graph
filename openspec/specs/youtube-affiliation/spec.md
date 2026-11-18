@@ -175,6 +175,11 @@ The system SHALL propose a pair when **any** signal fires, and rank the proposal
 - **THEN** they appear as one candidate pair, not two
 - **AND** the pair is stored in an order that does not depend on which signal fired first
 
+#### Scenario: The stored order is byte order, whatever the database locale
+- **GIVEN** two ids whose code-point order and the database locale's collation order disagree — a lowercase letter before an uppercase one at the first differing character
+- **WHEN** detection stores the pair in the order the code points give
+- **THEN** the pair is stored, not refused by the constraint that guards the order
+
 #### Scenario: The list can be bounded
 - **WHEN** detection runs with a limit
 - **THEN** at most that many candidates are shown

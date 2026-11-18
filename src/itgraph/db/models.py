@@ -2384,8 +2384,17 @@ class YtAffiliationCandidate(Base):
 
     __tablename__ = "yt_affiliation_candidates"
     __table_args__ = (
-        # The unordered pair, made canonical.
-        CheckConstraint("channel_a < channel_b", name="pair_is_ordered"),
+        # The unordered pair, made canonical. Collated to "C" because
+        # the order it guards is Python's code-point order, the one
+        # `ordered()` stores pairs in: under a linguistic collation
+        # (the working database's en_US.utf8) "UCB…" < "UCa…" is true
+        # while code points say otherwise, and roughly a fifth of real
+        # id pairs disagree — enough that one insert in hundreds is
+        # refused by the very code that ordered it.
+        CheckConstraint(
+            '(channel_a COLLATE "C") < (channel_b COLLATE "C")',
+            name="pair_is_ordered",
+        ),
         # A decision is exactly as timestamped as it is made.
         CheckConstraint(
             "(decision = 'pending') = (decided_at IS NULL)",
