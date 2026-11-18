@@ -26,9 +26,9 @@ Rules for every task:
 
 ## 3. The chart reading
 
-- [ ] 3.1 `config.py` gains `youtube_chart_regions` (`US`, `RU`) and `youtube_chart_category` (28). `yt/chart.py`: the `videos.list` `chart=mostPopular` request — the region, the category, fifty a page, `fields` naming each video's id, its channel's id and the page token — paged while a token comes. `db/yt_chart.py` stores each answer as a reading. Verify: two regions, two readings; paging over four pages of fifty, 200 a region, as the probe of 2026-11-18 measured; an empty chart stored as empty; a reading is never rewritten.
-- [ ] 3.2 `yt/refresh.py` reads the chart first, one region at a time, catching its API errors so a refused chart fails nothing else; `RefreshSummary` counts the readings. Verify: a refused region leaves the rest of the refresh completing; the pool-spent path still stops everything as before; the refresh's existing tests stay green.
-- [ ] 3.3 Docs: `src/itgraph/README.md`'s refresh section and the chart; the `yt/chart.py`, `db/yt_chart.py` rows of `src/itgraph/CLAUDE.md`.
+- [x] 3.1 `config.py` gains `youtube_chart_regions` (`US`, `RU`) and `youtube_chart_category` (28). `yt/chart.py`: the `videos.list` `chart=mostPopular` request — the region, the category, fifty a page, `fields` naming each video's id, its channel's id and the page token — paged while a token comes. `db/yt_chart.py` stores each answer as a reading. Verify: two regions, two readings; paging over four pages of fifty, 200 a region, as the probe of 2026-11-18 measured; an empty chart stored as empty; a reading is never rewritten.
+- [x] 3.2 `yt/refresh.py` reads the chart first, one region at a time, catching its API errors so a refused chart fails nothing else; `RefreshSummary` counts the readings. Verify: a refused region leaves the rest of the refresh completing; the pool-spent path still stops everything as before; the refresh's existing tests stay green.
+- [x] 3.3 Docs: `src/itgraph/README.md`'s refresh section and the chart; the `yt/chart.py`, `db/yt_chart.py` rows of `src/itgraph/CLAUDE.md`.
 
 ## 4. The scheduled lookup pass
 

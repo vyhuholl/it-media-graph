@@ -1,5 +1,11 @@
 """The refresh pass: fetch again what has grown stale.
 
+First, once a day, the chart: every configured region's
+``chart=mostPopular`` listing, read as one reading and stored raw. A
+region the API refuses is logged and skipped — one dead endpoint must
+not cost the payloads their refresh — while a spent pool stops
+everything, as it does everywhere here.
+
 Every channel whose payload is missing or older than the refresh age is
 asked for again, fifty to a call, whatever its status — rejected ones
 included, because five hundred channels cost ten units a cycle. A
@@ -44,6 +50,7 @@ from itgraph.config import settings
 from itgraph.db.models import YtCommand, YtPassOutcome
 from itgraph.db.session import Database
 from itgraph.db.yt_channels import due_for_refresh, mark_gone, store_payloads
+from itgraph.db.yt_chart import store_chart
 from itgraph.db.yt_quota import (
     PoolSpentError,
     QuotaError,
@@ -60,8 +67,8 @@ from itgraph.db.yt_videos import (
     store_readings,
 )
 from itgraph.derive.yt_videos import counters_of
+from itgraph.yt import chart, sections
 from itgraph.yt import client as yt_client
-from itgraph.yt import sections
 from itgraph.yt import videos as yt_videos
 from itgraph.yt.backfill import Clock
 from itgraph.yt.channels import IDS_PER_CALL, by_ids
@@ -90,6 +97,7 @@ class RefreshSummary:
     refreshed: int = 0
     gone: list[str] = field(default_factory=list)
     returned: list[str] = field(default_factory=list)
+    charts_read: int = 0
     sections_due: int = 0
     sections_read: int = 0
     past_due: int = 0
@@ -102,7 +110,10 @@ class RefreshSummary:
     attempted: bool = True
 
     def line(self) -> str:
-        line = (
+        line = ""
+        if settings.youtube_chart_regions:
+            line += f"charts read {self.charts_read}; "
+        line += (
             f"due {self.due}, refreshed {self.refreshed}, "
             f"gone {len(self.gone)}, back {len(self.returned)}; "
             f"featured lists due {self.sections_due}, "
@@ -152,35 +163,38 @@ async def refresh_channels(
         due = await due_for_refresh(session, older_than=older_than)
 
     summary = RefreshSummary(due=len(due))
-    for batch in batched(due, IDS_PER_CALL):
-        try:
-            found = await by_ids(youtube, batch)
-        except (QuotaError, YtError) as exc:
-            summary.stopped = exc
-            break
+    if settings.youtube_chart_regions:
+        await _read_charts(youtube, database, summary, moment)
+    if summary.stopped is None:
+        for batch in batched(due, IDS_PER_CALL):
+            try:
+                found = await by_ids(youtube, batch)
+            except (QuotaError, YtError) as exc:
+                summary.stopped = exc
+                break
 
-        fetched_at = datetime.now(UTC)
-        async with database.session() as session:
-            returned = await store_payloads(
-                session, found, fetched_at=fetched_at
-            )
-            gone = await mark_gone(
-                session,
-                [
-                    channel_id
-                    for channel_id in batch
-                    if channel_id not in found
-                ],
-                now=fetched_at,
-            )
+            fetched_at = datetime.now(UTC)
+            async with database.session() as session:
+                returned = await store_payloads(
+                    session, found, fetched_at=fetched_at
+                )
+                gone = await mark_gone(
+                    session,
+                    [
+                        channel_id
+                        for channel_id in batch
+                        if channel_id not in found
+                    ],
+                    now=fetched_at,
+                )
 
-        summary.refreshed += len(found)
-        summary.returned += returned
-        summary.gone += gone
-        for channel_id in gone:
-            logger.info("YouTube no longer returns %s", channel_id)
-        for channel_id in returned:
-            logger.info("YouTube returns %s again", channel_id)
+            summary.refreshed += len(found)
+            summary.returned += returned
+            summary.gone += gone
+            for channel_id in gone:
+                logger.info("YouTube no longer returns %s", channel_id)
+            for channel_id in returned:
+                logger.info("YouTube returns %s again", channel_id)
 
     if summary.stopped is None:
         await _refresh_sections(youtube, database, summary, sections_before)
@@ -234,6 +248,42 @@ async def run_refresh(
         )
     logger.info("refresh run: %s", summary.outcome.value)
     return summary
+
+
+async def _read_charts(
+    youtube: YouTube,
+    database: Database,
+    summary: RefreshSummary,
+    now: datetime,
+) -> None:
+    """Read each configured region's chart, at the head of the refresh.
+
+    A region the API refuses, or that it answers with no chart, is
+    logged and skipped: one dead region must not cost the payloads their
+    refresh, and the series shows the reading's age — that is the
+    operator's signal. A spent pool or an exhausted day stops everything,
+    as it does everywhere in this pass.
+    """
+    for region in settings.youtube_chart_regions:
+        try:
+            reading = await chart.read_chart(
+                youtube, region, category=settings.youtube_chart_category
+            )
+        except QuotaError as exc:
+            summary.stopped = exc
+            return
+        except YtError as exc:
+            logger.warning("the chart of %s was not read: %s", region, exc)
+            continue
+        if reading is None:
+            logger.warning("the chart of %s named no chart", region)
+            continue
+        async with database.session() as session:
+            await store_chart(
+                session, region, reading, fetched_at=datetime.now(UTC)
+            )
+        summary.charts_read += 1
+        logger.debug("read the chart of %s", region)
 
 
 async def _refresh_sections(

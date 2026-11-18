@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from typer.testing import CliRunner
 from ytfakes import (
     FakeYouTube,
@@ -34,6 +34,7 @@ from itgraph.db.models import (
     YtLang,
     YtRawChannel,
     YtRawChannelSections,
+    YtRawChart,
     YtRejectReason,
 )
 from itgraph.db.session import Database
@@ -42,7 +43,12 @@ from itgraph.db.yt_channels import (
     due_for_refresh,
     store_payloads,
 )
-from itgraph.db.yt_quota import QuotaExhaustedError, record_exhaustion
+from itgraph.db.yt_quota import (
+    PoolSpentError,
+    QuotaExhaustedError,
+    book,
+    record_exhaustion,
+)
 from itgraph.db.yt_sections import store_sections
 from itgraph.derive.yt_featured import featured_ids
 from itgraph.yt import client as yt_client
@@ -58,6 +64,14 @@ runner = CliRunner()
 @pytest.fixture(autouse=True)
 def key(monkeypatch: pytest.MonkeyPatch) -> None:
     use_key(monkeypatch)
+
+
+@pytest.fixture(autouse=True)
+def no_charts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No chart in this module's older tests: they assert on the requests
+    the refresh makes and on what it books, and the chart's own requests
+    would be theirs to count. The chart tests turn the regions back on."""
+    monkeypatch.setattr(settings, "youtube_chart_regions", ())
 
 
 @asynccontextmanager
@@ -787,6 +801,115 @@ async def test_a_restore_is_completed_by_a_refresh(database: Database) -> None:
         channel_id(1): [channel_id(9)],
         channel_id(2): [],
     }
+
+
+# --- the chart, read once a day at the head of the refresh ----------------
+
+
+async def _charts_stored(database: Database) -> dict[str, int]:
+    async with database.session() as session:
+        rows = await session.execute(
+            select(YtRawChart.region, func.count()).group_by(YtRawChart.region)
+        )
+        return {region: count for region, count in rows.tuples()}
+
+
+async def test_both_regions_charts_are_read_and_stored(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "youtube_chart_regions", ("US", "RU"))
+    await _seeds(database, [1])  # payloads fresh: only the charts are due
+    fake = FakeYouTube(
+        channel_resource(1),
+        charts={
+            "US": [(video_id(1), channel_id(5))],
+            "RU": [(video_id(2), channel_id(6))],
+        },
+    )
+
+    async with client(database, fake) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert summary.charts_read == 2
+    assert len(fake.calls("videos")) == 2
+    assert await _charts_stored(database) == {"RU": 1, "US": 1}
+    assert "charts read 2" in summary.line()
+    # The chart's requests are videos.list; no channel was due for its
+    # own payload, and the seed's list was read as usual.
+    assert summary.due == 0
+    assert summary.sections_read == 1
+
+
+async def test_a_refused_chart_fails_nothing_else(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`US` is refused with a client error; `RU` and the rest complete."""
+    monkeypatch.setattr(settings, "youtube_chart_regions", ("US", "RU"))
+    await _seeds(database, [1])
+    fake = FakeYouTube(
+        channel_resource(1),
+        sections={channel_id(1): sections_response([channel_id(5)])},
+        charts={"RU": [(video_id(2), channel_id(6))]},
+    )
+    real = fake.handler
+
+    def refuses_us(request: httpx.Request) -> httpx.Response:
+        params = request.url.params
+        if (
+            fake.method(request) == "videos"
+            and params.get("chart") == "mostPopular"
+            and params.get("regionCode") == "US"
+        ):
+            fake.requests.append(request)
+            return httpx.Response(
+                400, json=error_body(400, "invalidRegionCode")
+            )
+        return real(request)
+
+    async with youtube(
+        database,
+        YtCommand.REFRESH,
+        transport=httpx.MockTransport(refuses_us),
+        sleep=no_sleep,
+    ) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert summary.stopped is None
+    assert summary.charts_read == 1
+    # No US reading that day; RU's is there.
+    assert await _charts_stored(database) == {"RU": 1}
+    # The rest of the refresh completed: the seed's list was read.
+    assert summary.sections_read == 1
+
+
+async def test_a_spent_pool_stops_everything(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The chart's booking is refused: nothing else runs."""
+    monkeypatch.setattr(settings, "youtube_chart_regions", ("US",))
+    # A day of one unit, all of it the general pool's.
+    monkeypatch.setattr(settings, "youtube_daily_quota", 1)
+    monkeypatch.setattr(settings, "youtube_quota_margin", 0.0)
+    monkeypatch.setattr(settings, "youtube_watch_reserve", 0)
+    await _seeds(database, [1])
+    await book(
+        database,
+        command=YtCommand.REFRESH,
+        method="videos.list",
+        units=1,
+    )
+    fake = FakeYouTube(
+        channel_resource(1),
+        charts={"US": [(video_id(1), channel_id(5))]},
+    )
+
+    async with client(database, fake) as yt:
+        summary = await refresh_channels(yt, database)
+
+    assert isinstance(summary.stopped, PoolSpentError)
+    assert summary.charts_read == 0
+    assert fake.requests == []
+    assert await _charts_stored(database) == {}
 
 
 # --- late readings: the counts of past uploads, daily then weekly ----------
