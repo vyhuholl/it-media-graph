@@ -55,4 +55,4 @@ Rules for every task:
 ## 9. Docs and release
 
 - [x] 9.1 `src/itgraph/README.md`: the selection, the card, the review and the application. `src/itgraph/CLAUDE.md`: the new modules. `deploy/runbook.md`: the three series and the alerts. `docs/PLAN.md`: "Expanding the seed set".
-- [ ] 9.2 (operator) A release of its own, with `yt-rising-candidates`, test environment first; after the production deploy, watch the first 11:00 selection, the cards in their topics, and the first pressed seed's walk.
+- [x] 9.2 (operator) A release of its own, with `yt-rising-candidates`, test environment first; after the production deploy, watch the first 11:00 selection, the cards in their topics, and the first pressed seed's walk.

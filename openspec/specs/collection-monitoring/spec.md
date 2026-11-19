@@ -78,6 +78,9 @@ Every series SHALL be worked out at scrape time from durable state in the databa
 | `itgraph_telegram_rising_offers_computed_timestamp_seconds` | gauge | when the newest day's selection of rising channels was computed, an empty one included; 0 when none |
 | `itgraph_telegram_rising_offers_oldest_undelivered_seconds` | gauge | how long the oldest rising offer not yet delivered has waited since it was offered; 0 when none |
 | `itgraph_telegram_rising_decisions_oldest_unapplied_seconds` | gauge | how long the oldest decision on a rising offer has waited to be applied since it was taken; 0 when none |
+| `itgraph_youtube_rising_offers_computed_timestamp_seconds` | gauge | when the newest day's selection of YouTube's rising channels was computed, an empty one included; 0 when none |
+| `itgraph_youtube_rising_offers_oldest_undelivered_seconds` | gauge | how long the oldest YouTube rising offer not yet delivered has waited since it was offered; 0 when none |
+| `itgraph_youtube_rising_decisions_oldest_unapplied_seconds` | gauge | how long the oldest decision on a YouTube rising offer has waited to be applied since it was taken; 0 when none |
 
 #### Scenario: Quiet hours
 
@@ -185,6 +188,14 @@ Every series SHALL be worked out at scrape time from durable state in the databa
 - **AND** `itgraph_telegram_rising_offers_oldest_undelivered_seconds` is how long ago yesterday's selection was computed
 - **AND** `itgraph_telegram_rising_decisions_oldest_unapplied_seconds` is about 3600
 
+#### Scenario: YouTube's rising selection and its decisions
+
+- **GIVEN** today's YouTube selection computed at 11:00 with nothing offered, an offer of yesterday's not delivered, and a decision taken an hour ago and not applied
+- **WHEN** a client scrapes
+- **THEN** `itgraph_youtube_rising_offers_computed_timestamp_seconds` is today's 11:00
+- **AND** `itgraph_youtube_rising_offers_oldest_undelivered_seconds` is how long ago yesterday's selection was computed
+- **AND** `itgraph_youtube_rising_decisions_oldest_unapplied_seconds` is about 3600
+
 ### Requirement: Metrics Carry Nothing YouTube Said
 
 No series SHALL carry a title, handle, description, channel id, video id or statistic read from YouTube. What the exporter reads of YouTube's tables SHALL be limited to when each row was fetched, enforced by the database role it connects as.
@@ -207,7 +218,7 @@ No series SHALL carry a title, handle, description, channel id, video id or stat
 
 ### Requirement: The Exporter Reads Only Moments And Outcomes
 
-Of a YouTube alert, the exporter SHALL read only its moments and delivery state; of a baseline run of either platform, only when it completed and how many channels it counted; of a YouTube weekly list, only its language and its moments, and of a Telegram weekly list only its moments, and nothing of either's entries or second wind entries; of a refresh's record, only when it ended and how; of a resolution's record, only when it was made and by which command; of Telegram's rising selection, only when a day was computed and when each offer was offered, delivered, decided and applied; of a chart reading, only its region and moment; of a scheduled lookup run, only its moments. Each limit SHALL be enforced by the database role it connects as.
+Of a YouTube alert, the exporter SHALL read only its moments and delivery state; of a baseline run of either platform, only when it completed and how many channels it counted; of a YouTube weekly list, only its language and its moments, and of a Telegram weekly list only its moments, and nothing of either's entries or second wind entries; of a refresh's record, only when it ended and how; of a resolution's record, only when it was made and by which command; of either platform's rising selection, only when a day was computed and when each offer was offered, delivered, decided and applied; of a chart reading, only its region and moment; of a scheduled lookup run, only its moments. Each limit SHALL be enforced by the database role it connects as.
 
 #### Scenario: The role cannot read what an alert is about
 
