@@ -1,29 +1,48 @@
 """`itgraph yt offer` end to end, against a `_test` database.
 
-Offline by construction: the selection reads only what is stored, needs
-no key and opens no client. Ids and names are fake and spelled so.
+Offline by default: the selection ranks what is stored and, with no
+key, opens no client. Where a key is configured, the one buy call rides
+a fake API. Ids and names are fake and spelled so.
 """
 
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import httpx
 import pytest
 from sqlalchemy import text
 from tglinks import post, tg_channel, tg_posts
 from typer.testing import CliRunner
-from ytfakes import channel_id, video_id, video_resource
+from ytfakes import (
+    FakeYouTube,
+    channel_id,
+    channel_resource,
+    error_body,
+    no_sleep,
+    use_key,
+    video_id,
+    video_resource,
+)
 from ytinventory import channels
 
 from itgraph.cli import app
 from itgraph.config import settings
 from itgraph.db import session as db_session
-from itgraph.db.models import ChannelStatus, YtDiscoveryPath, YtLookupKind
+from itgraph.db.models import (
+    ChannelStatus,
+    YtCommand,
+    YtDiscoveryPath,
+    YtLookupKind,
+)
 from itgraph.db.session import Database
 from itgraph.db.yt_chart import store_chart
 from itgraph.db.yt_lookups import store_lookups
 from itgraph.db.yt_videos import VideoWrite, store_videos
+from itgraph.yt import client as yt_client
+from itgraph.yt.client import youtube
 
 NOW = datetime.now(UTC)
 TODAY = NOW.astimezone(ZoneInfo("Europe/Moscow")).date()
@@ -246,3 +265,90 @@ def test_the_logs_of_a_selection_name_ids_and_counts_only(
     logged = "\n".join(entry.getMessage() for entry in caplog.records)
     for said in ("Fake", "fakehandle", "youtube.com/channel", "youtu.be"):
         assert said not in logged, said
+
+
+# --- the buy ------------------------------------------------------------
+
+
+async def _payloads(url: str) -> dict[str, dict]:
+    database = Database(url)
+    try:
+        async with database.session() as session:
+            rows = await session.execute(
+                text("SELECT channel_id, payload FROM yt_raw_channels")
+            )
+            return {channel: payload for channel, payload in rows}
+    finally:
+        await database.dispose()
+
+
+def _fake_api(monkeypatch: pytest.MonkeyPatch, fake: FakeYouTube) -> None:
+    """`youtube()` over the fake, whatever the command of a call is."""
+
+    @asynccontextmanager
+    async def api(database: Database, command: YtCommand, **_: object):
+        async with youtube(
+            database, command, transport=fake.transport(), sleep=no_sleep
+        ) as client:
+            yield client
+
+    monkeypatch.setattr(yt_client, "youtube", api)
+
+
+def test_the_selection_buys_the_offered_payloads_with_the_day(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One call for the whole day, and the payloads land in the same
+    transaction as the day — before the bot can claim an offer, which
+    is the point of buying them there."""
+    asyncio.run(_arrange(database_url))
+    use_key(monkeypatch)
+    fake = FakeYouTube(
+        channel_resource(TARGET, title="Fake Rising <Co>"),
+        channel_resource(CHARTED, title="Fake Chart Top"),
+    )
+    _fake_api(monkeypatch, fake)
+
+    result = runner.invoke(app, ["yt", "offer"])
+
+    assert result.exit_code == 0, result.output
+    # One call, both channels of the day.
+    [asked] = fake.calls("channels")
+    assert set(asked["id"].split(",")) == {
+        channel_id(TARGET),
+        channel_id(CHARTED),
+    }
+    payloads = asyncio.run(_payloads(database_url))
+    assert payloads[channel_id(TARGET)]["snippet"]["title"] == (
+        "Fake Rising <Co>"
+    )
+    assert payloads[channel_id(CHARTED)]["snippet"]["title"] == (
+        "Fake Chart Top"
+    )
+    # The day is the day either way.
+    assert len(asyncio.run(_offers(database_url))) == 2
+
+
+def test_a_refused_buy_loses_nothing_but_the_titles(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The call is refused three times over: the day and its records
+    are stored as ever, and the cards link by id until the refresh."""
+    asyncio.run(_arrange(database_url))
+    use_key(monkeypatch)
+    fake = FakeYouTube()
+    fake.queued = [
+        httpx.Response(500, json=error_body(500, "backendError"))
+    ] * 3
+    _fake_api(monkeypatch, fake)
+
+    result = runner.invoke(app, ["yt", "offer"])
+
+    assert result.exit_code == 0, result.output
+    assert "2 offered, 0 left for a later day" in result.output
+    assert len(asyncio.run(_offers(database_url))) == 2
+    # The arrange's own seed keeps its payload; the offered channels
+    # gained none.
+    payloads = asyncio.run(_payloads(database_url))
+    assert channel_id(TARGET) not in payloads
+    assert channel_id(CHARTED) not in payloads

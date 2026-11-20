@@ -13,6 +13,7 @@ from ytfakes import channel_id
 
 from itgraph.derive.yt_rising import (
     ChartChannel,
+    ChartEntry,
     FeaturedReadings,
     LinkReference,
     YtRising,
@@ -72,8 +73,10 @@ def _readings(
     )
 
 
-def _chart(channel: int, video: int) -> tuple[str, str]:
-    return (f"fakechartv{video:03d}", channel_id(channel))
+def _chart(channel: int, video: int) -> ChartEntry:
+    return ChartEntry(
+        video_id=f"fakechartv{video:03d}", channel_id=channel_id(channel)
+    )
 
 
 # --- what counts as evidence ------------------------------------------

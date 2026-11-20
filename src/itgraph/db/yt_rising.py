@@ -48,12 +48,13 @@ from itgraph.derive.tg_youtube import (
 )
 from itgraph.derive.yt_featured import featured_ids
 from itgraph.derive.yt_rising import (
+    ChartEntry,
     FeaturedReadings,
     LinkReference,
     YtRisingRows,
 )
 
-__all__ = ["chart_pairs", "load_yt_rising_rows", "moscow_day_start"]
+__all__ = ["chart_items", "load_yt_rising_rows", "moscow_day_start"]
 
 logger = logging.getLogger(__name__)
 
@@ -71,10 +72,9 @@ def moscow_day_start(moment: datetime) -> datetime:
     )
 
 
-def chart_pairs(payload: Mapping[str, Any]) -> list[tuple[str, str]]:
-    """A chart reading's payload as (video id, channel id) pairs, in
-    the reading's order."""
-    pairs: list[tuple[str, str]] = []
+def chart_items(payload: Mapping[str, Any]) -> list[ChartEntry]:
+    """A chart reading's payload as its videos, in the reading's order."""
+    entries: list[ChartEntry] = []
     items = payload.get("items")
     for item in items if isinstance(items, list) else ():
         if not isinstance(item, dict):
@@ -84,9 +84,16 @@ def chart_pairs(payload: Mapping[str, Any]) -> list[tuple[str, str]]:
         channel = (
             snippet.get("channelId") if isinstance(snippet, dict) else None
         )
+        title = snippet.get("title") if isinstance(snippet, dict) else None
         if isinstance(video, str) and isinstance(channel, str):
-            pairs.append((video, channel))
-    return pairs
+            entries.append(
+                ChartEntry(
+                    video_id=video,
+                    channel_id=channel,
+                    title=title if isinstance(title, str) else None,
+                )
+            )
+    return entries
 
 
 async def _telegram_evidence(
@@ -232,7 +239,7 @@ async def load_yt_rising_rows(
     featured = await _two_newest_readings(session, yt_families)
     out_of_date = await seeds_without_list(session, now=moment)
     charts = {
-        region: chart_pairs(payload)
+        region: chart_items(payload)
         for region, payload in (
             await charts_of_the_day(
                 session,

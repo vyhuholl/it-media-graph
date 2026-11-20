@@ -9,10 +9,11 @@ Telegram's and the data a button carries back into a press.
 
 A card links the channel — by its handle when a stored payload carries
 one, by its id otherwise — and forces the preview to that link, which
-Telegram renders with the channel's own page: the recognition a
-day-one card needs, before any payload exists to give a title. A chart
-offer's card links the video that charted the channel too. Everything
-from a channel or a video is escaped.
+Telegram renders with the channel's own page: the recognition a card
+needs when it is sent before any payload has been fetched to give a
+title. A chart offer's card links the video that charted the channel
+too, named by its title when the day's reading holds one and by its id
+otherwise. Everything from a channel or a video is escaped.
 
 A press is `yv:<offer id>:<press>` — at most 64 bytes, as the Bot API
 requires. Seed opens the kinds, and then — only while the offer's
@@ -39,6 +40,7 @@ from itgraph.db.models import (
     YtLang,
     YtRejectReason,
 )
+from itgraph.derive.yt_rising import ChartEntry
 
 __all__ = [
     "BACK",
@@ -394,8 +396,9 @@ class ChartCardView:
     region: str
     position: int
     # The video that charted the channel, if the day's reading still
-    # holds it.
-    video_id: str | None
+    # holds it; its title is None in a reading stored before titles
+    # were asked for.
+    video: ChartEntry | None
 
 
 def render_link_card(
@@ -429,7 +432,8 @@ def render_chart_card(view: ChartCardView) -> str:
         f"{_named(view.channel, view.channel_id)}"
     )
     lines = [head]
-    if view.video_id is not None:
-        url = html.escape(video_link(view.video_id))
-        lines.append(f'🎬 <a href="{url}">{_escape(view.video_id)}</a>')
+    if view.video is not None:
+        name = _escape(view.video.title or view.video.video_id)
+        url = html.escape(video_link(view.video.video_id))
+        lines.append(f'🎬 <a href="{url}">{name}</a>')
     return "\n".join(lines)

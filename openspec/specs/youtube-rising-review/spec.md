@@ -41,14 +41,27 @@ The system SHALL select, once a day, the highest-ranked rising channels that wer
 
 ### Requirement: An Offered Channel Becomes A Candidate Record
 
-The selection SHALL create, for each channel it offers, a record with status `candidate`, unreviewed and without API data, if the inventory holds none. A chart offer's record SHALL carry the discovery source `chart`; a link offer's the source of its strongest evidence, a tie going `telegram`, then `mention`, then `featured`. The selection SHALL make no request to YouTube.
+The selection SHALL create, for each channel it offers, a record with status `candidate`, unreviewed, if the inventory holds none. A chart offer's record SHALL carry the discovery source `chart`; a link offer's the source of its strongest evidence, a tie going `telegram`, then `mention`, then `featured`. Where a YouTube key is configured, the selection SHALL buy the offered channels' payloads with one `channels.list` call, stored in the same transaction as the day and before any offer can be claimed, so a card is titled the day it is sent; where no key is configured — the test environment's selection — it SHALL make no request, and the records are created without API data.
 
 #### Scenario: A record without data
 
-- **GIVEN** a link offer of a channel no record holds
+- **GIVEN** a link offer of a channel no record holds, in an environment with no key
 - **WHEN** the day's selection is stored
 - **THEN** a `candidate` record exists for it, with the discovery source of its strongest evidence
 - **AND** no request was made
+
+#### Scenario: The payloads are bought with the day
+
+- **GIVEN** an environment with a key configured
+- **WHEN** the day's selection is stored
+- **THEN** each offered channel's record exists with its payload, written by the same transaction as the day
+- **AND** the call was booked under the offer command, against the general pool
+
+#### Scenario: A refused buy loses nothing but the titles
+
+- **GIVEN** an environment with a key, and the buy call refused by YouTube or the ledger
+- **WHEN** the day's selection is stored
+- **THEN** the day and its candidate records are stored as ever, and the cards link by id until the refresh fetches the payloads
 
 #### Scenario: A channel that gained a record another way
 
@@ -58,7 +71,7 @@ The selection SHALL create, for each channel it offers, a record with status `ca
 
 #### Scenario: The payload arrives with the refresh
 
-- **GIVEN** an offered channel's record, created without API data
+- **GIVEN** an offered channel's record with no payload — no key configured, or a refused buy
 - **WHEN** `itgraph yt refresh` next runs
 - **THEN** its payload is fetched, and it can be exported for review
 
@@ -78,9 +91,9 @@ The system SHALL offer a channel at most once, whatever happens to its offer. A 
 - **WHEN** that day's selection is computed
 - **THEN** it is not offered again
 
-### Requirement: Selecting Reads Only Collected Data
+### Requirement: Selecting Ranks Only Collected Data
 
-Computing a day's selection SHALL read only what is stored: it SHALL make no request to YouTube, need no API key, and write nothing but the day's selection and the records it creates.
+Computing a day's selection SHALL rank from what is stored alone: the ranking itself SHALL make no request to YouTube and need no API key. The selection's one request SHALL be the buy of the offered channels' payloads, and only where a key is configured. It SHALL write nothing but the day's selection, the records it creates, and those payloads.
 
 #### Scenario: Without a key
 
@@ -90,7 +103,7 @@ Computing a day's selection SHALL read only what is stored: it SHALL make no req
 
 ### Requirement: An Offer Is A Card In The Topic Of Its Language
 
-The bot SHALL send each offer as one message to the YouTube chat: a chart offer of `US` to the English topic and of `RU` to the Russian; a link offer to the topic of its payload's `defaultLanguage` when that is `en` or `ru`, and otherwise to the English topic, the card marking the language unknown or other than these two. The card SHALL link the channel — by its handle when a stored payload carries one, by its id otherwise — and show its title when a stored payload holds one; a link offer's card SHALL name the families that referred to it in the window and before it, and the first reference in the window; a chart offer's card SHALL name the region, the position, and link the charting video. Everything from a channel or a video SHALL be escaped, and the link preview SHALL be forced to what the card links first.
+The bot SHALL send each offer as one message to the YouTube chat: a chart offer of `US` to the English topic and of `RU` to the Russian; a link offer to the topic of its payload's `defaultLanguage` when that is `en` or `ru`, and otherwise to the English topic, the card marking the language unknown or other than these two. The card SHALL link the channel — by its handle when a stored payload carries one, by its id otherwise — and show its title when a stored payload holds one; a link offer's card SHALL name the families that referred to it in the window and before it, and the first reference in the window; a chart offer's card SHALL name the region, the position, and link the charting video, named by its title when the day's reading holds one and by its id otherwise. Everything from a channel or a video SHALL be escaped, and the link preview SHALL be forced to what the card links first.
 
 #### Scenario: A link offer of a known language
 
@@ -106,9 +119,9 @@ The bot SHALL send each offer as one message to the YouTube chat: a chart offer 
 
 #### Scenario: A chart offer
 
-- **GIVEN** a chart offer of `RU` at position four
+- **GIVEN** a chart offer of `RU` at position four, whose day's reading holds the charting video's title
 - **WHEN** the bot sends it
-- **THEN** the card goes to the Russian topic, names the region and position, and links the charting video
+- **THEN** the card goes to the Russian topic, names the region and position, and links the charting video by its title
 
 #### Scenario: A title that looks like markup
 

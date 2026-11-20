@@ -1,8 +1,8 @@
 """The chart reading: the request, the paging, and where readings live.
 
-The request asks for each video's id, its channel's id and the token
-for the next page, and nothing else; the pages gather into one reading
-in chart order; a reading is appended, never rewritten.
+The request asks for each video's id, its title, its channel's id and
+the token for the next page, and nothing else; the pages gather into
+one reading in chart order; a reading is appended, never rewritten.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -56,7 +56,7 @@ def _chart_of(count: int, channel_offset: int = 0) -> list[tuple[str, str]]:
 # --- the request -------------------------------------------------------
 
 
-async def test_the_chart_is_asked_for_ids_and_the_token_only(
+async def test_the_chart_is_asked_for_ids_titles_and_the_token_only(
     database: Database,
 ) -> None:
     fake = FakeYouTube(charts={"US": _chart_of(3)})
@@ -66,14 +66,14 @@ async def test_the_chart_is_asked_for_ids_and_the_token_only(
     [asked] = fake.calls("videos")
     assert asked == {
         "part": "snippet",
-        "fields": "nextPageToken,items(id,snippet/channelId)",
+        "fields": "nextPageToken,items(id,snippet(channelId,title))",
         "chart": "mostPopular",
         "regionCode": "US",
         "videoCategoryId": "28",
         "maxResults": "50",
     }
-    # No title, description, counts, category or publication time.
-    for field in ("title", "description", "statistics", "publishedAt"):
+    # No description, counts, category or publication time.
+    for field in ("description", "statistics", "publishedAt"):
         assert field not in asked["part"] + asked["fields"]
 
 
@@ -100,6 +100,9 @@ async def test_the_pages_gather_into_one_reading_in_order(
     assert [item["snippet"]["channelId"] for item in items] == [
         channel_id(i) for i in range(200)
     ]
+    # Asked for, so carried: each video's title travels with the
+    # reading, for a card to name the charting video by.
+    assert items[0]["snippet"]["title"] == "Fake video fakevideo0000"
     # The tokens are spent, not kept: nothing of the paging survives.
     assert "nextPageToken" not in reading
 

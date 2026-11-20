@@ -2858,12 +2858,14 @@ def yt_offer(
     `youtube_rising_link_offers_per_day` of the links and
     `youtube_rising_chart_offers_per_region` of each region's chart, a
     channel both hold taken by the links — stored for the bot to send,
-    each offered channel becoming a candidate record without API data;
-    the refresh fetches that. An empty day is stored too. A day is
-    selected once. Makes no request, needs no API key and takes no
-    lease, so it runs in every environment. Prints counts only, since
-    the daily job's output is kept; `--preview` names the channels by
-    id and is for a person at a terminal.
+    each offered channel becoming a candidate record. Where a key is
+    configured, one call buys their payloads with the day, so their
+    cards are titled the day they are sent; where none is, the refresh
+    fetches those. An empty day is stored too. A day is selected once.
+    Takes no lease, and without a key makes no request, so it runs in
+    every environment. Prints counts only, since the daily job's output
+    is kept; `--preview` names the channels by id and is for a person
+    at a terminal.
     """
     from itgraph.db.session import Database
     from itgraph.derive.yt_offers import run_offer

@@ -34,7 +34,8 @@ from itgraph.db.models import (
 )
 from itgraph.db.yt_channels import Review, create_channels, mark_channel
 from itgraph.db.yt_chart import charts_of_the_day
-from itgraph.db.yt_rising import chart_pairs
+from itgraph.db.yt_rising import chart_items
+from itgraph.derive.yt_rising import ChartEntry
 
 __all__ = [
     "DAY_KEY",
@@ -160,9 +161,10 @@ async def store_day(
 class PendingOffer:
     """An offer to send, with its channel as it stands now.
 
-    ``payload`` is the channel's stored payload, or ``None`` before the
-    refresh has fetched one: a day-one card links by id and marks the
-    language unknown.
+    ``payload`` is the channel's stored payload — bought with the day
+    where a key was configured — or ``None`` when none was and the
+    refresh has not fetched one since: such a card links by id and
+    marks the language unknown.
     """
 
     id: int
@@ -260,16 +262,17 @@ async def charting_video(
     *,
     region: str,
     day_start: datetime,
-) -> str | None:
+) -> ChartEntry | None:
     """The video that charted the channel, read from the stored reading.
 
     The channel's first in the day's reading of its region — the chart's
-    own order — or ``None`` if no reading of that day holds it.
+    own order — or ``None`` if no reading of that day holds it. Its
+    title is ``None`` in a reading stored before titles were asked for.
     """
     charts = await charts_of_the_day(session, (region,), day_start=day_start)
-    for video_id, charted in chart_pairs(charts.get(region, {})):
-        if charted == channel_id:
-            return video_id
+    for entry in chart_items(charts.get(region, {})):
+        if entry.channel_id == channel_id:
+            return entry
     return None
 
 

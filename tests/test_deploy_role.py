@@ -422,7 +422,7 @@ SECRET_KEYS = {
         ("CronJob", "itgraph-yt-weekly", set()),
         ("CronJob", "itgraph-weekly", set()),
         ("CronJob", "itgraph-offer", set()),
-        ("CronJob", "itgraph-yt-offer", set()),
+        ("CronJob", "itgraph-yt-offer", {"YOUTUBE_API_KEY"}),
         ("CronJob", "itgraph-backup", {"B2_APPLICATION_KEY"}),
         ("CronJob", "itgraph-yt-watch", {"YOUTUBE_API_KEY"}),
         ("CronJob", "itgraph-yt-refresh", {"YOUTUBE_API_KEY"}),
@@ -560,9 +560,9 @@ def test_telegram_s_rising_selection_runs_in_every_environment(
 def test_youtube_s_rising_selection_runs_in_every_environment(
     rendered: dict[str, dict[str, Objects]], environment: str
 ) -> None:
-    """Collecting or not, key or not: it reads collected data alone and
-    asks YouTube for nothing, so a test environment offers its restored
-    copy into its own chat."""
+    """Collecting or not, key or not: the ranking reads collected data
+    alone, so a test environment offers its restored copy into its own
+    chat."""
     objects = everything(rendered[environment])
     job = named(objects, "CronJob", "itgraph-yt-offer")
     spec = job["spec"]["jobTemplate"]["spec"]["template"]["spec"]
@@ -570,10 +570,36 @@ def test_youtube_s_rising_selection_runs_in_every_environment(
     assert container["args"] == ["yt", "offer"]
     assert job["spec"]["schedule"] == "0 11 * * *"
     assert job["spec"]["timeZone"] == "Europe/Moscow"
-    keys = keys_of(objects, "CronJob", "itgraph-yt-offer")
-    assert keys & SECRET_KEYS == set()
-    assert "DATABASE_URL" in keys
+    assert "DATABASE_URL" in keys_of(objects, "CronJob", "itgraph-yt-offer")
     assert not [m for m in spec.get("volumes", []) if "session" in m["name"]]
+
+
+def test_youtube_s_selection_buys_payloads_where_a_key_is(
+    rendered: dict[str, dict[str, Objects]],
+) -> None:
+    """The one call that titles the day's cards: where a key is
+    configured the selection reaches YouTube for the offered channels'
+    payloads."""
+    objects = everything(rendered["a"])
+    job = named(objects, "CronJob", "itgraph-yt-offer")
+    assert keys_of(objects, "CronJob", "itgraph-yt-offer") & SECRET_KEYS == {
+        "YOUTUBE_API_KEY"
+    }
+    labels = job["spec"]["jobTemplate"]["spec"]["template"]["metadata"][
+        "labels"
+    ]
+    assert {k for k in labels if k.startswith("itgraph/")} == {
+        "itgraph/database",
+        "itgraph/internet",
+    }
+
+
+def test_youtube_s_selection_without_a_key_has_no_way_out(
+    rendered: dict[str, dict[str, Objects]],
+) -> None:
+    """A test environment's selection holds no key and asks YouTube for
+    nothing, so it has no way out either."""
+    job = named(everything(rendered["b"]), "CronJob", "itgraph-yt-offer")
     labels = job["spec"]["jobTemplate"]["spec"]["template"]["metadata"][
         "labels"
     ]
@@ -619,7 +645,9 @@ REACH = {
     "itgraph-yt-weekly": {"itgraph/database"},
     "itgraph-weekly": {"itgraph/database"},
     "itgraph-offer": {"itgraph/database"},
-    "itgraph-yt-offer": {"itgraph/database"},
+    # Where a key is configured, the one call that buys the day's
+    # payloads rides with the selection.
+    "itgraph-yt-offer": {"itgraph/database", "itgraph/internet"},
     "itgraph-backup": {"itgraph/database", "itgraph/internet"},
     "itgraph-yt-watch": {"itgraph/database", "itgraph/internet"},
     "itgraph-yt-refresh": {"itgraph/database", "itgraph/internet"},

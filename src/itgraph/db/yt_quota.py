@@ -135,6 +135,9 @@ POOL_OF: Mapping[YtCommand, YtQuotaPool] = {
     YtCommand.TG_LOOKUP: YtQuotaPool.GENERAL,
     YtCommand.MENTION_LOOKUP: YtQuotaPool.GENERAL,
     YtCommand.SEARCH: YtQuotaPool.SEARCH,
+    # One call a day at most: whatever it costs comes out of the same
+    # pool the refresh draws from, not the loop's reserve.
+    YtCommand.OFFER: YtQuotaPool.GENERAL,
 }
 
 # Which of Google's buckets each pool is carved out of. Pools are

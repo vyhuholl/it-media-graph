@@ -106,7 +106,10 @@ async def arrange(
                 "items": [
                     {
                         "id": video or VIDEO,
-                        "snippet": {"channelId": channels[0]},
+                        "snippet": {
+                            "channelId": channels[0],
+                            "title": "Fake Chart Top",
+                        },
                     }
                 ]
             },
@@ -260,12 +263,16 @@ async def test_chart_offers_go_to_their_regions_topics(
     assert "📈 Чарт US, позиция 1" in us_card
     assert f"https://www.youtube.com/channel/{CHARTED_US}" in us_card
     assert (
-        f'<a href="https://www.youtube.com/watch?v={VIDEO}">{VIDEO}</a>'
-        in us_card
+        f'<a href="https://www.youtube.com/watch?v={VIDEO}">'
+        "Fake Chart Top</a>" in us_card
     )
     ru_card = sender.sent[1][0]
     assert "📈 Чарт RU, позиция 2" in ru_card
-    assert "fakeVid0002" in ru_card
+    # RU's reading holds no title: the video is named by its id.
+    assert (
+        '<a href="https://www.youtube.com/watch?v=fakeVid0002">'
+        "fakeVid0002</a>" in ru_card
+    )
     # No language to ask about on a chart offer's card.
     assert "Язык" not in us_card
     for _, _, _, keyboard in sender.sent:

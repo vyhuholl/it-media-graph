@@ -3,13 +3,15 @@
 One unit a page, fifty a page, paged while the answer offers a token —
 the probe of 2026-11-18 measured four pages of fifty, 200 videos a
 region, for each configured region at category 28. Asked for, and
-nothing else: each video's id, its channel's id and the token for the
-next page. The Trending page left YouTube's interface in July 2025; the
-endpoint outlived it.
+nothing else: each video's id, its title, its channel's id and the token
+for the next page. The Trending page left YouTube's interface in July
+2025; the endpoint outlived it.
 
 The pages are gathered into one reading — the videos in chart order,
 the position being the order — and nothing of the paging survives the
-gathering: the reading holds ids only.
+gathering: the reading holds ids and titles only. A title is what a
+chart offer's card names the charting video by; a reading stored before
+titles were asked for holds none, and the card falls back to the id.
 """
 
 from typing import Any
@@ -21,7 +23,7 @@ __all__ = ["FIELDS", "PAGE", "PART", "read_chart"]
 Resource = dict[str, Any]
 
 PART = "snippet"
-FIELDS = "nextPageToken,items(id,snippet/channelId)"
+FIELDS = "nextPageToken,items(id,snippet(channelId,title))"
 PAGE = 50
 
 

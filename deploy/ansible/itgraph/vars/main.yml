@@ -383,22 +383,29 @@ __itgraph_cronjobs_always:
         resources: "{{ __itgraph_job_resources }}"
     mounts: []
     volumes: []
-  # YouTube's rising channels, a day's selection for the bot to send: read
-  # from collected data alone and asking YouTube for nothing, so it runs in
-  # every environment, into that environment's own chat — no key, no
-  # session, the configuration and the database's URL alone. Counts only in
-  # its output, never `--preview`.
+  # YouTube's rising channels, a day's selection for the bot to send:
+  # ranked from collected data alone, so it runs in every environment,
+  # into that environment's own chat. Where a key is configured the one
+  # call that buys the offered channels' payloads rides with it — the
+  # cards are titled the day they are sent — so the key and the
+  # internet come along there and nowhere else; a test environment's
+  # selection holds neither and asks for nothing. Counts only in its
+  # output, never `--preview`.
   - name: itgraph-yt-offer
     schedule: "{{ itgraph_yt_offer_schedule }}"
     # Thirteen hours, as Telegram's: a missed run starts when the host is
     # back, the same day.
     starting_deadline: 46800
     active_deadline: 1800
-    labels: "{{ __itgraph_may_reach_database }}"
+    labels: >-
+      {{ __itgraph_may_reach_database
+         | combine(__itgraph_may_reach_internet if __itgraph_has_youtube | bool else {}) }}
     containers:
       - name: itgraph
         args: [yt, offer]
-        env_from: ["{{ __itgraph_from_config }}", "{{ __itgraph_from_database }}"]
+        env_from: >-
+          {{ [__itgraph_from_config, __itgraph_from_database]
+             + ([__itgraph_from_youtube] if __itgraph_has_youtube | bool else []) }}
         resources: "{{ __itgraph_job_resources }}"
     mounts: []
     volumes: []

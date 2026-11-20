@@ -32,6 +32,7 @@ from datetime import datetime, timedelta
 
 __all__ = [
     "ChartChannel",
+    "ChartEntry",
     "FeaturedReadings",
     "LinkReference",
     "RisingChannel",
@@ -62,6 +63,19 @@ class LinkReference:
 
 
 @dataclass(frozen=True, slots=True)
+class ChartEntry:
+    """One video of a chart reading, at its place in the order.
+
+    ``title`` is ``None`` in a reading stored before titles were asked
+    for; a card names such a video by its id.
+    """
+
+    video_id: str
+    channel_id: str
+    title: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class FeaturedReadings:
     """A seed's two newest featured readings, as the loader read them.
 
@@ -80,9 +94,9 @@ class FeaturedReadings:
 class YtRisingRows:
     """Everything both rankings read, as the loader read it.
 
-    ``charts`` holds, per region, the day's reading as (video id,
-    channel id) pairs in chart order; a configured region with no
-    reading that day is absent from it and is said by the ranking.
+    ``charts`` holds, per region, the day's reading as its videos in
+    chart order; a configured region with no reading that day is absent
+    from it and is said by the ranking.
     """
 
     inventory: frozenset[str]
@@ -90,9 +104,7 @@ class YtRisingRows:
     references: tuple[LinkReference, ...] = ()
     featured: tuple[FeaturedReadings, ...] = ()
     chart_regions: tuple[str, ...] = ()
-    charts: Mapping[str, Sequence[tuple[str, str]]] = field(
-        default_factory=dict
-    )
+    charts: Mapping[str, Sequence[ChartEntry]] = field(default_factory=dict)
     awaiting_lookup: int = 0
     not_found: int = 0
     lists_out_of_date: int = 0
@@ -239,13 +251,15 @@ def rank_yt_rising(
         # A channel that charts with two videos ranks once, at the
         # position of its first.
         seen: set[str] = set()
-        for position, (_, channel_id) in enumerate(reading, start=1):
-            if channel_id in rows.inventory or channel_id in seen:
+        for position, entry in enumerate(reading, start=1):
+            if entry.channel_id in rows.inventory or entry.channel_id in seen:
                 continue
-            seen.add(channel_id)
+            seen.add(entry.channel_id)
             rising.chart.append(
                 ChartChannel(
-                    channel_id=channel_id, region=region, position=position
+                    channel_id=entry.channel_id,
+                    region=region,
+                    position=position,
                 )
             )
     return rising

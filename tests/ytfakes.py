@@ -315,9 +315,22 @@ class FakeYouTube:
                 token = params.get("pageToken")
                 start = int(token.removeprefix(PAGE_TOKEN)) if token else 0
                 page = found[start : start + limit]
+                asked = params.get("fields", "")
                 chart: dict[str, Any] = {
                     "items": [
-                        {"id": video, "snippet": {"channelId": channel}}
+                        {
+                            "id": video,
+                            # As the real API filters by `fields`: a
+                            # title comes back only when asked for.
+                            "snippet": {
+                                "channelId": channel,
+                                **(
+                                    {"title": f"Fake video {video}"}
+                                    if "title" in asked
+                                    else {}
+                                ),
+                            },
+                        }
                         for video, channel in page
                     ]
                 }

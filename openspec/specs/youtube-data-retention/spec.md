@@ -431,10 +431,10 @@ The system SHALL store data read from the API in one place: a channel's and a vi
 - **WHEN** a seed's sections are read again
 - **THEN** a new reading is appended, and the readings before it are unchanged
 
-#### Scenario: A chart reading holds ids only
+#### Scenario: A chart reading holds ids and titles only
 
 - **WHEN** a chart reading is stored
-- **THEN** it holds each video's id, its channel's id and its position, and nothing else
+- **THEN** it holds each video's id, its title, its channel's id and its position, and nothing else
 
 #### Scenario: A search result holds a channel id only
 

@@ -11,12 +11,16 @@ overflow waits for the next day's selection, which ranks again.
 The pass around it loads the rankings' rows as `itgraph yt rising`
 does, ranks as of now, and stores the day whole — an empty day too, so
 that the series can tell "nothing rose" from "the pass did not run" —
-creating each offered channel's ``candidate`` record without API data,
-as the queues' ``--add`` does; the refresh fetches the payload at its
-next run. The record of a link offer carries the source of its
-strongest evidence, a chart offer's ``chart``. It makes no request,
-takes no lease, holds no key, and says counts alone: a job's output is
-kept, and only `--preview` names the channels — by id.
+creating each offered channel's ``candidate`` record, as the queues'
+``--add`` does. Where a key is configured it buys the offered channels'
+payloads with the selection's one call of its own, stored in the same
+transaction as the day, before the bot can claim an offer, so a card is
+titled the day it is sent; where none is — the test environment's
+selection, which holds no key — the day is stored without a request, as
+it always was, and the night refresh fetches the payload. The record of
+a link offer carries the source of its strongest evidence, a chart
+offer's ``chart``. The pass takes no lease, and says counts alone: a
+job's output is kept, and only `--preview` names the channels — by id.
 
 The decisions pressed in the bot are applied by `apply-reviews`, which
 the detection job runs every 15 minutes: each once, oldest first, a
@@ -24,6 +28,7 @@ transaction each, as `itgraph yt mark` would apply it — and only to a
 channel not reviewed some other way since.
 """
 
+import logging
 from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
@@ -33,10 +38,12 @@ from zoneinfo import ZoneInfo
 from itgraph.config import settings
 from itgraph.db.models import (
     YtAlertRoute,
+    YtCommand,
     YtDiscoverySource,
     YtRisingRanking,
 )
 from itgraph.db.session import Database
+from itgraph.db.yt_channels import store_payloads
 from itgraph.db.yt_offers import (
     NewOffer,
     apply_decision,
@@ -44,6 +51,7 @@ from itgraph.db.yt_offers import (
     offered_channels,
     store_day,
 )
+from itgraph.db.yt_quota import QuotaError
 from itgraph.db.yt_rising import load_yt_rising_rows
 from itgraph.derive.yt_rising import (
     ChartChannel,
@@ -54,6 +62,9 @@ from itgraph.derive.yt_rising import (
     appearances,
     rank_yt_rising,
 )
+from itgraph.yt import client as yt_client
+from itgraph.yt.channels import by_ids
+from itgraph.yt.errors import MissingKeyError, YtError
 
 __all__ = [
     "ApplySummary",
@@ -66,6 +77,11 @@ __all__ = [
     "run_offer",
     "strongest_sources",
 ]
+
+logger = logging.getLogger(__name__)
+
+# What one bought payload looks like, as `channels.by_ids` returns it.
+BoughtPayloads = Mapping[str, Mapping[str, object]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -294,6 +310,31 @@ def _stored_offers(
     ]
 
 
+async def _buy_payloads(
+    database: Database, chosen: Sequence[Chosen]
+) -> BoughtPayloads:
+    """The offered channels' payloads, bought as the day is computed.
+
+    One call for everything the day offers, whatever the sizes say.
+    Empty, and the day is stored as it always was, when no key is
+    configured — the test environment's selection — or the call fails:
+    a card without a title is the fallback, not a reason to lose the
+    day.
+    """
+    if not chosen:
+        return {}
+    try:
+        # Through the module, as the refresh does, so a test can put a
+        # fake API behind the same call the job makes.
+        async with yt_client.youtube(database, YtCommand.OFFER) as client:
+            return await by_ids(client, [offer.channel_id for offer in chosen])
+    except MissingKeyError:
+        return {}
+    except (QuotaError, YtError) as exc:
+        logger.warning("could not buy the offered payloads: %s", exc)
+        return {}
+
+
 async def run_offer(
     database: Database,
     *,
@@ -343,6 +384,11 @@ async def run_offer(
         window_days=settings.rising_window_days,
         answers_fresh_days=settings.youtube_answers_fresh_days,
     )
+    # Bought before the day is stored: the payloads land in the same
+    # transaction, so the bot never claims an offer whose payload could
+    # have been there.
+    payloads = await _buy_payloads(database, chosen)
+    fetched_at = datetime.now(UTC)
     async with database.session() as session:
         stored = await store_day(
             session,
@@ -352,6 +398,8 @@ async def run_offer(
             size_links=settings.youtube_rising_link_offers_per_day,
             offers=_stored_offers(chosen, sources),
         )
+        if stored is not None:
+            await store_payloads(session, payloads, fetched_at=fetched_at)
         await session.commit()
     if stored is None:
         summary.already = True

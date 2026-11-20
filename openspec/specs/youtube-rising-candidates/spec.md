@@ -129,7 +129,7 @@ The system SHALL rank rising channels by the families that referred to them with
 
 ### Requirement: The Daily Chart Reading
 
-The refresh SHALL read, once a day, the `chart=mostPopular` listing of every region `youtube_chart_regions` names, at the category `youtube_chart_category` gives, asking for each video's id, its channel's id and the token for the next page, and nothing else. Each answer SHALL be stored as a raw reading for its region and moment, appended and never overwritten. An answer that fails or is refused SHALL fail nothing else in the refresh.
+The refresh SHALL read, once a day, the `chart=mostPopular` listing of every region `youtube_chart_regions` names, at the category `youtube_chart_category` gives, asking for each video's id, its title, its channel's id and the token for the next page, and nothing else. Each answer SHALL be stored as a raw reading for its region and moment, appended and never overwritten. An answer that fails or is refused SHALL fail nothing else in the refresh. A title is what a chart offer's card names the charting video by; a reading stored before titles were asked for holds none, and such a card names the video by its id.
 
 #### Scenario: The defaults
 

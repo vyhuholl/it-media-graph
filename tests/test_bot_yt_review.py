@@ -41,6 +41,7 @@ from itgraph.db.models import (
     YtLang,
     YtRejectReason,
 )
+from itgraph.derive.yt_rising import ChartEntry
 
 OFFER = 9223372036854775807  # the largest id, for the longest data
 FIRST = datetime(2026, 11, 9, 22, 30, tzinfo=UTC)  # 10 November in Moscow
@@ -126,7 +127,11 @@ def test_a_chart_card_with_its_video() -> None:
             channel=view(handle=None, title=None),
             region="RU",
             position=4,
-            video_id=VIDEO,
+            video=ChartEntry(
+                video_id=VIDEO,
+                channel_id=CHANNEL,
+                title="Fake Rising <RU> & more",
+            ),
         )
     )
 
@@ -135,8 +140,24 @@ def test_a_chart_card_with_its_video() -> None:
         '<a href="https://www.youtube.com/channel/'
         f'{CHANNEL}">{CHANNEL}</a>\n'
         '🎬 <a href="https://www.youtube.com/watch?v='
-        f'{VIDEO}">{VIDEO}</a>'
+        f'{VIDEO}">Fake Rising &lt;RU&gt; &amp; more</a>'
     )
+
+
+def test_a_chart_card_names_a_untitled_video_by_its_id() -> None:
+    """A reading stored before titles were asked for holds none."""
+
+    text = render_chart_card(
+        ChartCardView(
+            channel_id=CHANNEL,
+            channel=view(),
+            region="US",
+            position=1,
+            video=ChartEntry(video_id=VIDEO, channel_id=CHANNEL),
+        )
+    )
+
+    assert text.endswith(f'watch?v={VIDEO}">{VIDEO}</a>')
 
 
 def test_a_chart_card_without_a_video_still_names_its_place() -> None:
@@ -146,7 +167,7 @@ def test_a_chart_card_without_a_video_still_names_its_place() -> None:
             channel=view(),
             region="US",
             position=2,
-            video_id=None,
+            video=None,
         )
     )
 

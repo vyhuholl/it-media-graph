@@ -1116,7 +1116,7 @@ async def _yt_card(
                 channel=view,
                 region=offer.region or "",
                 position=offer.position or 0,
-                video_id=video,
+                video=video,
             )
         )
     return render_link_card(

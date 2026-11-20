@@ -620,6 +620,9 @@ class YtCommand(enum.StrEnum):
     TG_LOOKUP = "tg-lookup"
     MENTION_LOOKUP = "mention-lookup"
     SEARCH = "search"
+    # The rising selection's one call: the payloads of the channels it
+    # offers, so their cards can be titled the day they are sent.
+    OFFER = "offer"
 
 
 class YtSearchType(enum.StrEnum):
