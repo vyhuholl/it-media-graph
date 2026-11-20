@@ -9,7 +9,7 @@ Three guarantees are enforced at this boundary rather than deeper,
 because this is where an outsider can first be seen:
 
 * **Only configured places.** Alerts go to the destinations the settings
-  name — a chat, and a topic within it or none — and to no other.
+  name — topics of the one chat — and to no other.
 * **Nobody else is answered.** A message from a chat that is not
   configured is dropped before a handler runs. The bot's username is
   discoverable, so strangers will find it, and the inventory is the
@@ -17,14 +17,14 @@ because this is where an outsider can first be seen:
 * **A chat the bot cannot reach stops it at start,** not at the first
   alert, hours or days later.
 
-A press on a rising offer's card is taken in its platform's chat alone —
-Telegram's `rv:` refusing the YouTube chat, YouTube's `yv:` the Telegram
-one — and what a press records names nobody: the handlers read the
-button's data and the message, never who pressed.
+A press on a rising offer's card is taken in the one chat alone — both
+platforms' buttons live there, and a card's `rv:` or `yv:` data answers
+only its own handler — and what a press records names nobody: the
+handlers read the button's data and the message, never who pressed.
 """
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
 
@@ -216,9 +216,6 @@ def build_dispatcher(
 ) -> Dispatcher:
     """The handlers, filtered to the configured chats before any runs."""
     dispatcher = Dispatcher()
-    platforms: Mapping[int, Platform] = {
-        d.chat_id: d.platform for d in destinations
-    }
     telegram = next(
         (d for d in destinations if d.platform is Platform.TELEGRAM), None
     )
@@ -233,17 +230,24 @@ def build_dispatcher(
         (d.chat_id for d in destinations if d.platform is Platform.YOUTUBE),
         None,
     )
-    chats = frozenset(platforms)
 
     # Applied as a filter rather than checked inside each handler: a
     # handler added later inherits it instead of having to remember. Any
     # topic of a configured chat counts, General included.
-    dispatcher.message.filter(F.chat.id.in_(chats))
-    dispatcher.callback_query.filter(F.message.chat.id.in_(chats))
+    dispatcher.message.filter(F.chat.id.in_({d.chat_id for d in destinations}))
+    dispatcher.callback_query.filter(
+        F.message.chat.id.in_({d.chat_id for d in destinations})
+    )
 
     @dispatcher.message(Command("status"))
     async def status(message: Message) -> None:
-        """What the alerting of this chat's platform is doing.
+        """What the alerting of both platforms is doing, in one answer.
+
+        The one chat no longer implies a platform, so the answer covers
+        both — Telegram's state, then YouTube's — whatever topic it was
+        asked in, which is also the common question in a one-chat world.
+        Routing by the topic asked in was rejected: it makes General
+        special and buries the cross-platform answer.
 
         ``Command`` rather than an exact text match, and the difference
         only shows up in a group. Telegram requires a command there to
@@ -259,18 +263,21 @@ def build_dispatcher(
         command came from.
         """
         now = datetime.now(UTC)
+        parts: list[str] = []
         async with database.session() as session:
-            if platforms[message.chat.id] is Platform.YOUTUBE:
-                text = await youtube_status(
-                    session, now=now, destinations=youtube
+            if telegram is not None:
+                parts.append(
+                    await telegram_status(
+                        session, now=now, destination=telegram
+                    )
                 )
-            elif telegram is not None:
-                text = await telegram_status(
-                    session, now=now, destination=telegram
+            if youtube:
+                parts.append(
+                    await youtube_status(
+                        session, now=now, destinations=youtube
+                    )
                 )
-            else:  # pragma: no cover - a configured chat has a platform
-                return
-        await message.answer(text)
+        await message.answer("\n\n".join(parts))
 
     @dispatcher.callback_query(F.data.regexp(REVIEW_BUTTON))
     async def review(query: CallbackQuery) -> None:

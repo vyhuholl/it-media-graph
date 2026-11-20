@@ -48,6 +48,7 @@ __all__ = [
     "YtRouteCounts",
     "claim",
     "count_direct_since",
+    "delivered_between",
     "exclude_unroutable",
     "failing",
     "folded_videos",
@@ -230,6 +231,32 @@ async def count_direct_since(
         )
         or 0
     )
+
+
+async def delivered_between(
+    session: AsyncSession,
+    route: YtAlertRoute,
+    *,
+    start: datetime,
+    end: datetime,
+) -> list[YtPendingAlert]:
+    """The alerts sent directly to this topic inside ``[start, end)``.
+
+    The day summary's input, per route as delivery recorded it: each
+    topic's recap holds only the topic's own day. Held alerts are the
+    digest's to summarize, and folds were never sent on their own.
+    """
+    rows = await session.execute(
+        select(YtAlert)
+        .where(
+            YtAlert.delivery == YtAlertDelivery.DIRECT,
+            YtAlert.route == route,
+            YtAlert.delivered_at >= start,
+            YtAlert.delivered_at < end,
+        )
+        .order_by(YtAlert.delivered_at, YtAlert.id)
+    )
+    return [_pending(alert) for alert in rows.scalars()]
 
 
 async def settle_folds(session: AsyncSession, *, at: datetime) -> int:

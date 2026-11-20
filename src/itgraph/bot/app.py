@@ -18,33 +18,40 @@ a lost one, which is the right way round for something whose whole job is
 to tell you when something happened.
 
 Two queues — Telegram's posts, YouTube's videos — and a destination per
-chat or topic, each keeping its own account. Everything here is the same
-for all of them; what differs is in ``bot/queues.py``.
+topic of the one chat, each keeping its own account. Everything here is
+the same for all of them; what differs is in ``bot/queues.py``.
+
+**And each destination's day summary** (`bot/summary.py`): as its quiet
+window begins, one recap of every alert it was sent directly in the day
+that has just ended — silent on a day nothing was, counted nowhere, and
+recorded in the database so a restart does not repeat it.
 
 **And the weekly lists** of both platforms — one per YouTube topic and
-week, and Telegram's one a week to its chat: not alerts, so neither
-capped nor held for the digest, but sent only outside quiet hours, in
-parts, each part marked as it goes — so a failed part is sent again and
-the parts before it are not. That loop is one; what differs per platform
-— which lists a destination takes, how a header and an entry read, how
-a list is marked — is its ``WeeklySource``.
+week, and Telegram's one a week to the chat's Telegram topic: not
+alerts, so neither capped nor held for the digest, but sent only
+outside quiet hours, in parts, each part marked as it goes — so a
+failed part is sent again and the parts before it are not. That loop is
+one; what differs per platform — which lists a destination takes, how a
+header and an entry read, how a list is marked — is its
+``WeeklySource``.
 
 **A list's second wind** (`add-second-wind`) follows its entries in the
 same parts, and only for a list computed while its platform's section was
 switched on: entries and second wind entries are one run of items, each
 part marking what it carried, so a resumed list sends neither twice.
 
-**And Telegram's rising offers** (`tg-rising-review`): a card per offer to
-Telegram's chat, in rank order, with the buttons that review it — outside
-quiet hours, neither capped nor digested, each marked as it goes. An offer
-whose channel was reviewed some other way first is closed unsent.
+**And Telegram's rising offers** (`tg-rising-review`): a card per offer
+to the chat's Telegram topic, in rank order, with the buttons that review
+it — outside quiet hours, neither capped nor digested, each marked as it
+goes. An offer whose channel was reviewed some other way first is closed
+unsent.
 
-**And YouTube's** (`yt-rising-review`): the same cards into the YouTube
-chat's topics, each to the topic of its language — a chart offer's by its
-region, a link offer's read from its payload's `defaultLanguage` when that
-is one of the two, else the English topic — each topic claiming its own,
-so a topic that refuses fails the send and nothing of the offer goes
-anywhere else.
+**And YouTube's** (`yt-rising-review`): the same cards into the one
+chat's YouTube topics, each to the topic of its language — a chart
+offer's by its region, a link offer's read from its payload's
+`defaultLanguage` when that is one of the two, else the English topic —
+each topic claiming its own, so a topic that refuses fails the send and
+nothing of the offer goes anywhere else.
 """
 
 import asyncio
@@ -91,6 +98,7 @@ from itgraph.bot.review import (
     first_step,
     render_card,
 )
+from itgraph.bot.summary import maybe_summary
 from itgraph.bot.yt_review import (
     ChannelView,
     ChartCardView,
@@ -201,6 +209,7 @@ class BotStats:
     failed: int = 0
     lists: int = 0
     offers: int = 0
+    summaries: int = 0
     cycles: int = 0
     # When each destination's digest last went out, by its key. In memory:
     # a bot that restarts sends its next digest at the next hour, not at
@@ -215,6 +224,8 @@ class BotStats:
             line += f", {self.lists} weekly list(s)"
         if self.offers:
             line += f", {self.offers} rising offer(s)"
+        if self.summaries:
+            line += f", {self.summaries} day summary(s)"
         if self.failed:
             line += f", {self.failed} failed"
         return line
@@ -270,6 +281,9 @@ async def deliver_once(
                 database, queue, destination, sender, stats, now=moment
             )
             await _maybe_digest(
+                database, queue, destination, sender, stats, now=moment
+            )
+            await maybe_summary(
                 database, queue, destination, sender, stats, now=moment
             )
             await _deliver_weekly(

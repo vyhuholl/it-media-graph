@@ -74,9 +74,9 @@ class CardRecorder(Sender):
 
 @pytest.fixture(autouse=True)
 def configured(monkeypatch: pytest.MonkeyPatch) -> None:
-    """YouTube's chat and both topics, quiet hours off, in UTC."""
-    monkeypatch.setattr(settings, "alert_chat_id", None)
-    monkeypatch.setattr(settings, "youtube_alert_chat_id", CHAT)
+    """The chat and both YouTube topics, quiet hours off, in UTC."""
+    monkeypatch.setattr(settings, "alert_chat_id", CHAT)
+    monkeypatch.setattr(settings, "telegram_alert_topic", None)
     monkeypatch.setattr(settings, "youtube_alert_topic_en", TOPIC_EN)
     monkeypatch.setattr(settings, "youtube_alert_topic_ru", TOPIC_RU)
     monkeypatch.setattr(settings, "youtube_alert_quiet_from_hour", 0)

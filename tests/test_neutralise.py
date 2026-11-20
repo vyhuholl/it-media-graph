@@ -187,6 +187,12 @@ async def seed(connection: Any) -> None:
         """,
         NOW - timedelta(hours=1),
     )
+    # A day summary the dump caught half-sent: its marker open.
+    await connection.execute(
+        "INSERT INTO bot_daily_summaries (destination, day) "
+        "VALUES ('telegram', $1)",
+        NOW.date(),
+    )
     await connection.execute(
         f"INSERT INTO yt_raw_videos (video_id, payload, fetched_at, "
         f"discovered_at, discovered_via) "
@@ -358,6 +364,7 @@ async def test_a_seeded_database_fails_the_read_back(
         "unapplied rising decisions: 1",
         "undelivered YouTube rising offers: 1",
         "unapplied YouTube rising decisions: 1",
+        "open day summary markers: 1",
         "users in posts: 2",
         "mentions by id in posts: 2",
         "names in posts: 1",

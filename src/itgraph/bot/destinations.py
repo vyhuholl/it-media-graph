@@ -1,12 +1,13 @@
 """Where an alert goes, and the account each place keeps. Pure.
 
-A **destination** is a chat, and a topic within it or none. Telegram's
-alerts have one: the chat they always had. YouTube's have one per
-language that has a topic, in a forum chat of their own. Each destination
-keeps its own account — its daily cap, its quiet window, its digest — so
-that a burst on one platform, or in one language, cannot spend another's.
+A **destination** is a topic of the one alert chat: Telegram's alerts
+have the chat's Telegram topic, YouTube's have one per language that has
+a topic. Each destination keeps its own account — its daily cap, its
+quiet window, its digest — so that a burst on one platform, or in one
+language, cannot spend another's.
 
-The values come from settings, per platform: both YouTube topics take
+The one chat and its three topics come from settings together or not at
+all; the account values are per platform, both YouTube topics taking
 YouTube's. Their readers are one group in one zone, and a setting per
 topic would be configuration nobody sets.
 
@@ -50,7 +51,7 @@ class Destination:
     quiet_to: int
     digest_hour: int
     zone: str
-    # The YouTube route this topic takes; none for Telegram's chat.
+    # The YouTube route this topic takes; none for Telegram's destination.
     route: YtAlertRoute | None = None
 
     def is_quiet(self, moment: datetime) -> bool:
@@ -67,14 +68,14 @@ class Destination:
 
 
 def telegram_destination(settings: Settings) -> Destination | None:
-    """Telegram's chat, or ``None`` where no chat is configured."""
+    """The chat's Telegram topic, or ``None`` where no chat is configured."""
     if settings.alert_chat_id is None:
         return None
     return Destination(
         key="telegram",
         platform=Platform.TELEGRAM,
         chat_id=settings.alert_chat_id,
-        topic_id=None,
+        topic_id=settings.telegram_alert_topic,
         setting="ALERT_CHAT_ID",
         daily_cap=settings.alert_daily_cap,
         quiet_from=settings.alert_quiet_from_hour,
@@ -87,12 +88,13 @@ def telegram_destination(settings: Settings) -> Destination | None:
 def youtube_destinations(
     settings: Settings,
 ) -> dict[YtAlertRoute, Destination]:
-    """YouTube's topics by route, or none where YouTube is not configured.
+    """The chat's YouTube topics by route, or none where it is not
+    configured.
 
-    Settings refuse a chat without both topics when they load, so this is
-    all or nothing.
+    Settings refuse the chat without all its topics when they load, so
+    this is all or nothing.
     """
-    chat = settings.youtube_alert_chat_id
+    chat = settings.alert_chat_id
     topics = {
         YtAlertRoute.EN: settings.youtube_alert_topic_en,
         YtAlertRoute.RU: settings.youtube_alert_topic_ru,
@@ -105,7 +107,7 @@ def youtube_destinations(
             platform=Platform.YOUTUBE,
             chat_id=chat,
             topic_id=topic,
-            setting="YOUTUBE_ALERT_CHAT_ID",
+            setting="ALERT_CHAT_ID",
             daily_cap=settings.youtube_alert_daily_cap,
             quiet_from=settings.youtube_alert_quiet_from_hour,
             quiet_to=settings.youtube_alert_quiet_to_hour,

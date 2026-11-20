@@ -796,7 +796,7 @@ def test_no_value_of_one_set_is_in_the_others_objects(
         "itgraph_telegram_api_hash",
         "itgraph_bot_token",
         "itgraph_alert_chat_id",
-        "itgraph_youtube_alert_chat_id",
+        "itgraph_telegram_alert_topic",
         "itgraph_youtube_alert_topic_en",
         "itgraph_youtube_alert_topic_ru",
         "itgraph_postgres_password",
@@ -881,44 +881,40 @@ def test_a_new_bot_token_changes_the_bots_template_alone(
     assert changed["postgres"] == rendered["a"]["postgres"]
 
 
-YOUTUBE_ALERT_KEYS = {
-    "YOUTUBE_ALERT_CHAT_ID",
+# The chat's id and its three topics: the bot's pod holds all four,
+# always, and nothing else holds any.
+ALERT_KEYS = {
+    "ALERT_CHAT_ID",
+    "TELEGRAM_ALERT_TOPIC",
     "YOUTUBE_ALERT_TOPIC_EN",
     "YOUTUBE_ALERT_TOPIC_RU",
 }
 
 
-def test_the_bot_holds_the_youtube_chat_and_nothing_else_does(
+def test_the_bot_holds_the_chat_and_nothing_else_does(
     rendered: dict[str, dict[str, Objects]],
 ) -> None:
     objects = everything(rendered["a"])
 
-    assert YOUTUBE_ALERT_KEYS <= keys_of(objects, "Deployment", "itgraph-bot")
+    assert ALERT_KEYS <= keys_of(objects, "Deployment", "itgraph-bot")
     for kind, name in (
         ("Deployment", "itgraph-watch"),
         ("Deployment", "itgraph-metrics"),
         ("CronJob", "itgraph-detect"),
     ):
         keys = keys_of(objects, kind, name)
-        assert not keys & (YOUTUBE_ALERT_KEYS | {"ALERT_CHAT_ID"}), name
+        assert not keys & ALERT_KEYS, name
 
 
-def test_without_a_youtube_chat_the_bot_holds_no_youtube_keys(
+def test_a_chat_without_one_of_its_topics_is_refused(
     tmp_path: Path,
 ) -> None:
-    streams = render_set(
-        "a",
-        tmp_path / "no-youtube-chat",
-        extra={
-            "itgraph_youtube_alert_chat_id": 0,
-            "itgraph_youtube_alert_topic_en": 0,
-            "itgraph_youtube_alert_topic_ru": 0,
-        },
-    )
-
-    keys = keys_of(everything(streams), "Deployment", "itgraph-bot")
-    assert not keys & YOUTUBE_ALERT_KEYS
-    assert "ALERT_CHAT_ID" in keys
+    with pytest.raises(AssertionError, match="its three topics"):
+        render_set(
+            "a",
+            tmp_path / "no-telegram-topic",
+            extra={"itgraph_telegram_alert_topic": 0},
+        )
 
 
 def test_a_new_youtube_topic_restarts_the_bot_alone(

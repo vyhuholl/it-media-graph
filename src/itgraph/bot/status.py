@@ -1,12 +1,12 @@
-"""What `/status` says, per platform: the alerting of the chat it is asked in.
+"""What `/status` says, per platform: both halves of the one chat's answer.
 
 This matters more here than anywhere else in the project: a healthy alert
 bot says nothing for days, and without a way to ask, "no alerts" and "the
 pass has not run since Tuesday" look identical.
 
-Each chat is told about its own platform. The Telegram chat about the
-detection of Telegram's posts; the YouTube chat about YouTube's queue and
-its poll loop.
+One answer covers both platforms, whatever topic it was asked in:
+Telegram's half about the detection of Telegram's posts, then YouTube's
+about its queue and its poll loop.
 """
 
 from collections.abc import Mapping

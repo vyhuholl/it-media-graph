@@ -40,9 +40,9 @@ TOPIC_RU = 12
 
 @pytest.fixture(autouse=True)
 def configured(monkeypatch: pytest.MonkeyPatch) -> None:
-    """YouTube's chat and both topics, quiet hours off, the digest far."""
-    monkeypatch.setattr(settings, "alert_chat_id", None)
-    monkeypatch.setattr(settings, "youtube_alert_chat_id", CHAT)
+    """The chat and both YouTube topics, quiet hours off, the digest far."""
+    monkeypatch.setattr(settings, "alert_chat_id", CHAT)
+    monkeypatch.setattr(settings, "telegram_alert_topic", None)
     monkeypatch.setattr(settings, "youtube_alert_topic_en", TOPIC_EN)
     monkeypatch.setattr(settings, "youtube_alert_topic_ru", TOPIC_RU)
     monkeypatch.setattr(settings, "youtube_alert_quiet_from_hour", 0)
@@ -184,7 +184,8 @@ async def test_a_video_no_inventory_channel_owns_is_excluded(
 async def test_without_youtube_configured_nothing_is_sent(
     database: Database, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings, "youtube_alert_chat_id", None)
+    monkeypatch.setattr(settings, "alert_chat_id", None)
+    monkeypatch.setattr(settings, "telegram_alert_topic", None)
     monkeypatch.setattr(settings, "youtube_alert_topic_en", None)
     monkeypatch.setattr(settings, "youtube_alert_topic_ru", None)
     async with database.session() as session:

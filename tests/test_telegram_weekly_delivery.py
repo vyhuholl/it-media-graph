@@ -26,7 +26,6 @@ WEEK = date(2026, 11, 16)
 PUBLISHED = NOW - timedelta(days=4)
 SCORED_AT = PUBLISHED + timedelta(hours=2)
 CHAT = 100000001
-YT_CHAT = -100000000000017
 TOPIC_EN = 11
 TOPIC_RU = 12
 FIRST = 7000000001
@@ -36,7 +35,7 @@ FIRST = 7000000001
 def configured(monkeypatch: pytest.MonkeyPatch) -> None:
     """Telegram's chat alone, quiet hours off, the digest far."""
     monkeypatch.setattr(settings, "alert_chat_id", CHAT)
-    monkeypatch.setattr(settings, "youtube_alert_chat_id", None)
+    monkeypatch.setattr(settings, "telegram_alert_topic", None)
     monkeypatch.setattr(settings, "youtube_alert_topic_en", None)
     monkeypatch.setattr(settings, "youtube_alert_topic_ru", None)
     monkeypatch.setattr(settings, "alert_quiet_from_hour", 0)
@@ -180,7 +179,7 @@ async def attempts(database: Database) -> tuple[int, str | None]:
 
 
 def with_youtube(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "youtube_alert_chat_id", YT_CHAT)
+    """The chat's YouTube topics beside its Telegram one."""
     monkeypatch.setattr(settings, "youtube_alert_topic_en", TOPIC_EN)
     monkeypatch.setattr(settings, "youtube_alert_topic_ru", TOPIC_RU)
     monkeypatch.setattr(settings, "youtube_alert_quiet_from_hour", 0)
@@ -430,7 +429,7 @@ async def test_a_refused_chat_fails_and_goes_nowhere_else(
     assert await undelivered(database) == (1, 0)
 
 
-async def test_not_to_youtube_s_chat(
+async def test_not_to_the_youtube_topics(
     database: Database, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with_youtube(monkeypatch)
@@ -466,7 +465,10 @@ async def test_not_to_youtube_s_chat(
     ]
     assert len(telegram) == 1 and len(youtube) == 2
     assert all(d.chat_id == CHAT and d.topic_id is None for _, d in telegram)
-    assert all(d.chat_id == YT_CHAT for _, d in youtube)
+    assert all(
+        d.chat_id == CHAT and d.topic_id in (TOPIC_EN, TOPIC_RU)
+        for _, d in youtube
+    )
     assert await undelivered(database) == (0, 0)
 
 

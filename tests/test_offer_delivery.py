@@ -66,7 +66,7 @@ def configured(monkeypatch: pytest.MonkeyPatch) -> None:
     """Telegram's chat alone, quiet hours as in production, the smallest
     cap there is."""
     monkeypatch.setattr(settings, "alert_chat_id", CHAT)
-    monkeypatch.setattr(settings, "youtube_alert_chat_id", None)
+    monkeypatch.setattr(settings, "telegram_alert_topic", None)
     monkeypatch.setattr(settings, "youtube_alert_topic_en", None)
     monkeypatch.setattr(settings, "youtube_alert_topic_ru", None)
     monkeypatch.setattr(settings, "alert_quiet_from_hour", 2)

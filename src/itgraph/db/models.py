@@ -2784,6 +2784,31 @@ class YtAlert(Base):
         )
 
 
+class BotDailySummary(Base):
+    """Which day's closing summary a destination has been sent.
+
+    The day is the quiet window's complement — ``[quiet_to, next
+    quiet_from)`` in the destination's zone — and its label is the date
+    the window starts on. A row is opened when the day's summary begins
+    going out and closed once every part has; an open row is a summary
+    interrupted part-way, which the next pass resends whole, and which a
+    restore closes so that no copy finishes a day production left
+    half-sent.
+
+    In the database rather than the bot's memory because the summary's
+    input — delivered alerts — never empties: memory would resend
+    yesterday's summary on every restart, and restarts are what deploys
+    do. The write is the bot's alone; a quiet day, which sends nothing,
+    leaves no row.
+    """
+
+    __tablename__ = "bot_daily_summaries"
+
+    destination: Mapped[str] = mapped_column(Text, primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class YtBaselineRun(Base):
     """One refresh of YouTube's baselines, and the parameters it used.
 

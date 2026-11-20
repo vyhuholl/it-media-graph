@@ -34,9 +34,9 @@ TOPIC_RU = 12
 
 @pytest.fixture(autouse=True)
 def configured(monkeypatch: pytest.MonkeyPatch) -> None:
-    """YouTube's chat and both topics, quiet hours off, the digest far."""
-    monkeypatch.setattr(settings, "alert_chat_id", None)
-    monkeypatch.setattr(settings, "youtube_alert_chat_id", CHAT)
+    """The chat and both YouTube topics, quiet hours off, the digest far."""
+    monkeypatch.setattr(settings, "alert_chat_id", CHAT)
+    monkeypatch.setattr(settings, "telegram_alert_topic", None)
     monkeypatch.setattr(settings, "youtube_alert_topic_en", TOPIC_EN)
     monkeypatch.setattr(settings, "youtube_alert_topic_ru", TOPIC_RU)
     monkeypatch.setattr(settings, "youtube_alert_quiet_from_hour", 0)
@@ -367,7 +367,7 @@ async def test_a_refused_topic_fails_and_goes_nowhere_else(
 async def test_no_youtube_chat_sends_no_list(
     database: Database, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(settings, "youtube_alert_chat_id", None)
+    monkeypatch.setattr(settings, "telegram_alert_topic", None)
     monkeypatch.setattr(settings, "youtube_alert_topic_en", None)
     monkeypatch.setattr(settings, "youtube_alert_topic_ru", None)
     await a_list(database, YtAlertRoute.EN, [])

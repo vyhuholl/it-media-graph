@@ -96,8 +96,8 @@ def pod_answers(
             "itgraph_youtube_alert_topic_ru go together",
         ),
         (
-            {"itgraph_youtube_alert_chat_id": 0},
-            "itgraph_youtube_alert_topic_ru go together",
+            {"itgraph_telegram_alert_topic": 0},
+            "the one chat and its three topics",
         ),
     ],
 )
@@ -1941,28 +1941,6 @@ def test_a_restore_in_order(tmp_path: Path) -> None:
     )
     assert "YouTube: to the topics en,ru" in run.output
     assert_no_secret_anywhere(run, "b")
-
-
-def test_a_restore_without_a_youtube_chat_says_so(tmp_path: Path) -> None:
-    dump = tmp_path / "real.dump"
-    dump.write_bytes(b"fake dump bytes\n")
-    run = run_role(
-        tmp_path,
-        "restore",
-        inputs="b",
-        rules=restore_rules(),
-        extra={
-            **RESTORE,
-            "itgraph_restore_from": str(dump),
-            "itgraph_youtube_alert_chat_id": 0,
-            "itgraph_youtube_alert_topic_en": 0,
-            "itgraph_youtube_alert_topic_ru": 0,
-        },
-    )
-
-    assert not run.failed, run.output
-    assert "YouTube: not configured in this environment" in run.output
-    assert not [c for c in run.joined() if "yt_raw_videos" in c]
 
 
 def test_a_youtube_alert_not_delivered_fails_the_restore(

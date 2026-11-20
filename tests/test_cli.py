@@ -2026,15 +2026,13 @@ def test_bot_refuses_a_chat_it_cannot_reach_before_delivering(
         SecretStr("42:fake-bot-token-for-the-test"),
     )
     monkeypatch.setattr(live_settings, "alert_chat_id", 100000001)
-    monkeypatch.setattr(
-        live_settings, "youtube_alert_chat_id", -100000000000071
-    )
+    monkeypatch.setattr(live_settings, "telegram_alert_topic", 7100)
     monkeypatch.setattr(live_settings, "youtube_alert_topic_en", 7101)
     monkeypatch.setattr(live_settings, "youtube_alert_topic_ru", 7102)
 
     async def unreachable(bot: Any, destinations: Any) -> None:
         raise handlers.ChatUnreachableError(
-            "YOUTUBE_ALERT_CHAT_ID", "the chat is not a forum"
+            "ALERT_CHAT_ID", "the chat is not a forum"
         )
 
     async def never(*args: Any, **kwargs: Any) -> None:
@@ -2046,7 +2044,7 @@ def test_bot_refuses_a_chat_it_cannot_reach_before_delivering(
     result = runner.invoke(app, ["bot"])
 
     assert result.exit_code == 1
-    assert "YOUTUBE_ALERT_CHAT_ID" in result.output
+    assert "ALERT_CHAT_ID" in result.output
 
 
 def test_neither_alert_command_connects_to_telegram(

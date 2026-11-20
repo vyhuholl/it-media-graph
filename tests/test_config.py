@@ -668,43 +668,46 @@ def test_a_partial_offsite_configuration_is_refused(
     assert B2_ENV[only] not in message
 
 
-YOUTUBE_ALERTS = {
-    "YOUTUBE_ALERT_CHAT_ID": "-100000000000017",
+ALERT_CHAT = {
+    "ALERT_CHAT_ID": "-100000000000017",
+    "TELEGRAM_ALERT_TOPIC": "10",
     "YOUTUBE_ALERT_TOPIC_EN": "11",
     "YOUTUBE_ALERT_TOPIC_RU": "12",
 }
 
 
-def test_youtube_alerts_are_off_by_default(env: pytest.MonkeyPatch) -> None:
+def test_alerts_are_off_by_default(env: pytest.MonkeyPatch) -> None:
     settings = build()
-    assert settings.youtube_alert_chat_id is None
+    assert settings.alert_chat_id is None
+    assert settings.telegram_alert_topic is None
     assert settings.youtube_alert_daily_cap == 10
 
 
-def test_a_youtube_chat_with_both_topics_loads(
-    env: pytest.MonkeyPatch,
-) -> None:
-    for key, value in YOUTUBE_ALERTS.items():
+def test_the_chat_with_all_its_topics_loads(env: pytest.MonkeyPatch) -> None:
+    for key, value in ALERT_CHAT.items():
         env.setenv(key, value)
 
     settings = build()
 
-    assert settings.youtube_alert_chat_id == -100000000000017
+    assert settings.alert_chat_id == -100000000000017
     assert (
+        settings.telegram_alert_topic,
         settings.youtube_alert_topic_en,
         settings.youtube_alert_topic_ru,
     ) == (
+        10,
         11,
         12,
     )
 
 
-@pytest.mark.parametrize("left_out", sorted(YOUTUBE_ALERTS))
-def test_a_youtube_chat_without_all_three_is_refused(
+@pytest.mark.parametrize("left_out", sorted(ALERT_CHAT))
+def test_the_chat_without_all_its_topics_is_refused(
     env: pytest.MonkeyPatch, left_out: str
 ) -> None:
-    """Half of it would deliver one language and strand the other."""
-    for key, value in YOUTUBE_ALERTS.items():
+    """Half a chat's topics would strand one audience's messages, and a
+    topic without the chat names a topic of nothing."""
+    for key, value in ALERT_CHAT.items():
         if key != left_out:
             env.setenv(key, value)
 
@@ -714,13 +717,11 @@ def test_a_youtube_chat_without_all_three_is_refused(
     assert left_out.lower() in str(caught.value)
 
 
-def test_blank_youtube_alert_settings_are_unset(
-    env: pytest.MonkeyPatch,
-) -> None:
-    for key in YOUTUBE_ALERTS:
+def test_blank_alert_settings_are_unset(env: pytest.MonkeyPatch) -> None:
+    for key in ALERT_CHAT:
         env.setenv(key, "")
 
-    assert build().youtube_alert_chat_id is None
+    assert build().alert_chat_id is None
 
 
 def test_youtubes_digest_inside_its_quiet_hours_is_refused(

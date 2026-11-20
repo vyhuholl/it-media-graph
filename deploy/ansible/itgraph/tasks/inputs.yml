@@ -56,16 +56,18 @@
     quiet: true
   no_log: false
 
-# Half of it would deliver one language and strand the other, or name a topic of
-# no chat. A test environment may give its own: they reach its own chat.
-- name: Assert the YouTube alert chat comes with both its topics, or none of the three
+# The one chat and its three topics are inseparable: half of them would strand
+# one audience's messages with nowhere to go. A test environment gives its own
+# chat; every environment's bot has all four.
+- name: Assert the alert chat comes with all its topics
   ansible.builtin.assert:
     that: >-
-      [itgraph_youtube_alert_chat_id, itgraph_youtube_alert_topic_en, itgraph_youtube_alert_topic_ru]
-      | map('int') | select('ne', 0) | list | length in [0, 3]
+      [itgraph_alert_chat_id, itgraph_telegram_alert_topic,
+       itgraph_youtube_alert_topic_en, itgraph_youtube_alert_topic_ru]
+      | map('int') | select('ne', 0) | list | length == 4
     fail_msg: >-
-      itgraph_youtube_alert_chat_id, itgraph_youtube_alert_topic_en and itgraph_youtube_alert_topic_ru
-      go together: all three, or none of them for no YouTube alerts.
+      itgraph_alert_chat_id, itgraph_telegram_alert_topic, itgraph_youtube_alert_topic_en and
+      itgraph_youtube_alert_topic_ru go together: the one chat and its three topics, all four.
     quiet: true
 
 - name: Assert the outbound fits whether this environment collects

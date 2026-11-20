@@ -614,12 +614,13 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr | None = None
     alert_chat_id: int | None = None
 
-    # YouTube's alerts go to a forum chat of their own, a topic per
-    # language: the chat and both topics are set together or not at all,
-    # and unset means no YouTube alert is sent. The topics are made by the
-    # operator and named here; the bot is no administrator and creates
-    # none, so a leaked token cannot rename, close or delete them.
-    youtube_alert_chat_id: int | None = None
+    # The one alert chat is a forum with a topic per audience —
+    # Telegram's beside YouTube's English and Russian ones — and the chat
+    # and all three topics are set together or not at all. Unset means no
+    # alert is sent anywhere. The topics are made by the operator and
+    # named here; the bot is no administrator and creates none, so a
+    # leaked token cannot rename, close or delete them.
+    telegram_alert_topic: int | None = None
     youtube_alert_topic_en: int | None = None
     youtube_alert_topic_ru: int | None = None
 
@@ -1224,39 +1225,44 @@ class Settings(BaseSettings):
         return value
 
     @field_validator(
-        "youtube_alert_chat_id",
+        "alert_chat_id",
+        "telegram_alert_topic",
         "youtube_alert_topic_en",
         "youtube_alert_topic_ru",
         mode="before",
     )
     @classmethod
     def _a_blank_id_is_no_id(cls, value: object) -> object:
-        """Read ``YOUTUBE_ALERT_CHAT_ID=`` as unset, as `.env.example`
-        writes it, rather than as an id that fails to parse."""
+        """Read ``ALERT_CHAT_ID=`` as unset, as `.env.example` writes it,
+        rather than as an id that fails to parse."""
         if isinstance(value, str) and not value.strip():
             return None
         return value
 
     @model_validator(mode="after")
-    def _youtube_chat_comes_with_both_topics(self) -> Self:
-        """Refuse a YouTube chat without both its topics, or a topic alone.
+    def _alert_chat_comes_with_its_topics(self) -> Self:
+        """Refuse the chat without all its topics, or a topic alone.
 
-        Half of it would deliver one language and leave the other's alerts
-        waiting with nowhere to go — or, with no chat, name a topic of
-        nothing. Either is a mistake in the configuration, and the moment
-        to say so is when it loads, not at the first alert.
+        The old YouTube-only validator's reasoning, widened to the one
+        chat: half of its topics would strand one audience's messages —
+        Telegram's, or one language's — with nowhere to go, and a topic
+        without the chat names a topic of nothing. Either is a mistake in
+        the configuration, and the moment to say so is when it loads, not
+        at the first alert.
         """
         parts = {
-            "youtube_alert_chat_id": self.youtube_alert_chat_id,
+            "alert_chat_id": self.alert_chat_id,
+            "telegram_alert_topic": self.telegram_alert_topic,
             "youtube_alert_topic_en": self.youtube_alert_topic_en,
             "youtube_alert_topic_ru": self.youtube_alert_topic_ru,
         }
         missing = [name for name, value in parts.items() if value is None]
         if missing and len(missing) < len(parts):
             raise ValueError(
-                f"{', '.join(missing)} not set with the other YouTube alert "
-                "settings: YouTube's alerts need its chat and both topics, "
-                "or none of the three, meaning no YouTube alerts"
+                f"{', '.join(missing)} not set with the other alert chat "
+                "settings: alerts need the one chat and its three topics — "
+                "Telegram's, English and Russian — or none of the four, "
+                "meaning no alerts"
             )
         return self
 

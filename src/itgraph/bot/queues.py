@@ -21,9 +21,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from itgraph.bot.destinations import Destination, Platform
 from itgraph.bot.render import (
     Carrier,
+    SummaryLine,
     render_cascade,
     render_spike,
+    render_tg_summary_entry,
     render_youtube,
+    render_yt_summary_entry,
 )
 from itgraph.config import settings
 from itgraph.db import alerts as tg
@@ -115,6 +118,22 @@ class Queue[P: Pending](ABC):
         now: datetime,
     ) -> str | None:
         """The alert as text, or ``None`` if what it is about is gone."""
+
+    @abstractmethod
+    async def summary_entries(
+        self,
+        database: Database,
+        destination: Destination,
+        *,
+        start: datetime,
+        end: datetime,
+    ) -> list[SummaryLine]:
+        """The alerts sent directly here inside ``[start, end)`` as the
+        day summary's lines, ordered by publication time.
+
+        Evidence is read as the queues read it; an alert whose post or
+        video went before the summary is left out, as a digest leaves
+        it out."""
 
 
 class TelegramQueue(Queue[tg.PendingAlert]):
@@ -225,11 +244,64 @@ class TelegramQueue(Queue[tg.PendingAlert]):
             text=evidence.text,
         ).text
 
+    async def summary_entries(
+        self,
+        database: Database,
+        destination: Destination,
+        *,
+        start: datetime,
+        end: datetime,
+    ) -> list[SummaryLine]:
+        lines: list[SummaryLine] = []
+        async with database.session() as session:
+            alerts = await tg.delivered_between(session, start=start, end=end)
+            for alert in alerts:
+                # No carriers to read: a cascade's summary entry keeps
+                # its families and loses its carrier list.
+                evidence = await tg.alert_evidence(
+                    session,
+                    channel_id=alert.channel_id,
+                    msg_id=alert.msg_id,
+                    window=timedelta(0),
+                )
+                if evidence is None:
+                    continue
+                lines.append(
+                    SummaryLine(
+                        published_at=evidence.published_at,
+                        raised_at=alert.raised_at,
+                        alert_id=alert.id,
+                        text=render_tg_summary_entry(
+                            kind=alert.kind,
+                            z=alert.value,
+                            observed=alert.observed,
+                            expected=alert.expected,
+                            channel_title=evidence.channel_title,
+                            channel_username=evidence.channel_username,
+                            msg_id=alert.msg_id,
+                            published_at=evidence.published_at,
+                            zone=destination.zone,
+                        ),
+                    )
+                )
+        return _as_a_timeline(lines)
+
 
 def _route(destination: Destination) -> YtAlertRoute:
     if destination.route is None:  # pragma: no cover - built that way
         raise ValueError(f"{destination.key} is not a YouTube topic")
     return destination.route
+
+
+def _as_a_timeline(lines: list[SummaryLine]) -> list[SummaryLine]:
+    """A day's entries as the reader re-reads the day: by publication
+    time, not by when the alerts were sent, with ``raised_at`` and then
+    the id breaking ties so a post's spike precedes its cascade
+    deterministically."""
+    return sorted(
+        lines,
+        key=lambda line: (line.published_at, line.raised_at, line.alert_id),
+    )
 
 
 class YoutubeQueue(Queue[yt.YtPendingAlert]):
@@ -333,3 +405,44 @@ class YoutubeQueue(Queue[yt.YtPendingAlert]):
             expected=alert.expected,
             folded=folded,
         ).text
+
+    async def summary_entries(
+        self,
+        database: Database,
+        destination: Destination,
+        *,
+        start: datetime,
+        end: datetime,
+    ) -> list[SummaryLine]:
+        lines: list[SummaryLine] = []
+        async with database.session() as session:
+            alerts = await yt.delivered_between(
+                session, _route(destination), start=start, end=end
+            )
+            for alert in alerts:
+                evidence = await yt.yt_alert_evidence(session, alert)
+                if evidence is None:
+                    continue
+                lines.append(
+                    SummaryLine(
+                        published_at=evidence.started_at or alert.raised_at,
+                        raised_at=alert.raised_at,
+                        alert_id=alert.id,
+                        text=render_yt_summary_entry(
+                            kind=alert.kind,
+                            z=alert.value,
+                            observed=(
+                                evidence.scored_comments
+                                if alert.kind is YtAlertKind.COMMENT_SPIKE
+                                else None
+                            ),
+                            expected=alert.expected,
+                            title=evidence.title,
+                            channel_title=evidence.channel_title,
+                            started_at=evidence.started_at,
+                            video_id=alert.video_id,
+                            zone=destination.zone,
+                        ),
+                    )
+                )
+        return _as_a_timeline(lines)

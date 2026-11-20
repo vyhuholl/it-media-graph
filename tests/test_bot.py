@@ -37,6 +37,7 @@ from itgraph.db.session import Database
 NOW = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
 POST = 500
 CHAT = 100000001
+TOPIC = 901
 
 
 class Recorder(Sender):
@@ -64,14 +65,15 @@ class Recorder(Sender):
 
 @pytest.fixture(autouse=True)
 def configured(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Telegram's chat alone, and quiet hours off.
+    """Telegram's topic of the chat alone, and quiet hours off.
 
     Off by default, so a test's outcome does not depend on the clock; the
     digest far from any NOW a test uses, so it does not fire by accident
-    in tests about direct delivery.
+    in tests about direct delivery. Quiet hours off also means no day
+    for a summary to close.
     """
     monkeypatch.setattr(settings, "alert_chat_id", CHAT)
-    monkeypatch.setattr(settings, "youtube_alert_chat_id", None)
+    monkeypatch.setattr(settings, "telegram_alert_topic", TOPIC)
     monkeypatch.setattr(settings, "youtube_alert_topic_en", None)
     monkeypatch.setattr(settings, "youtube_alert_topic_ru", None)
     monkeypatch.setattr(settings, "alert_quiet_from_hour", 0)
@@ -372,7 +374,7 @@ async def test_the_message_goes_to_the_configured_chat(
     await deliver_once(database, sender, BotStats(), now=NOW)
 
     ((_, destination),) = sender.messages
-    assert (destination.chat_id, destination.topic_id) == (CHAT, None)
+    assert (destination.chat_id, destination.topic_id) == (CHAT, TOPIC)
 
 
 async def test_a_failed_send_leaves_the_alert_outstanding(

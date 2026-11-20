@@ -10,9 +10,8 @@ itgraph_restore_allowed: false
 # The Bot API's address; empty is Telegram's own.
 itgraph_telegram_api: ""
 
-# YouTube's alert chat and its two topics; 0 is none, and then no YouTube alert
-# is sent. All three or none (tasks/inputs.yml).
-itgraph_youtube_alert_chat_id: 0
+# The one alert chat's two YouTube topics, alongside the required chat and its
+# Telegram topic: the four go together, all non-zero (tasks/inputs.yml).
 itgraph_youtube_alert_topic_en: 0
 itgraph_youtube_alert_topic_ru: 0
 

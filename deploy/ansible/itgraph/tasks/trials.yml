@@ -244,8 +244,7 @@
   ansible.builtin.include_tasks: quiet.yml
   vars:
     __itgraph_quiet_wait: >-
-      {{ (__itgraph_trial_retries | default(30) | int) * (__itgraph_trial_delay | default(10) | int)
-         * (2 if __itgraph_has_youtube_alerts | bool else 1) }}
+      {{ (__itgraph_trial_retries | default(30) | int) * (__itgraph_trial_delay | default(10) | int) * 2 }}
 
 - name: Say why the trials cannot be proven, if they cannot
   ansible.builtin.set_fact:
@@ -300,28 +299,19 @@
 
     - name: Note the delivery
       ansible.builtin.set_fact:
-        __itgraph_alert_report: an alert, to this environment's own chat
+        __itgraph_alert_report: an alert, to this environment's own chat's Telegram topic
 
-# YouTube's topics, where this environment has a YouTube chat: a synthetic video of a
-# restored seed of each language, read now, and an alert scored on that reading. Made
-# up rather than taken from the copy, which need not hold a video of a seed of each
-# language; removed at the end, which takes its reading and its alert with it.
-- name: Note that YouTube delivery is not configured
-  ansible.builtin.set_fact:
-    __itgraph_youtube_report: not configured in this environment
-  when: not (__itgraph_has_youtube_alerts | bool)
-
+# YouTube's topics of the one chat: a synthetic video of a restored seed of each
+# language, read now, and an alert scored on that reading. Made up rather than
+# taken from the copy, which need not hold a video of a seed of each language;
+# removed at the end, which takes its reading and its alert with it.
 - name: Note that the YouTube alerts could not be proven
   ansible.builtin.set_fact:
     __itgraph_youtube_report: "could not be proven: {{ __itgraph_trials_quiet }}"
-  when:
-    - __itgraph_has_youtube_alerts | bool
-    - __itgraph_trials_quiet | length > 0
+  when: __itgraph_trials_quiet | length > 0
 
 - name: Deliver a YouTube alert to each topic
-  when:
-    - __itgraph_has_youtube_alerts | bool
-    - __itgraph_trials_quiet | length == 0
+  when: __itgraph_trials_quiet | length == 0
   block:
     - name: Raise a synthetic YouTube alert for a seed of each language
       ansible.builtin.command:
@@ -377,7 +367,7 @@
 
     - name: Note the YouTube deliveries
       ansible.builtin.set_fact:
-        __itgraph_youtube_report: "to the topics {{ __itgraph_youtube_seen[2] }} of this environment's own YouTube chat"
+        __itgraph_youtube_report: "to the topics {{ __itgraph_youtube_seen[2] }} of this environment's own chat"
   always:
     - name: Remove the synthetic videos, their readings and their alerts
       ansible.builtin.command:

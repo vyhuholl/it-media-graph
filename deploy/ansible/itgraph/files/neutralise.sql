@@ -35,6 +35,10 @@ UPDATE yt_weekly_revivals SET delivered_at = now() WHERE delivered_at IS NULL;
 UPDATE tg_rising_offers SET delivered_at = now() WHERE delivered_at IS NULL;
 UPDATE yt_rising_offers SET delivered_at = now() WHERE delivered_at IS NULL;
 
+-- A day summary the dump caught half-sent is finished in production, not
+-- here: its marker closes, and no recap of that day goes out of the copy.
+UPDATE bot_daily_summaries SET sent_at = now() WHERE sent_at IS NULL;
+
 -- A decision pressed in production lands in production, not in the copy.
 UPDATE tg_rising_offers SET applied_at = now(), applied = false WHERE decided_at IS NOT NULL AND applied_at IS NULL;
 UPDATE yt_rising_offers SET applied_at = now(), applied = false WHERE decided_at IS NOT NULL AND applied_at IS NULL;

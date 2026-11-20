@@ -358,7 +358,8 @@ async def test_the_youtube_chat_is_told_about_youtube(
     (reply,) = replies
     assert "оповещений YouTube всего: 0" in reply
     assert "RU: не доставлено 0" in reply
-    assert "каналов в очереди опроса" not in reply
+    # One chat carries both platforms; the Telegram section is included.
+    assert "каналов в очереди опроса" in reply
 
 
 async def test_the_answer_lands_in_the_topic_it_was_asked_in(

@@ -19,7 +19,9 @@ be refused by Telegram — on every retry, for as long as the alert lived.
 
 **Every message fits in one Telegram message,** and a digest that does
 not is sent in parts (``digest_parts``): Telegram takes "1-4096
-characters" and refused the whole digest when one ran longer.
+characters" and refused the whole digest when one ran longer. A day
+summary goes the same way (``summary_parts``), and everything in it but
+the header is escaped plain text.
 """
 
 import html
@@ -36,6 +38,7 @@ __all__ = [
     "Carrier",
     "DigestPart",
     "RenderedAlert",
+    "SummaryLine",
     "TgWeeklyEntryView",
     "WeeklyEntryView",
     "age_phrase",
@@ -44,9 +47,13 @@ __all__ = [
     "message_parts",
     "render_cascade",
     "render_spike",
+    "render_tg_summary_entry",
     "render_tg_weekly_entry",
     "render_weekly_entry",
     "render_youtube",
+    "render_yt_summary_entry",
+    "summary_header",
+    "summary_parts",
     "tg_weekly_empty",
     "tg_weekly_gone",
     "tg_weekly_header",
@@ -504,6 +511,147 @@ def message_parts(
         text = f"{header}\n\n{body}" if body else header
         parts.append(DigestPart(text=text, entries=tuple(group)))
     return parts
+
+
+# --- the day summary -------------------------------------------------------
+#
+# A recap of everything the destination was sent directly in the day that
+# has just ended (bot/summary.py). Its entries are built from the same
+# pieces the alerts' own headlines use, so the two can never disagree
+# about what z 3.7 is called; everything but the header is escaped plain
+# text, and the whole message goes without a link preview, as the weekly
+# lists do.
+
+
+@dataclass(frozen=True, slots=True)
+class SummaryLine:
+    """One alert of a day summary: its text, and what orders it.
+
+    The reader re-reads the day as a timeline, so the order is the
+    post's publication time, not the moment the alert was sent;
+    ``raised_at`` and then the id break ties, so a post's spike precedes
+    its cascade deterministically.
+    """
+
+    published_at: datetime
+    raised_at: datetime
+    alert_id: int
+    text: str
+
+
+def _clock_time(moment: datetime, *, zone: str) -> str:
+    """A moment as the destination's clock reads it: "08:56"."""
+    return moment.astimezone(ZoneInfo(zone)).strftime("%H:%M")
+
+
+def render_tg_summary_entry(
+    *,
+    kind: AlertKind,
+    z: float,
+    observed: float | None,
+    expected: float | None,
+    channel_title: str | None,
+    channel_username: str | None,
+    msg_id: int,
+    published_at: datetime,
+    zone: str,
+) -> str:
+    """One directly delivered Telegram alert, as a summary entry: three
+    lines and nothing else.
+
+    The headline an alert already uses — the metric and how far past
+    normal the post went, a comment alert its count and the usual, a
+    cascade its families without its carrier list. The second line
+    names the channel and the post's clock time: the day is already in
+    the header, and the entry is a record of when the post happened,
+    not of how old it was when the alert fired. The third is the link,
+    where the channel has one.
+    """
+    if kind is AlertKind.REPOST_CASCADE:
+        headline = f"🔁 {int(z)} независимых источника(ов) репостят"
+    elif (
+        kind is AlertKind.COMMENT_SPIKE
+        and observed is not None
+        and expected is not None
+    ):
+        headline = (
+            f"{SPIKE_LABEL.get(kind, '📈 Активность')} — "
+            f"{round(observed)}, {_usual(expected)} (z {z:.1f})"
+        )
+    else:
+        headline = (
+            f"{SPIKE_LABEL.get(kind, '📈 Активность')} — "
+            f"{_magnitude(z)} (z {z:.1f})"
+        )
+    who = f"{_who(channel_title, channel_username)} · "
+    lines = [headline, f"{who}{_clock_time(published_at, zone=zone)}"]
+    link = post_link(channel_username, msg_id)
+    if link:
+        lines.append(link)
+    return "\n".join(lines)
+
+
+def render_yt_summary_entry(
+    *,
+    kind: YtAlertKind,
+    z: float,
+    observed: int | None,
+    expected: float | None,
+    title: str | None,
+    channel_title: str | None,
+    started_at: datetime | None,
+    video_id: str,
+    zone: str,
+) -> str:
+    """One directly delivered YouTube alert, as a summary entry: three
+    lines and nothing else.
+
+    The alert's own headline without the «для канала» suffix — the
+    summary's reader has learned the scale by now — and the second line
+    names the video and its channel with the video's clock time.
+    """
+    label = YT_LABEL.get(kind, "📈 Активность")
+    if (
+        kind is YtAlertKind.COMMENT_SPIKE
+        and observed is not None
+        and expected is not None
+    ):
+        headline = f"{label} — {observed}, {_usual(expected)} (z {z:.1f})"
+    else:
+        headline = f"{label} — {_magnitude(z)} (z {z:.1f})"
+    about = _escape(title or "видео без названия")
+    if channel_title:
+        about += f" — {_escape(channel_title)}"
+    if started_at is not None:
+        about += f" · {_clock_time(started_at, zone=zone)}"
+    return "\n".join(
+        [headline, about, f"https://www.youtube.com/watch?v={video_id}"]
+    )
+
+
+def summary_header(day: date, *, continued: bool = False) -> str:
+    """The head of a day's summary: the day it covers, no count.
+
+    Unlike the digest's header, which says how many alerts it withheld —
+    the count of a recap is not information the way the count of
+    withheld alerts is.
+    """
+    if continued:
+        return f"<b>Сводка за {day:%d.%m.%Y} — продолжение:</b>"
+    return f"<b>Сводка за {day:%d.%m.%Y}:</b>"
+
+
+def summary_parts(
+    entries: Sequence[str], *, day: date, limit: int = MESSAGE_LIMIT
+) -> list[DigestPart]:
+    """A day's directly delivered alerts under its dated header, as few
+    messages as fit, each entry whole in one part."""
+    return message_parts(
+        entries,
+        first=summary_header(day),
+        later=summary_header(day, continued=True),
+        limit=limit,
+    )
 
 
 # The month in the genitive, as a date is read in Russian: "16 ноября".

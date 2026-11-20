@@ -38,6 +38,7 @@ __all__ = [
     "alert_evidence",
     "claim_undelivered",
     "count_delivered_since",
+    "delivered_between",
     "digest_is_due",
     "failing_alerts",
     "folded_posts",
@@ -77,6 +78,21 @@ class PendingAlert:
     # A comment spike's count and the expectation it was scored against.
     observed: float | None = None
     expected: float | None = None
+
+
+def _pending(alert: Alert) -> PendingAlert:
+    return PendingAlert(
+        id=alert.id,
+        kind=alert.kind,
+        channel_id=alert.channel_id,
+        msg_id=alert.msg_id,
+        band=alert.band,
+        value=alert.value,
+        raised_at=alert.raised_at,
+        attempts=alert.attempts,
+        observed=alert.observed,
+        expected=alert.expected,
+    )
 
 
 async def raised_bands(
@@ -330,21 +346,7 @@ async def claim_undelivered(
         .limit(limit)
         .with_for_update(skip_locked=True)
     )
-    return [
-        PendingAlert(
-            id=alert.id,
-            kind=alert.kind,
-            channel_id=alert.channel_id,
-            msg_id=alert.msg_id,
-            band=alert.band,
-            value=alert.value,
-            raised_at=alert.raised_at,
-            attempts=alert.attempts,
-            observed=alert.observed,
-            expected=alert.expected,
-        )
-        for alert in rows.scalars()
-    ]
+    return [_pending(alert) for alert in rows.scalars()]
 
 
 async def mark_delivered(
@@ -482,6 +484,30 @@ async def count_delivered_since(
         )
         or 0
     )
+
+
+async def delivered_between(
+    session: AsyncSession, *, start: datetime, end: datetime
+) -> list[PendingAlert]:
+    """The alerts sent directly inside ``[start, end)``, oldest first.
+
+    The day summary's input: what the operator was read as it happened,
+    so the day that closes is the day it was read in — an alert raised
+    before the window but delivered after its start belongs to the day
+    it was sent in. Held alerts are not in it, on purpose: the morning
+    digest is their summary. Neither are folds, which were never sent
+    on their own, and whose delivery says so.
+    """
+    rows = await session.execute(
+        select(Alert)
+        .where(
+            Alert.delivery == AlertDelivery.DIRECT,
+            Alert.delivered_at >= start,
+            Alert.delivered_at < end,
+        )
+        .order_by(Alert.delivered_at, Alert.id)
+    )
+    return [_pending(alert) for alert in rows.scalars()]
 
 
 @dataclass(frozen=True, slots=True)
