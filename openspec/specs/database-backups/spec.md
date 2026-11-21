@@ -229,6 +229,13 @@ After a restore, nothing in the copy SHALL cause a message to anyone but the env
 - **THEN** no card of it is sent, and the offer is marked delivered
 - **AND** the read-back fails while it remains undelivered
 
+#### Scenario: A day summary marker left open fails the read-back
+
+- **GIVEN** a dump holding a day summary marker whose day was never sent
+- **WHEN** the restore finishes and the bot starts
+- **THEN** the marker is closed as sent, and no summary of that day goes out
+- **AND** the read-back fails while one remains open
+
 #### Scenario: A decision not yet applied in the dump
 
 - **GIVEN** a dump holding a seed decided on a card and not yet applied
@@ -332,20 +339,20 @@ A restore SHALL end with real writes through the running service, under its read
 
 - **GIVEN** a moment outside quiet hours, from which they do not begin before the trials' wait would end
 - **WHEN** the restore raises a synthetic alert on a restored post
-- **THEN** the bot delivers it to the environment's chat, and its delivery is recorded
+- **THEN** the bot delivers it to the environment's chat's Telegram topic, and its delivery is recorded
 
 #### Scenario: A delivered YouTube alert per topic
 
-- **GIVEN** an environment that configures a YouTube chat and its two topics, and a moment outside their quiet hours, from which they do not begin before the trials' wait would end
+- **GIVEN** a moment outside the topics' quiet hours, from which they do not begin before the trials' wait would end
 - **WHEN** the restore raises a synthetic YouTube alert on a synthetic video of a restored English seed, and one of a restored Russian seed
-- **THEN** the bot delivers each to its topic of the environment's YouTube chat, and each delivery and route is recorded
+- **THEN** the bot delivers each to its topic of the environment's chat, and each delivery and route is recorded
 - **AND** the synthetic videos, their readings and their alerts are gone once the restore ends
 
 #### Scenario: No YouTube chat in the environment
 
-- **GIVEN** an environment that configures no YouTube chat
+- **GIVEN** an environment that configures no alert chat
 - **WHEN** the restore reaches the alerts
-- **THEN** it raises no YouTube alert, and the report says YouTube delivery was not configured
+- **THEN** it raises no alert of either platform, and the report says delivery was not configured
 
 #### Scenario: Inside quiet hours
 
@@ -355,7 +362,7 @@ A restore SHALL end with real writes through the running service, under its read
 
 #### Scenario: Quiet hours that would begin during the wait
 
-- **GIVEN** a moment outside quiet hours, from which they would begin before the trials' wait ends — Telegram's, and YouTube's where the environment configures it
+- **GIVEN** a moment outside quiet hours, from which they would begin before the trials' wait ends — Telegram's, and the topics' alike
 - **WHEN** the restore reaches the alerts
 - **THEN** it raises no alert of either platform, and the report says each could not be proven and when quiet hours begin
 

@@ -61,7 +61,7 @@ Computing a day's selection SHALL read only what is stored: it SHALL make no req
 
 ### Requirement: An Offer Is A Card
 
-The bot SHALL send each offer as one message to the Telegram alert chat: the channel's `@username` linked to it, its title, the families that referred to it in the window and before it, the first reference in the window, and links to up to three seed posts that referred to it in the window, one per family. Everything from a channel or a post SHALL be escaped.
+The bot SHALL send each offer as one message to the alert chat's Telegram topic: the channel's `@username` linked to it, its title, the families that referred to it in the window and before it, the first reference in the window, and links to up to three seed posts that referred to it in the window, one per family. Everything from a channel or a post SHALL be escaped.
 
 #### Scenario: A card
 
@@ -77,7 +77,7 @@ The bot SHALL send each offer as one message to the Telegram alert chat: the cha
 
 ### Requirement: Offers Are Delivered Outside Quiet Hours, Uncapped
 
-The bot SHALL send offers in rank order, outside the alert chat's quiet hours, neither counted against the alert cap nor held for the digest. Each offer SHALL be marked delivered once sent; one that failed SHALL be tried again, and SHALL NOT be sent twice once marked.
+The bot SHALL send offers in rank order, to the alert chat's Telegram topic, outside its quiet hours, neither counted against the alert cap nor held for the digest. Each offer SHALL be marked delivered once sent; one that failed SHALL be tried again, and SHALL NOT be sent twice once marked.
 
 #### Scenario: The day's selection
 

@@ -179,7 +179,7 @@ A list's message SHALL state that it is Telegram's list, its week, how many post
 
 ### Requirement: A List Is Delivered Once, Whatever Its Length
 
-The bot SHALL send each undelivered list to Telegram's alert chat, in as many messages as fit, each entry whole in one message, without a link preview. A message that fails SHALL count an attempt on the list and be sent again on a later pass; messages already sent SHALL NOT be sent again. A list SHALL NOT go to any other chat. With no alert chat configured, a list SHALL wait undelivered.
+The bot SHALL send each undelivered list to the alert chat's Telegram topic, in as many messages as fit, each entry whole in one message, without a link preview. A message that fails SHALL count an attempt on the list and be sent again on a later pass; messages already sent SHALL NOT be sent again. A list SHALL NOT go to any other chat or topic. With no alert chat configured, a list SHALL wait undelivered.
 
 #### Scenario: A list longer than a message
 
@@ -195,9 +195,9 @@ The bot SHALL send each undelivered list to Telegram's alert chat, in as many me
 
 #### Scenario: Not to YouTube's chat
 
-- **GIVEN** a YouTube chat configured beside Telegram's
+- **GIVEN** a list undelivered, and the English and Russian topics beside the Telegram one
 - **WHEN** Telegram's list is sent
-- **THEN** no message of it reaches the YouTube chat or its topics
+- **THEN** no message of it reaches the English or the Russian topic, or any other chat
 
 #### Scenario: No alert chat
 

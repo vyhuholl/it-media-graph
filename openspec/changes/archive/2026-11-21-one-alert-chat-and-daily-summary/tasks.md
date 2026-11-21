@@ -73,7 +73,7 @@
 Done by the operator, outside this repository, after this change is released
 and tagged; the order is design.md's («The infrastructure repository»).
 
-- [ ] 5.1 Create the topic «Telegram» in the alerts forum and take its id
+- [x] 5.1 Create the topic «Telegram» in the alerts forum and take its id
       from a message link; then, in the infrastructure repository: the test
       vault's rename (`vault_itgraph_alert_chat_id` ← the forum chat,
       `vault_itgraph_telegram_alert_topic` ← the new topic, YouTube chat
@@ -81,7 +81,7 @@ and tagged; the order is design.md's («The infrastructure repository»).
       both `vault.yml.example` files with their comments. Commit, push, run
       `make itgraph vX.Y.Z` in the test environment, and confirm the three
       topics receive what design.md's steps 1–5 describe.
-- [ ] 5.2 Production: the same vault rename in the private inventory on the
+- [x] 5.2 Production: the same vault rename in the private inventory on the
       controller, then `make itgraph vX.Y.Z PROD=1`; once production's
       Telegram topic has received its first messages, delete the old
       «Telegram ITGraph Alerts» chat (design.md's steps 6–7).

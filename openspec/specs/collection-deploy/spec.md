@@ -250,15 +250,15 @@ A deploy SHALL be a run of the role in this repository, by an operator, at a rel
 
 #### Scenario: A YouTube chat without both its topics
 
-- **GIVEN** a YouTube alert chat given without its English or its Russian topic, or a topic given without the chat
+- **GIVEN** the alert chat given without any of its three topics — Telegram's, English or Russian
 - **WHEN** the role runs
 - **THEN** it fails naming the inputs, before any call that changes the cluster
 
 #### Scenario: No YouTube chat
 
-- **GIVEN** none of the YouTube alert chat and its topics given
+- **GIVEN** none of the alert chat and its topics given
 - **WHEN** the role runs
-- **THEN** it deploys, and the bot's pod holds no YouTube chat or topic
+- **THEN** it fails naming the chat, as any other missing input, before any call that changes the cluster
 
 #### Scenario: Nothing deploys by itself
 
@@ -368,7 +368,7 @@ Each workload's pods SHALL receive only the configuration that workload reads. A
 #### Scenario: The bot's pod
 
 - **WHEN** the bot's pod is rendered
-- **THEN** it holds its own database role's URL, the bot's token, the Telegram chat's id and, where given, the YouTube chat's id and its two topics' ids
+- **THEN** it holds its own database role's URL, the bot's token, the alert chat's id and the ids of its three topics — Telegram's, English and Russian
 - **AND** no superuser URL, Telegram API credential, proxy password, B2 key or YouTube key
 
 #### Scenario: The analysis jobs
