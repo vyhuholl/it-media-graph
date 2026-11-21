@@ -22,6 +22,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    LargeBinary,
     MetaData,
     Text,
     UniqueConstraint,
@@ -3553,3 +3554,86 @@ class YtRisingOffer(Base):
 
     def __repr__(self) -> str:
         return f"YtRisingOffer(day={self.day}, decision={self.decision})"
+
+
+class TgPostEmbedding(Base):
+    """One Telegram text of the raw layer, as one model saw it.
+
+    Pure derivation, re-runnable from ``tg_raw_messages`` at any time —
+    a restore without these rows is completed by one ``itgraph embed``
+    run. The text is immutable in the raw layer (the first fetch wins),
+    so it is embedded once: no hash column, and a future Telegram
+    deletion path would add its own rule then.
+
+    ``vec`` is the model's output as float16 little-endian bytes; the
+    dimension is the named model's business, so nothing here checks a
+    length — ``model_key`` owns it, and a model change is a re-embed of
+    every row, never a migration.
+    """
+
+    __tablename__ = "tg_post_embeddings"
+    __table_args__ = (
+        # References the raw table's primary key, so it costs no index
+        # of its own — the same load-bearing shape `MessageMetric`'s
+        # takes.
+        ForeignKeyConstraint(
+            ["channel_id", "msg_id"],
+            ["tg_raw_messages.channel_id", "tg_raw_messages.msg_id"],
+            ondelete="CASCADE",
+        ),
+    )
+
+    channel_id: Mapped[int] = mapped_column(
+        BigInteger, primary_key=True, autoincrement=False
+    )
+    # Message ids are per-channel, so neither half identifies a row alone.
+    msg_id: Mapped[int] = mapped_column(
+        BigInteger, primary_key=True, autoincrement=False
+    )
+
+    model_key: Mapped[str] = mapped_column(Text)
+    vec: Mapped[bytes] = mapped_column(LargeBinary)
+    embedded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"TgPostEmbedding(channel_id={self.channel_id}, "
+            f"msg_id={self.msg_id}, model_key={self.model_key!r})"
+        )
+
+
+class YtVideoEmbedding(Base):
+    """One YouTube video's title and description, as one model saw them.
+
+    The raw layer is refreshed, not frozen: a payload is overwritten
+    when YouTube says something new, so the embedding carries a
+    ``content_hash`` of the joined text it was made from, and the job
+    re-embeds a video whose refreshed text hashes differently — still
+    one row per video. The foreign key cascades like
+    ``YtRawVideoStat``'s: a video YouTube stops returning takes its
+    embedding with it.
+    """
+
+    __tablename__ = "yt_video_embeddings"
+
+    video_id: Mapped[str] = mapped_column(
+        ForeignKey("yt_raw_videos.video_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+    model_key: Mapped[str] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(Text)
+    # The rest is `TgPostEmbedding`'s shape: fp16 little-endian bytes,
+    # the dimension named by the model.
+    vec: Mapped[bytes] = mapped_column(LargeBinary)
+    embedded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"YtVideoEmbedding(video_id={self.video_id!r}, "
+            f"model_key={self.model_key!r})"
+        )

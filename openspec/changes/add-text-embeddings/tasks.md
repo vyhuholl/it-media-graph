@@ -6,7 +6,7 @@
 
 ## 2. Schema
 
-- [ ] 2.1 Alembic revision creating `tg_post_embeddings` (composite PK, FK cascade onto `tg_raw_messages`) and `yt_video_embeddings` (PK, FK cascade onto `yt_raw_videos`, `content_hash`), plus SELECT grants for the reader role per the existing role migrations. Verify: `make validate` green with the revision applied by the suite's schema build.
+- [x] 2.1 Alembic revision creating `tg_post_embeddings` (composite PK, FK cascade onto `tg_raw_messages`) and `yt_video_embeddings` (PK, FK cascade onto `yt_raw_videos`, `content_hash`), plus SELECT grants for the reader role per the existing role migrations. Verify: `make validate` green with the revision applied by the suite's schema build.
 
 ## 3. Embedding core
 
