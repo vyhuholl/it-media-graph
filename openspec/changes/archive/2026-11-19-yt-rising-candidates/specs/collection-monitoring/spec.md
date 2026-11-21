@@ -31,7 +31,6 @@ Every series SHALL be worked out at scrape time from durable state in the databa
 | `itgraph_youtube_last_complete_pass_timestamp_seconds` | gauge | the newest poll pass that completed, 0 when none |
 | `itgraph_youtube_last_complete_refresh_timestamp_seconds` | gauge | when the newest refresh that completed ended, 0 when none |
 | `itgraph_youtube_oldest_payload_age_seconds{kind}` | gauge | how long ago the oldest stored channel payload was read, `kind="channel"` only; absent when there is none |
-| `itgraph_youtube_chart_read_timestamp_seconds{region}` | gauge | when the newest chart reading of that region was fetched, 0 when none |
 | `itgraph_youtube_rising_lookups_timestamp_seconds` | gauge | when the newest scheduled lookup pass ended, 0 when none |
 | `itgraph_alerts_oldest_undelivered_seconds{platform}` | gauge | the oldest alert of that platform's queue not delivered, held ones included, 0 when none |
 | `itgraph_alerts_failing{platform}` | gauge | undelivered alerts of that platform's queue past the failure-report attempts |
@@ -114,18 +113,11 @@ Every series SHALL be worked out at scrape time from durable state in the databa
 - **WHEN** a client scrapes
 - **THEN** `itgraph_youtube_last_complete_refresh_timestamp_seconds` is 0
 
-#### Scenario: The chart and the lookups of the day
+#### Scenario: The lookups of the day
 
-- **GIVEN** both regions' chart readings fetched at 05:00 and a scheduled lookup pass that ended at 06:00
+- **GIVEN** a scheduled lookup pass that ended at 06:00
 - **WHEN** a client scrapes
-- **THEN** `itgraph_youtube_chart_read_timestamp_seconds` is 05:00 for `region="US"` and for `region="RU"`
-- **AND** `itgraph_youtube_rising_lookups_timestamp_seconds` is 06:00
-
-#### Scenario: A region whose chart failed
-
-- **GIVEN** `US` read at 05:00 today and `RU` last read two days ago
-- **WHEN** a client scrapes
-- **THEN** `itgraph_youtube_chart_read_timestamp_seconds{region="us"}` is today's 05:00 and `{region="ru"}` is two days ago
+- **THEN** `itgraph_youtube_rising_lookups_timestamp_seconds` is 06:00
 
 #### Scenario: Seeds awaiting their walk
 
@@ -156,7 +148,7 @@ Every series SHALL be worked out at scrape time from durable state in the databa
 
 ### Requirement: The Exporter Reads Only Moments And Outcomes
 
-Of a YouTube alert, the exporter SHALL read only its moments and delivery state; of a baseline run of either platform, only when it completed and how many channels it counted; of a YouTube weekly list, only its language and its moments, and of a Telegram weekly list only its moments, and nothing of either's entries or second wind entries; of a refresh's record, only when it ended and how; of a resolution's record, only when it was made and by which command; of Telegram's rising selection, only when a day was computed and when each offer was offered, delivered, decided and applied; of a chart reading, only its region and moment; of a scheduled lookup run, only its moments. Each limit SHALL be enforced by the database role it connects as.
+Of a YouTube alert, the exporter SHALL read only its moments and delivery state; of a baseline run of either platform, only when it completed and how many channels it counted; of a YouTube weekly list, only its language and its moments, and of a Telegram weekly list only its moments, and nothing of either's entries or second wind entries; of a refresh's record, only when it ended and how; of a resolution's record, only when it was made and by which command; of Telegram's rising selection, only when a day was computed and when each offer was offered, delivered, decided and applied; of a scheduled lookup run, only its moments. Each limit SHALL be enforced by the database role it connects as.
 
 #### Scenario: The role cannot read what an alert is about
 
@@ -192,12 +184,6 @@ Of a YouTube alert, the exporter SHALL read only its moments and delivery state;
 
 - **GIVEN** the exporter's database role
 - **WHEN** it selects a rising offer's channel, rank, numbers, decision, kind or reason, or a day's date
-- **THEN** the database refuses with a permission error
-
-#### Scenario: The role cannot read a chart's videos
-
-- **GIVEN** the exporter's database role
-- **WHEN** it selects anything of a chart reading but its region and moment
 - **THEN** the database refuses with a permission error
 
 #### Scenario: The role cannot read a lookup run's counts

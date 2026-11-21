@@ -227,17 +227,17 @@ async def seed(connection: Any) -> None:
     # YouTube's day of rising offers: one not yet sent, one decided and
     # not applied, on channels the restore keeps.
     await connection.execute(
-        "INSERT INTO yt_rising_offer_days (day, computed_at, size_chart, "
-        "size_links) VALUES ($1, $2, 3, 3)",
+        "INSERT INTO yt_rising_offer_days (day, computed_at, size_links) "
+        "VALUES ($1, $2, 3)",
         NOW.date(),
         NOW,
     )
     await connection.execute(
-        "INSERT INTO yt_rising_offers (day, channel_id, ranking, "
+        "INSERT INTO yt_rising_offers (day, channel_id, "
         "discovered_via, topic, offered_at, delivered_at, decision, "
         "decided_at) VALUES "
-        f"($1, '{FAKE_YT}', 'link', 'telegram', 'en', $2, NULL, NULL, NULL), "
-        f"($1, '{FAKE_YT_OTHER}', 'chart', 'chart', 'ru', $2, $2, 'maybe', $2)",
+        f"($1, '{FAKE_YT}', 'telegram', 'en', $2, NULL, NULL, NULL), "
+        f"($1, '{FAKE_YT_OTHER}', 'telegram', 'ru', $2, $2, 'maybe', $2)",
         NOW.date(),
         NOW,
     )

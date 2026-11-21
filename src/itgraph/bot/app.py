@@ -47,11 +47,10 @@ goes. An offer whose channel was reviewed some other way first is closed
 unsent.
 
 **And YouTube's** (`yt-rising-review`): the same cards into the one
-chat's YouTube topics, each to the topic of its language — a chart
-offer's by its region, a link offer's read from its payload's
-`defaultLanguage` when that is one of the two, else the English topic —
-each topic claiming its own, so a topic that refuses fails the send and
-nothing of the offer goes anywhere else.
+chat's YouTube topics, each to the topic of its language — read from
+its payload's `defaultLanguage` when that is one of the two, else the
+English topic — each topic claiming its own, so a topic that refuses
+fails the send and nothing of the offer goes anywhere else.
 """
 
 import asyncio
@@ -101,10 +100,8 @@ from itgraph.bot.review import (
 from itgraph.bot.summary import maybe_summary
 from itgraph.bot.yt_review import (
     ChannelView,
-    ChartCardView,
     LinkCardView,
     read_channel,
-    render_chart_card,
     render_link_card,
 )
 from itgraph.bot.yt_review import (
@@ -116,7 +113,7 @@ from itgraph.bot.yt_review import (
 from itgraph.config import settings
 from itgraph.db import weekly as tg_weekly
 from itgraph.db.alerts import alert_evidence, digest_is_due
-from itgraph.db.models import ChannelStatus, YtRisingRanking, YtVideoFormat
+from itgraph.db.models import ChannelStatus, YtVideoFormat
 from itgraph.db.offers import (
     PendingOffer,
     card_posts,
@@ -129,9 +126,6 @@ from itgraph.db.yt_offers import (
     PendingOffer as YtPendingOffer,
 )
 from itgraph.db.yt_offers import (
-    charting_video,
-)
-from itgraph.db.yt_offers import (
     claim_offers as claim_yt_offers,
 )
 from itgraph.db.yt_offers import (
@@ -140,7 +134,6 @@ from itgraph.db.yt_offers import (
 from itgraph.db.yt_offers import (
     mark_offer_failed as mark_yt_offer_failed,
 )
-from itgraph.db.yt_rising import moscow_day_start
 from itgraph.db.yt_weekly import (
     PendingList,
     claim_lists,
@@ -1066,7 +1059,7 @@ async def _deliver_yt_offers(
         view = read_channel(offer.payload)
         try:
             await sender.send(
-                await _yt_card(database, offer, view, destination),
+                _yt_card(offer, view, destination),
                 destination=destination,
                 preview_url=yt_channel_link(view, offer.channel_id),
                 keyboard=yt_first_step(offer.id),
@@ -1093,32 +1086,13 @@ async def _deliver_yt_offers(
         stats.offers += 1
 
 
-async def _yt_card(
-    database: Database,
+def _yt_card(
     offer: YtPendingOffer,
     view: ChannelView,
     destination: Destination,
 ) -> str:
-    """A YouTube offer's card, whichever ranking's shape it fills. The
-    charting video of a chart offer is read from the stored reading at
-    sending, like the channel's own payload."""
-    if offer.ranking is YtRisingRanking.CHART:
-        async with database.session() as session:
-            video = await charting_video(
-                session,
-                offer.channel_id,
-                region=offer.region or "",
-                day_start=moscow_day_start(offer.offered_at),
-            )
-        return render_chart_card(
-            ChartCardView(
-                channel_id=offer.channel_id,
-                channel=view,
-                region=offer.region or "",
-                position=offer.position or 0,
-                video=video,
-            )
-        )
+    """A YouTube offer's card: the channel's own payload as read at
+    sending, shaped with the evidence the ranking counted."""
     return render_link_card(
         LinkCardView(
             channel_id=offer.channel_id,

@@ -5,15 +5,13 @@ Ids are fake and spelled so.
 
 from datetime import UTC, datetime, timedelta
 
-from itgraph.db.models import YtAlertRoute, YtDiscoverySource, YtRisingRanking
+from itgraph.db.models import YtDiscoverySource
 from itgraph.derive.yt_offers import (
-    card_topic,
     choose_offers,
     offer_day,
     strongest_sources,
 )
 from itgraph.derive.yt_rising import (
-    ChartChannel,
     FeaturedReadings,
     LinkReference,
     RisingChannel,
@@ -33,73 +31,32 @@ def link(n: int, families: int = 2) -> RisingChannel:
     )
 
 
-def chart(
-    n: int, region: str = "RU", position: int | None = None
-) -> ChartChannel:
-    return ChartChannel(
-        channel_id=f"UCfakeRisingCharts00{n}",
-        region=region,
-        position=position if position is not None else n,
-    )
-
-
 LINKS = [link(n, families=9 - n) for n in range(1, 5)]  # 4 link channels
-CHART_RU = [
-    chart(n, "RU")
-    for n in range(1, 8)  # 7 chart channels of RU
-]
 
 
-def test_the_head_of_both_rankings() -> None:
-    offers = choose_offers(LINKS, CHART_RU, set(), size_links=3, size_chart=3)
+def test_the_head_of_the_ranking() -> None:
+    offers = choose_offers(LINKS, set(), size_links=3)
 
-    # The link ranking's three first, in rank order, then the chart's.
-    assert [(o.ranking, o.channel_id) for o in offers] == [
-        (YtRisingRanking.LINK, LINKS[0].channel_id),
-        (YtRisingRanking.LINK, LINKS[1].channel_id),
-        (YtRisingRanking.LINK, LINKS[2].channel_id),
-        (YtRisingRanking.CHART, CHART_RU[0].channel_id),
-        (YtRisingRanking.CHART, CHART_RU[1].channel_id),
-        (YtRisingRanking.CHART, CHART_RU[2].channel_id),
+    # The three ranked highest, in rank order.
+    assert [o.channel_id for o in offers] == [
+        LINKS[0].channel_id,
+        LINKS[1].channel_id,
+        LINKS[2].channel_id,
     ]
     assert offers[0].families == LINKS[0].families
     assert offers[0].first_in_window == FIRST
-    assert offers[4].region == "RU"
-    assert offers[4].position == CHART_RU[1].position
     # The rest are not offered.
-    assert len(offers) == 6
-
-
-def test_the_link_ranking_wins_a_channel_both_hold() -> None:
-    both = ChartChannel(
-        channel_id=LINKS[0].channel_id, region="RU", position=1
-    )
-    ranking = [*CHART_RU, both]
-
-    offers = choose_offers(LINKS, ranking, set(), size_links=3, size_chart=3)
-
-    link_side = [o for o in offers if o.ranking is YtRisingRanking.LINK]
-    chart_side = [o for o in offers if o.ranking is YtRisingRanking.CHART]
-    assert LINKS[0].channel_id in {o.channel_id for o in link_side}
-    # The chart's three go to channels the link ranking did not take.
-    assert LINKS[0].channel_id not in {o.channel_id for o in chart_side}
-    assert {o.channel_id for o in chart_side} == {
-        CHART_RU[0].channel_id,
-        CHART_RU[1].channel_id,
-        CHART_RU[2].channel_id,
-    }
+    assert len(offers) == 3
 
 
 def test_the_overflow_waits_for_the_next_day() -> None:
-    yesterday = choose_offers(LINKS, [], set(), size_links=3, size_chart=3)
+    yesterday = choose_offers(LINKS, set(), size_links=3)
     offered = {o.channel_id for o in yesterday}
     # Something new rose overnight, between the one left over.
     newcomer = link(90, families=3)
     today_ranking = [LINKS[3], newcomer]
 
-    today = choose_offers(
-        today_ranking, [], offered, size_links=3, size_chart=3
-    )
+    today = choose_offers(today_ranking, offered, size_links=3)
 
     assert [o.channel_id for o in today] == [
         LINKS[3].channel_id,
@@ -108,33 +65,17 @@ def test_the_overflow_waits_for_the_next_day() -> None:
 
 
 def test_a_channel_offered_before_is_not_offered_again() -> None:
-    """Whatever side it came from, and whatever came of it."""
-    offered = {LINKS[0].channel_id, CHART_RU[0].channel_id}
+    """Whatever came of it."""
+    offered = {LINKS[0].channel_id}
 
-    offers = choose_offers(
-        LINKS, CHART_RU, offered, size_links=3, size_chart=3
-    )
+    offers = choose_offers(LINKS, offered, size_links=3)
 
     assert offered.isdisjoint(o.channel_id for o in offers)
-    assert len(offers) == 6
-
-
-def test_the_chart_counts_per_region() -> None:
-    us = [chart(20 + n, "US") for n in range(5)]
-
-    offers = choose_offers(
-        [], [*CHART_RU, *us], set(), size_links=3, size_chart=3
-    )
-
-    per_region: dict[str, int] = {}
-    for offer in offers:
-        assert offer.region is not None
-        per_region[offer.region] = per_region.get(offer.region, 0) + 1
-    assert per_region == {"RU": 3, "US": 3}
+    assert len(offers) == 3
 
 
 def test_an_empty_day() -> None:
-    assert choose_offers([], [], set(), size_links=3, size_chart=3) == []
+    assert choose_offers([], set(), size_links=3) == []
 
 
 def test_the_day_is_the_chat_s_date() -> None:
@@ -142,15 +83,6 @@ def test_the_day_is_the_chat_s_date() -> None:
     assert offer_day(datetime(2026, 11, 18, 23, 30, tzinfo=UTC)) == (
         datetime(2026, 11, 19, 0, tzinfo=UTC).date()
     )
-
-
-def test_a_chart_offer_s_topic_follows_its_region() -> None:
-    assert card_topic(YtRisingRanking.CHART, "US") is YtAlertRoute.EN
-    assert card_topic(YtRisingRanking.CHART, "RU") is YtAlertRoute.RU
-    # A region no topic takes reads in English, as an unknown language.
-    assert card_topic(YtRisingRanking.CHART, "GB") is YtAlertRoute.EN
-    # Nothing tells a link offer's language at selection.
-    assert card_topic(YtRisingRanking.LINK, None) is YtAlertRoute.EN
 
 
 def _rows(

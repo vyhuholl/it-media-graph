@@ -83,16 +83,16 @@ async def an_offer(
             await session.execute(
                 text(
                     "INSERT INTO yt_rising_offer_days "
-                    "(day, computed_at, size_chart, size_links) "
-                    "VALUES ('2026-11-19', now(), 3, 3)"
+                    "(day, computed_at, size_links) "
+                    "VALUES ('2026-11-19', now(), 3)"
                 )
             )
             offer_id = await session.scalar(
                 text(
                     "INSERT INTO yt_rising_offers "
-                    "(day, channel_id, ranking, families, families_before, "
+                    "(day, channel_id, families, families_before, "
                     "discovered_via, topic, offered_at, delivered_at) "
-                    "VALUES ('2026-11-19', :id, 'link', 2, 0, 'telegram', "
+                    "VALUES ('2026-11-19', :id, 2, 0, 'telegram', "
                     "'en', now(), CASE WHEN :sent THEN now() END) "
                     "RETURNING id"
                 ),

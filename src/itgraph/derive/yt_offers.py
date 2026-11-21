@@ -1,14 +1,12 @@
 """The daily selection of YouTube's rising channels for review in the
 bot.
 
-Which channels a day offers is pure: the link ranking's head first, then
-the chart's — at most ``youtube_rising_link_offers_per_day`` of the one
-and ``youtube_rising_chart_offers_per_region`` of each region of the
-other — less every channel offered before, and a channel both rankings
-hold is taken by the link one. A channel is offered once, ever; the
-overflow waits for the next day's selection, which ranks again.
+Which channels a day offers is pure: the ranking's head — at most
+``youtube_rising_link_offers_per_day`` of it — less every channel
+offered before. A channel is offered once, ever; the overflow waits
+for the next day's selection, which ranks again.
 
-The pass around it loads the rankings' rows as `itgraph yt rising`
+The pass around it loads the ranking's rows as `itgraph yt rising`
 does, ranks as of now, and stores the day whole — an empty day too, so
 that the series can tell "nothing rose" from "the pass did not run" —
 creating each offered channel's ``candidate`` record, as the queues'
@@ -18,9 +16,9 @@ transaction as the day, before the bot can claim an offer, so a card is
 titled the day it is sent; where none is — the test environment's
 selection, which holds no key — the day is stored without a request, as
 it always was, and the night refresh fetches the payload. The record of
-a link offer carries the source of its strongest evidence, a chart
-offer's ``chart``. The pass takes no lease, and says counts alone: a
-job's output is kept, and only `--preview` names the channels — by id.
+an offer carries the source of its strongest evidence. The pass takes
+no lease, and says counts alone: a job's output is kept, and only
+`--preview` names the channels — by id.
 
 The decisions pressed in the bot are applied by `apply-reviews`, which
 the detection job runs every 15 minutes: each once, oldest first, a
@@ -40,7 +38,6 @@ from itgraph.db.models import (
     YtAlertRoute,
     YtCommand,
     YtDiscoverySource,
-    YtRisingRanking,
 )
 from itgraph.db.session import Database
 from itgraph.db.yt_channels import store_payloads
@@ -54,7 +51,6 @@ from itgraph.db.yt_offers import (
 from itgraph.db.yt_quota import QuotaError
 from itgraph.db.yt_rising import load_yt_rising_rows
 from itgraph.derive.yt_rising import (
-    ChartChannel,
     FamilyKey,
     LinkReference,
     RisingChannel,
@@ -71,12 +67,17 @@ __all__ = [
     "Chosen",
     "OfferSummary",
     "apply_reviews",
-    "card_topic",
     "choose_offers",
     "offer_day",
     "run_offer",
     "strongest_sources",
 ]
+
+
+# The topic an offer's card is stored to go to: the English default —
+# nothing tells its language before a payload exists, and once one
+# does, the delivery reads the language from it.
+CARD_TOPIC = YtAlertRoute.EN
 
 logger = logging.getLogger(__name__)
 
@@ -86,14 +87,9 @@ BoughtPayloads = Mapping[str, Mapping[str, object]]
 
 @dataclass(frozen=True, slots=True)
 class Chosen:
-    """One channel the day takes, and what its ranking filled."""
+    """One channel the day takes, and the evidence the ranking counted."""
 
-    ranking: YtRisingRanking
     channel_id: str
-    # A chart offer's place in its region's reading.
-    region: str | None = None
-    position: int | None = None
-    # A link offer's evidence, as the ranking counted it.
     families: int | None = None
     families_before: int | None = None
     first_in_window: datetime | None = None
@@ -101,80 +97,31 @@ class Chosen:
 
 def choose_offers(
     links: Sequence[RisingChannel],
-    chart: Sequence[ChartChannel],
     offered: AbstractSet[str],
     *,
     size_links: int,
-    size_chart: int,
 ) -> list[Chosen]:
-    """The day's offers: the link ranking's head first, then the
-    chart's.
+    """The day's offers: the ranking's head.
 
-    ``links`` and ``chart`` are the rankings' lists, already in rank
-    order. Each side skips channels offered before; the chart side also
-    skips every channel the link side took, and counts its size per
-    region. What neither side takes waits for the next day's selection,
-    which ranks again.
+    ``links`` is the ranking's list, already in rank order. It skips
+    channels offered before. What it does not take waits for the next
+    day's selection, which ranks again.
     """
     chosen: list[Chosen] = []
-    taken: set[str] = set()
     for item in links:
         if len(chosen) >= size_links:
             break
-        if item.channel_id in offered or item.channel_id in taken:
+        if item.channel_id in offered:
             continue
-        taken.add(item.channel_id)
         chosen.append(
             Chosen(
-                ranking=YtRisingRanking.LINK,
                 channel_id=item.channel_id,
                 families=item.families,
                 families_before=item.families_before,
                 first_in_window=item.first_in_window,
             )
         )
-    per_region: dict[str, int] = {}
-    for row in chart:
-        if row.channel_id in offered or row.channel_id in taken:
-            continue
-        if per_region.get(row.region, 0) >= size_chart:
-            continue
-        per_region[row.region] = per_region.get(row.region, 0) + 1
-        taken.add(row.channel_id)
-        chosen.append(
-            Chosen(
-                ranking=YtRisingRanking.CHART,
-                channel_id=row.channel_id,
-                region=row.region,
-                position=row.position,
-            )
-        )
     return chosen
-
-
-# Which topic a chart offer's region reads in; a region without an entry
-# takes the English topic, as a link offer of an unknown language does.
-CHART_TOPICS: Mapping[str, YtAlertRoute] = {
-    "US": YtAlertRoute.EN,
-    "RU": YtAlertRoute.RU,
-}
-
-
-def card_topic(ranking: YtRisingRanking, region: str | None) -> YtAlertRoute:
-    """The topic an offer's card is stored to go to.
-
-    Decided at selection, so the bot never re-derives a chart offer's; a
-    link offer's is the English default — nothing tells its language
-    before a payload exists, and once one does, the delivery reads the
-    language from it.
-    """
-    if (
-        ranking is YtRisingRanking.CHART
-        and region is not None
-        and region in CHART_TOPICS
-    ):
-        return CHART_TOPICS[region]
-    return YtAlertRoute.EN
 
 
 # A link offer's evidence sources, strongest first on a tie.
@@ -250,7 +197,6 @@ class OfferSummary:
 
     day: date
     rising_links: int = 0
-    rising_chart: int = 0
     offered: int = 0
     left: int = 0
     stored: bool = False
@@ -263,26 +209,18 @@ class OfferSummary:
             return f"{self.day} has its selection; nothing written"
         line = (
             f"{self.day}: {self.rising_links} rising by links, "
-            f"{self.rising_chart} in the day's charts, "
             f"{self.offered} offered, {self.left} left for a later day"
         )
         return line if self.stored else f"{line} (preview, nothing written)"
 
     def preview(self) -> list[str]:
         """The offers by id, for an operator at a terminal."""
-        lines: list[str] = []
-        for rank, offer in enumerate(self.offers, start=1):
-            if offer.ranking is YtRisingRanking.CHART:
-                lines.append(
-                    f"{rank:>3}. {offer.channel_id}  chart "
-                    f"{offer.region} {offer.position}"
-                )
-            else:
-                lines.append(
-                    f"{rank:>3}. {offer.channel_id}  link  "
-                    f"{offer.families} families in the window, "
-                    f"{offer.families_before} before"
-                )
+        lines = [
+            f"{rank:>3}. {offer.channel_id}  link  "
+            f"{offer.families} families in the window, "
+            f"{offer.families_before} before"
+            for rank, offer in enumerate(self.offers, start=1)
+        ]
         return lines or ["  none"]
 
 
@@ -292,16 +230,9 @@ def _stored_offers(
 ) -> list[NewOffer]:
     return [
         NewOffer(
-            ranking=offer.ranking,
             channel_id=offer.channel_id,
-            discovered_via=(
-                YtDiscoverySource.CHART
-                if offer.ranking is YtRisingRanking.CHART
-                else sources[offer.channel_id]
-            ),
-            topic=card_topic(offer.ranking, offer.region),
-            region=offer.region,
-            position=offer.position,
+            discovered_via=sources[offer.channel_id],
+            topic=CARD_TOPIC,
             families=offer.families,
             families_before=offer.families_before,
             first_in_window=offer.first_in_window,
@@ -362,17 +293,14 @@ async def run_offer(
     )
     chosen = choose_offers(
         ranked.links,
-        ranked.chart,
         offered,
         size_links=settings.youtube_rising_link_offers_per_day,
-        size_chart=settings.youtube_rising_chart_offers_per_region,
     )
     summary.rising_links = len(ranked.links)
-    summary.rising_chart = len(ranked.chart)
     summary.offered = len(chosen)
     fresh = len(
         [item for item in ranked.links if item.channel_id not in offered]
-    ) + len([item for item in ranked.chart if item.channel_id not in offered])
+    )
     summary.left = fresh - len(chosen)
     if preview:
         summary.offers = list(chosen)
@@ -394,7 +322,6 @@ async def run_offer(
             session,
             day=summary.day,
             computed_at=moment,
-            size_chart=settings.youtube_rising_chart_offers_per_region,
             size_links=settings.youtube_rising_link_offers_per_day,
             offers=_stored_offers(chosen, sources),
         )

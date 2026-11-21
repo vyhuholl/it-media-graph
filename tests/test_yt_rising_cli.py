@@ -1,9 +1,9 @@
-"""`itgraph yt rising`: both rankings as one report, ids and counts only.
+"""`itgraph yt rising`: the ranking as one report, ids and counts only.
 
-A ranked row of each kind shows ids, numbers and dates and nothing read
-from the API beyond ids; the command writes nothing, makes no request
-and needs no key; what could not be counted is said. Every id and post
-is invented, and nothing touches a socket.
+A ranked row shows ids, numbers and dates and nothing read from the API
+beyond ids; the command writes nothing, makes no request and needs no
+key; what could not be counted is said. Every id and post is invented,
+and nothing touches a socket.
 """
 
 import asyncio
@@ -22,14 +22,12 @@ from itgraph.config import settings
 from itgraph.db import session as db_session
 from itgraph.db.models import YtDiscoveryPath, YtLookupKind
 from itgraph.db.session import Database
-from itgraph.db.yt_chart import store_chart
 from itgraph.db.yt_lookups import store_lookups
 from itgraph.db.yt_videos import VideoWrite, store_videos
 
 NOW = datetime.now(UTC)
 SEED = "seed"
 TARGET = 90
-OTHER = 91
 runner = CliRunner()
 
 
@@ -46,8 +44,8 @@ def offline(monkeypatch: pytest.MonkeyPatch, database_url: str) -> None:
 
 
 async def _arrange(database_url: str) -> None:
-    """A rising channel of two families, a chart channel of the day,
-    and a reference awaiting a lookup."""
+    """A rising channel of two families, and a reference awaiting a
+    lookup."""
     database = Database(database_url)
     try:
         await tg_channel(database, 2001)
@@ -112,24 +110,11 @@ async def _arrange(database_url: str) -> None:
                 {(YtLookupKind.VIDEO, video_id(1)): channel_id(TARGET)},
                 fetched_at=NOW - timedelta(days=1),
             )
-            await store_chart(
-                session,
-                "RU",
-                {
-                    "items": [
-                        {
-                            "id": video_id(4),
-                            "snippet": {"channelId": channel_id(OTHER)},
-                        }
-                    ]
-                },
-                fetched_at=datetime.now(UTC),
-            )
     finally:
         await database.dispose()
 
 
-def test_the_report_shows_a_row_of_each_kind(
+def test_the_report_shows_a_ranked_row(
     monkeypatch: pytest.MonkeyPatch, database_url: str
 ) -> None:
     asyncio.run(_arrange(database_url))
@@ -141,8 +126,6 @@ def test_the_report_shows_a_row_of_each_kind(
     assert "2 families in the window, 0 before" in result.output
     first = (NOW - timedelta(days=5)).date().isoformat()
     assert f"first in the window {first}" in result.output
-    # The chart-ranked row: region, position, id — and nothing else.
-    assert f"RU    1  {channel_id(OTHER)}" in result.output
     # What could not be counted.
     assert "awaiting a lookup: 1" in result.output
     assert "run `itgraph yt rising-lookups`" in result.output
@@ -175,7 +158,6 @@ def test_the_report_writes_nothing_and_needs_no_key(
                         "SELECT (SELECT COUNT(*) FROM yt_raw_channels) "
                         "+ (SELECT COUNT(*) FROM yt_channels) "
                         "+ (SELECT COUNT(*) FROM yt_raw_videos) "
-                        "+ (SELECT COUNT(*) FROM yt_raw_charts) "
                         "+ (SELECT COUNT(*) FROM yt_raw_lookups)"
                     )
                 )

@@ -1,19 +1,19 @@
 """YouTube's rising offers: a day's selection, its delivery, its
 decisions.
 
-Telegram's tables with a place and a language: which of the two rankings
-offered a channel and what it filled, the discovery source of the record
-the selection created, and the topic its card goes to. A seed's decision
-carries a language, as ``itgraph yt mark`` records one. As on Telegram:
-a channel is offered once, ever; an offer holds no title and no handle —
-the bot reads the channel at sending — and nobody who pressed.
+Telegram's tables with a place and a language: the discovery source of
+the record the selection created, and the topic its card goes to. A
+seed's decision carries a language, as ``itgraph yt mark`` records one.
+As on Telegram: a channel is offered once, ever; an offer holds no
+title and no handle — the bot reads the channel at sending — and
+nobody who pressed.
 """
 
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 
-from sqlalchemy import String, Text, and_, case, exists, func, select, update
+from sqlalchemy import String, Text, case, exists, func, select, update
 from sqlalchemy import cast as sa_cast
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,12 +30,8 @@ from itgraph.db.models import (
     YtRejectReason,
     YtRisingOffer,
     YtRisingOfferDay,
-    YtRisingRanking,
 )
 from itgraph.db.yt_channels import Review, create_channels, mark_channel
-from itgraph.db.yt_chart import charts_of_the_day
-from itgraph.db.yt_rising import chart_items
-from itgraph.derive.yt_rising import ChartEntry
 
 __all__ = [
     "DAY_KEY",
@@ -45,7 +41,6 @@ __all__ = [
     "OfferState",
     "PendingOffer",
     "apply_decision",
-    "charting_video",
     "claim_offers",
     "day_has_selection",
     "decided_unapplied",
@@ -65,14 +60,10 @@ DAY_KEY = "pk_yt_rising_offer_days"
 class NewOffer:
     """One channel of a day's selection, as it is stored."""
 
-    ranking: YtRisingRanking
     channel_id: str
     discovered_via: YtDiscoverySource
     topic: YtAlertRoute
-    # A chart offer's place in its region's reading.
-    region: str | None = None
-    position: int | None = None
-    # A link offer's evidence, as the ranking counted it.
+    # The evidence the ranking counted for the channel.
     families: int | None = None
     families_before: int | None = None
     first_in_window: datetime | None = None
@@ -97,7 +88,6 @@ async def store_day(
     *,
     day: date,
     computed_at: datetime,
-    size_chart: int,
     size_links: int,
     offers: Sequence[NewOffer],
 ) -> Sequence[NewOffer] | None:
@@ -128,7 +118,6 @@ async def store_day(
                 YtRisingOfferDay(
                     day=day,
                     computed_at=computed_at,
-                    size_chart=size_chart,
                     size_links=size_links,
                 )
             )
@@ -137,9 +126,6 @@ async def store_day(
                 YtRisingOffer(
                     day=day,
                     channel_id=offer.channel_id,
-                    ranking=offer.ranking,
-                    region=offer.region,
-                    position=offer.position,
                     families=offer.families,
                     families_before=offer.families_before,
                     first_in_window=offer.first_in_window,
@@ -169,9 +155,6 @@ class PendingOffer:
 
     id: int
     channel_id: str
-    ranking: YtRisingRanking
-    region: str | None
-    position: int | None
     families: int | None
     families_before: int | None
     first_in_window: datetime | None
@@ -180,9 +163,9 @@ class PendingOffer:
     payload: dict[str, object] | None
 
 
-# A link offer's payload may have fetched a language since it was
-# offered; that language moves the card, which is why the claim routes
-# by it rather than by the stored topic alone.
+# An offer's payload may have fetched a language since it was offered;
+# that language moves the card, which is why the claim routes by it
+# rather than by the stored topic alone.
 def _default_language() -> ColumnElement[str]:
     return sa_cast(
         YtRawChannel.payload["snippet"]["defaultLanguage"].astext, Text
@@ -191,15 +174,9 @@ def _default_language() -> ColumnElement[str]:
 
 def _routed_topic() -> ColumnElement[str]:
     """The topic an offer's card goes to as of now: its stored one,
-    unless a link offer's stored payload names a language of a topic."""
+    unless the stored payload names a language of a topic."""
     return case(
-        (
-            and_(
-                YtRisingOffer.ranking == YtRisingRanking.LINK,
-                _default_language().in_(("en", "ru")),
-            ),
-            _default_language(),
-        ),
+        (_default_language().in_(("en", "ru")), _default_language()),
         else_=YtRisingOffer.topic.cast(String),
     )
 
@@ -213,9 +190,6 @@ async def claim_offers(
         select(
             YtRisingOffer.id,
             YtRisingOffer.channel_id,
-            YtRisingOffer.ranking,
-            YtRisingOffer.region,
-            YtRisingOffer.position,
             YtRisingOffer.families,
             YtRisingOffer.families_before,
             YtRisingOffer.first_in_window,
@@ -254,26 +228,6 @@ async def mark_offer_failed(
         .where(YtRisingOffer.id == offer_id)
         .values(attempts=YtRisingOffer.attempts + 1, last_error=error[:500])
     )
-
-
-async def charting_video(
-    session: AsyncSession,
-    channel_id: str,
-    *,
-    region: str,
-    day_start: datetime,
-) -> ChartEntry | None:
-    """The video that charted the channel, read from the stored reading.
-
-    The channel's first in the day's reading of its region — the chart's
-    own order — or ``None`` if no reading of that day holds it. Its
-    title is ``None`` in a reading stored before titles were asked for.
-    """
-    charts = await charts_of_the_day(session, (region,), day_start=day_start)
-    for entry in chart_items(charts.get(region, {})):
-        if entry.channel_id == channel_id:
-            return entry
-    return None
 
 
 @dataclass(frozen=True, slots=True)

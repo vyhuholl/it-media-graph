@@ -38,7 +38,6 @@ from itgraph.db.models import (
     YtLookupKind,
 )
 from itgraph.db.session import Database
-from itgraph.db.yt_chart import store_chart
 from itgraph.db.yt_lookups import store_lookups
 from itgraph.db.yt_videos import VideoWrite, store_videos
 from itgraph.yt import client as yt_client
@@ -47,7 +46,6 @@ from itgraph.yt.client import youtube
 NOW = datetime.now(UTC)
 TODAY = NOW.astimezone(ZoneInfo("Europe/Moscow")).date()
 TARGET = 90
-CHARTED = 91
 runner = CliRunner()
 
 
@@ -65,7 +63,7 @@ def offline(database_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
 
 async def _arrange(database_url: str) -> None:
     """A rising channel of two families — one Telegram, one a video's
-    reference — and a channel of the day's RU chart."""
+    reference."""
     database = Database(database_url)
     try:
         await tg_channel(database, 2001)
@@ -106,35 +104,22 @@ async def _arrange(database_url: str) -> None:
                 {(YtLookupKind.VIDEO, video_id(1)): channel_id(TARGET)},
                 fetched_at=NOW - timedelta(days=1),
             )
-            await store_chart(
-                session,
-                "RU",
-                {
-                    "items": [
-                        {
-                            "id": video_id(4),
-                            "snippet": {"channelId": channel_id(CHARTED)},
-                        }
-                    ]
-                },
-                fetched_at=datetime.now(UTC),
-            )
     finally:
         await database.dispose()
 
 
-async def _offers(url: str) -> list[tuple[str, str, str, str]]:
+async def _offers(url: str) -> list[tuple[str, str, str]]:
     database = Database(url)
     try:
         async with database.session() as session:
             rows = await session.execute(
                 text(
-                    "SELECT o.channel_id, o.ranking::text, "
+                    "SELECT o.channel_id, "
                     "o.discovered_via::text, o.topic::text "
                     "FROM yt_rising_offers o ORDER BY o.id"
                 )
             )
-            return [(row[0], row[1], row[2], row[3]) for row in rows]
+            return [(row[0], row[1], row[2]) for row in rows]
     finally:
         await database.dispose()
 
@@ -182,20 +167,14 @@ def test_the_day_s_selection_with_records_and_counts_only(
 
     assert result.exit_code == 0, result.output
     offers = asyncio.run(_offers(database_url))
-    # The link ranking's head first, the tie of one family a side going
-    # to Telegram; then the chart's, in the Russian topic.
-    assert offers == [
-        (channel_id(TARGET), "link", "telegram", "en"),
-        (channel_id(CHARTED), "chart", "chart", "ru"),
-    ]
-    # Each offered channel became a candidate record, without data.
+    # The ranking's head: the tie of one family a side going to
+    # Telegram, the card's topic the English default.
+    assert offers == [(channel_id(TARGET), "telegram", "en")]
+    # The offered channel became a candidate record, without data.
     records = asyncio.run(_records(database_url))
     assert records[channel_id(TARGET)] == ("candidate", "telegram", True)
-    assert records[channel_id(CHARTED)] == ("candidate", "chart", True)
-    assert f"{TODAY}: 1 rising by links, 1 in the day's charts" in (
-        result.output
-    )
-    assert "2 offered, 0 left for a later day" in result.output
+    assert f"{TODAY}: 1 rising by links, 1 offered" in result.output
+    assert "0 left for a later day" in result.output
     # Counts and ids only: nothing a payload carries is printed.
     for said in ("Fake", "fakehandle", "youtu.be"):
         assert said not in result.output
@@ -209,7 +188,7 @@ def test_a_day_is_selected_once(database_url: str) -> None:
 
     assert result.exit_code == 0, result.output
     assert f"{TODAY} has its selection; nothing written" in result.output
-    assert len(asyncio.run(_offers(database_url))) == 2
+    assert len(asyncio.run(_offers(database_url))) == 1
 
 
 def test_an_empty_day_is_recorded(database_url: str) -> None:
@@ -230,12 +209,10 @@ def test_a_preview_names_the_offers_by_id_and_writes_nothing(
     assert result.exit_code == 0, result.output
     assert "(preview, nothing written)" in result.output
     assert channel_id(TARGET) in result.output
-    assert channel_id(CHARTED) in result.output
-    assert "chart RU 1" in result.output
+    assert "link" in result.output
     assert asyncio.run(_days(database_url)) == []
     records = asyncio.run(_records(database_url))
     assert channel_id(TARGET) not in records
-    assert channel_id(CHARTED) not in records
 
 
 def test_the_overflow_is_offered_the_next_day(database_url: str) -> None:
@@ -246,10 +223,10 @@ def test_the_overflow_is_offered_the_next_day(database_url: str) -> None:
     result = runner.invoke(app, ["yt", "offer", "--now", tomorrow])
 
     assert result.exit_code == 0, result.output
-    # Both channels were offered: neither is offered again, and the
-    # day's rows are the same channels the next day cannot take.
+    # The channel was offered: it is not offered again, and the day's
+    # rows are the same channel the next day cannot take.
     assert "0 offered" in result.output
-    assert len(asyncio.run(_offers(database_url))) == 2
+    assert len(asyncio.run(_offers(database_url))) == 1
 
 
 def test_the_logs_of_a_selection_name_ids_and_counts_only(
@@ -303,30 +280,21 @@ def test_the_selection_buys_the_offered_payloads_with_the_day(
     is the point of buying them there."""
     asyncio.run(_arrange(database_url))
     use_key(monkeypatch)
-    fake = FakeYouTube(
-        channel_resource(TARGET, title="Fake Rising <Co>"),
-        channel_resource(CHARTED, title="Fake Chart Top"),
-    )
+    fake = FakeYouTube(channel_resource(TARGET, title="Fake Rising <Co>"))
     _fake_api(monkeypatch, fake)
 
     result = runner.invoke(app, ["yt", "offer"])
 
     assert result.exit_code == 0, result.output
-    # One call, both channels of the day.
+    # One call, the day's channel whole.
     [asked] = fake.calls("channels")
-    assert set(asked["id"].split(",")) == {
-        channel_id(TARGET),
-        channel_id(CHARTED),
-    }
+    assert set(asked["id"].split(",")) == {channel_id(TARGET)}
     payloads = asyncio.run(_payloads(database_url))
     assert payloads[channel_id(TARGET)]["snippet"]["title"] == (
         "Fake Rising <Co>"
     )
-    assert payloads[channel_id(CHARTED)]["snippet"]["title"] == (
-        "Fake Chart Top"
-    )
     # The day is the day either way.
-    assert len(asyncio.run(_offers(database_url))) == 2
+    assert len(asyncio.run(_offers(database_url))) == 1
 
 
 def test_a_refused_buy_loses_nothing_but_the_titles(
@@ -345,10 +313,9 @@ def test_a_refused_buy_loses_nothing_but_the_titles(
     result = runner.invoke(app, ["yt", "offer"])
 
     assert result.exit_code == 0, result.output
-    assert "2 offered, 0 left for a later day" in result.output
-    assert len(asyncio.run(_offers(database_url))) == 2
-    # The arrange's own seed keeps its payload; the offered channels
+    assert "1 offered, 0 left for a later day" in result.output
+    assert len(asyncio.run(_offers(database_url))) == 1
+    # The arrange's own seed keeps its payload; the offered channel
     # gained none.
     payloads = asyncio.run(_payloads(database_url))
     assert channel_id(TARGET) not in payloads
-    assert channel_id(CHARTED) not in payloads

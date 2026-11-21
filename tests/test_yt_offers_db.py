@@ -17,7 +17,6 @@ from itgraph.db.models import (
     YtLang,
     YtRejectReason,
     YtRisingOffer,
-    YtRisingRanking,
 )
 from itgraph.db.session import Database
 from itgraph.db.yt_backfill import channels_to_walk
@@ -36,30 +35,17 @@ DAY = date(2026, 11, 19)
 AT = datetime(2026, 11, 19, 8, tzinfo=UTC)
 
 LINKED = "UCfakeRisingLinks0000001"
-CHARTED = "UCfakeRisingCharts000001"
 ADDED = "UCfakeRisingAdded0000001"
 
 
 def link_offer(channel: str) -> NewOffer:
     return NewOffer(
-        ranking=YtRisingRanking.LINK,
         channel_id=channel,
         discovered_via=YtDiscoverySource.TELEGRAM,
         topic=YtAlertRoute.EN,
         families=2,
         families_before=1,
         first_in_window=AT,
-    )
-
-
-def chart_offer(channel: str) -> NewOffer:
-    return NewOffer(
-        ranking=YtRisingRanking.CHART,
-        channel_id=channel,
-        discovered_via=YtDiscoverySource.CHART,
-        topic=YtAlertRoute.RU,
-        region="RU",
-        position=4,
     )
 
 
@@ -71,7 +57,6 @@ async def store(database: Database, *offers: NewOffer) -> None:
             session,
             day=DAY,
             computed_at=AT,
-            size_chart=3,
             size_links=3,
             offers=list(offers),
         )
@@ -82,18 +67,15 @@ async def store(database: Database, *offers: NewOffer) -> None:
 async def test_the_day_creates_the_records_it_needs(
     database: Database,
 ) -> None:
-    await store(database, link_offer(LINKED), chart_offer(CHARTED))
+    await store(database, link_offer(LINKED))
 
     async with database.session() as session:
         records = {
             record.channel_id: record
             for record in await session.scalars(select(YtChannel))
         }
-    assert set(records) == {LINKED, CHARTED}
-    for channel, via in (
-        (LINKED, YtDiscoverySource.TELEGRAM),
-        (CHARTED, YtDiscoverySource.CHART),
-    ):
+    assert set(records) == {LINKED}
+    for channel, via in ((LINKED, YtDiscoverySource.TELEGRAM),):
         assert records[channel].status is ChannelStatus.CANDIDATE
         assert records[channel].discovered_via is via
         assert records[channel].first_seen_at is not None
@@ -140,9 +122,8 @@ async def test_a_day_is_stored_once(database: Database) -> None:
             session,
             day=DAY,
             computed_at=AT,
-            size_chart=3,
             size_links=3,
-            offers=[link_offer(CHARTED)],
+            offers=[link_offer(ADDED)],
         )
         await session.commit()
     assert again is None

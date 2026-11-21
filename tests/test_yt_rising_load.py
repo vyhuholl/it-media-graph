@@ -1,9 +1,8 @@
 """The rising rankings' loader: both platforms' evidence in one snapshot.
 
 A link through a stored lookup; an appearance read from two readings; a
-seed whose list is out of date; the chart's Moscow day; and nothing
-joined is stored. Every id, handle and post is invented, and nothing
-touches a socket.
+seed whose list is out of date; and nothing joined is stored. Every id,
+handle and post is invented, and nothing touches a socket.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -27,9 +26,8 @@ from itgraph.db.models import (
     YtLookupKind,
 )
 from itgraph.db.session import Database
-from itgraph.db.yt_chart import store_chart
 from itgraph.db.yt_lookups import store_lookups
-from itgraph.db.yt_rising import load_yt_rising_rows, moscow_day_start
+from itgraph.db.yt_rising import load_yt_rising_rows
 from itgraph.db.yt_sections import store_sections
 from itgraph.derive.yt_featured import featured_ids
 from itgraph.derive.yt_rising import YtRising, YtRisingRows, rank_yt_rising
@@ -37,7 +35,6 @@ from itgraph.derive.yt_rising import YtRising, YtRisingRows, rank_yt_rising
 NOW = datetime.now(UTC)
 SEED = ChannelStatus.SEED
 TARGET = 90
-OTHER = 91
 
 
 def _rank(rows: YtRisingRows) -> YtRising:
@@ -266,94 +263,6 @@ async def test_an_out_of_date_list_contributes_nothing_and_is_counted(
     assert ranked.links == []  # the description alone is one family
 
 
-# --- the chart's day ----------------------------------------------------
-
-
-async def test_the_chart_reads_each_regions_moscow_day(
-    database: Database,
-) -> None:
-    """US read this morning and RU yesterday: US contributes its
-    channels, RU contributes nothing and is said."""
-    await channels({1: SEED})(database)
-    today = moscow_day_start(NOW) + timedelta(hours=5)
-    async with database.session() as session:
-        await store_chart(
-            session,
-            "US",
-            {
-                "items": [
-                    {
-                        "id": video_id(1),
-                        "snippet": {"channelId": channel_id(TARGET)},
-                    }
-                ]
-            },
-            fetched_at=today,
-        )
-        await store_chart(
-            session,
-            "RU",
-            {
-                "items": [
-                    {
-                        "id": video_id(2),
-                        "snippet": {"channelId": channel_id(OTHER)},
-                    }
-                ]
-            },
-            fetched_at=today - timedelta(days=1),
-        )
-
-    rows = await _rows(database)
-    ranked = _rank(rows)
-
-    [only] = ranked.chart
-    assert only.channel_id == channel_id(TARGET)
-    assert only.region == "US"
-    assert only.position == 1
-    assert ranked.chart_without == ["RU"]
-
-
-async def test_yesterdays_reading_of_a_region_is_not_todays(
-    database: Database,
-) -> None:
-    await channels({1: SEED})(database)
-    day_start = moscow_day_start(NOW)
-    async with database.session() as session:
-        await store_chart(
-            session,
-            "US",
-            {
-                "items": [
-                    {
-                        "id": video_id(1),
-                        "snippet": {"channelId": channel_id(OTHER)},
-                    }
-                ]
-            },
-            fetched_at=day_start - timedelta(minutes=1),
-        )
-        await store_chart(
-            session,
-            "US",
-            {
-                "items": [
-                    {
-                        "id": video_id(2),
-                        "snippet": {"channelId": channel_id(TARGET)},
-                    }
-                ]
-            },
-            fetched_at=day_start + timedelta(minutes=1),
-        )
-
-    rows = await _rows(database)
-    ranked = _rank(rows)
-
-    [only] = ranked.chart
-    assert only.channel_id == channel_id(TARGET)
-
-
 # --- nothing joined is stored ------------------------------------------
 
 
@@ -362,10 +271,6 @@ async def test_loading_changes_no_row(database: Database) -> None:
     await _given_rising_shapes(database)
     await _seed_reading(database, 1, [5], days_ago=8)
     await _seed_reading(database, 1, [5, TARGET], days_ago=1)
-    async with database.session() as session:
-        await store_chart(
-            session, "US", {"items": []}, fetched_at=moscow_day_start(NOW)
-        )
 
     async def counts() -> dict[str, int]:
         async with database.session() as session:

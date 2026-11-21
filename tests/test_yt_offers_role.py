@@ -25,12 +25,12 @@ CHANNEL = "UCfakeRisingOffers000002"
 SEED = f"""
 INSERT INTO yt_channels (channel_id, discovered_via)
 VALUES ('{CHANNEL}', 'manual');
-INSERT INTO yt_rising_offer_days (day, computed_at, size_chart, size_links)
-VALUES ('2026-11-19', '2026-11-19 08:00+00', 3, 3);
+INSERT INTO yt_rising_offer_days (day, computed_at, size_links)
+VALUES ('2026-11-19', '2026-11-19 08:00+00', 3);
 INSERT INTO yt_rising_offers
-    (day, channel_id, ranking, families, families_before, discovered_via,
+    (day, channel_id, families, families_before, discovered_via,
      topic, offered_at)
-VALUES ('2026-11-19', '{CHANNEL}', 'link', 2, 0, 'telegram', 'en',
+VALUES ('2026-11-19', '{CHANNEL}', 2, 0, 'telegram', 'en',
         '2026-11-19 08:00+00');
 """
 
@@ -104,9 +104,6 @@ async def scalar(url: URL, query: str) -> object:
     [
         "SELECT * FROM yt_rising_offer_days",
         "SELECT * FROM yt_rising_offers",
-        # The chart card's video, read from the stored reading at
-        # sending.
-        "SELECT payload FROM yt_raw_charts",
         "UPDATE yt_rising_offers SET delivered_at = now()",
         (
             "UPDATE yt_rising_offers SET attempts = attempts + 1, "
@@ -133,20 +130,18 @@ def test_the_bot_records_a_delivery_and_a_decision(
     [
         (
             "INSERT INTO yt_rising_offer_days "
-            "(day, computed_at, size_chart, size_links) "
-            "VALUES ('2026-11-20', now(), 3, 3)"
+            "(day, computed_at, size_links) "
+            "VALUES ('2026-11-20', now(), 3)"
         ),
         (
             "INSERT INTO yt_rising_offers "
-            "(day, channel_id, ranking, families, families_before, "
+            "(day, channel_id, families, families_before, "
             "discovered_via, topic, offered_at) "
-            f"VALUES ('2026-11-19', '{CHANNEL}', 'chart', NULL, NULL, "
-            "'chart', 'ru', now())"
+            f"VALUES ('2026-11-19', '{CHANNEL}', NULL, NULL, "
+            "'telegram', 'ru', now())"
         ),
         f"UPDATE yt_rising_offers SET channel_id = '{CHANNEL}b'",
-        "UPDATE yt_rising_offers SET ranking = 'chart'",
         "UPDATE yt_rising_offers SET families = 9",
-        "UPDATE yt_rising_offers SET region = 'US'",
         "UPDATE yt_rising_offers SET topic = 'ru'",
         "UPDATE yt_rising_offers SET discovered_via = 'manual'",
         "UPDATE yt_rising_offers SET applied_at = now(), applied = true",
@@ -180,8 +175,6 @@ def test_the_exporter_reads_the_moments(migrated: URL) -> None:
     "statement",
     [
         "SELECT channel_id FROM yt_rising_offers",
-        "SELECT ranking FROM yt_rising_offers",
-        "SELECT region FROM yt_rising_offers",
         "SELECT families FROM yt_rising_offers",
         "SELECT topic FROM yt_rising_offers",
         "SELECT decision FROM yt_rising_offers",

@@ -308,12 +308,6 @@ Every request SHALL name the resource parts and the fields within them that it r
 - **THEN** the request names each result's channel id and the token for the next page
 - **AND** no title, description, thumbnail, channel title, publication time or video id
 
-#### Scenario: The chart is asked for its videos' ids, titles and channels only
-
-- **WHEN** the refresh reads the chart
-- **THEN** the request names each video's id, its title, its channel's id and the token for the next page
-- **AND** no description, publication time, duration, broadcast data, counts or category
-
 #### Scenario: Channel data stored before this rule is trimmed
 
 - **GIVEN** channel data stored with branding, status or topic data in it

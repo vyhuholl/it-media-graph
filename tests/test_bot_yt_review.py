@@ -17,7 +17,6 @@ from itgraph.bot.yt_review import (
     REJECT,
     SEED,
     ChannelView,
-    ChartCardView,
     Decision,
     Keyboard,
     LinkCardView,
@@ -31,9 +30,7 @@ from itgraph.bot.yt_review import (
     parse,
     read_channel,
     reasons,
-    render_chart_card,
     render_link_card,
-    video_link,
 )
 from itgraph.db.models import (
     ChannelStatus,
@@ -41,12 +38,10 @@ from itgraph.db.models import (
     YtLang,
     YtRejectReason,
 )
-from itgraph.derive.yt_rising import ChartEntry
 
 OFFER = 9223372036854775807  # the largest id, for the longest data
 FIRST = datetime(2026, 11, 9, 22, 30, tzinfo=UTC)  # 10 November in Moscow
 CHANNEL = "UCfakeRisingLinks0000001"
-VIDEO = "fakeVid00001"
 
 
 def buttons(keyboard: Keyboard) -> list[tuple[str, str]]:
@@ -120,67 +115,11 @@ def test_another_language_is_marked_as_its_own() -> None:
     assert "Язык: de" in link_card(view(language="de"))
 
 
-def test_a_chart_card_with_its_video() -> None:
-    text = render_chart_card(
-        ChartCardView(
-            channel_id=CHANNEL,
-            channel=view(handle=None, title=None),
-            region="RU",
-            position=4,
-            video=ChartEntry(
-                video_id=VIDEO,
-                channel_id=CHANNEL,
-                title="Fake Rising <RU> & more",
-            ),
-        )
-    )
-
-    assert text == (
-        "📈 Чарт RU, позиция 4: "
-        '<a href="https://www.youtube.com/channel/'
-        f'{CHANNEL}">{CHANNEL}</a>\n'
-        '🎬 <a href="https://www.youtube.com/watch?v='
-        f'{VIDEO}">Fake Rising &lt;RU&gt; &amp; more</a>'
-    )
-
-
-def test_a_chart_card_names_a_untitled_video_by_its_id() -> None:
-    """A reading stored before titles were asked for holds none."""
-
-    text = render_chart_card(
-        ChartCardView(
-            channel_id=CHANNEL,
-            channel=view(),
-            region="US",
-            position=1,
-            video=ChartEntry(video_id=VIDEO, channel_id=CHANNEL),
-        )
-    )
-
-    assert text.endswith(f'watch?v={VIDEO}">{VIDEO}</a>')
-
-
-def test_a_chart_card_without_a_video_still_names_its_place() -> None:
-    text = render_chart_card(
-        ChartCardView(
-            channel_id=CHANNEL,
-            channel=view(),
-            region="US",
-            position=2,
-            video=None,
-        )
-    )
-
-    assert text.endswith("</a>")
-    assert "🎬" not in text
-
-
 def test_links_carry_nothing_unescaped() -> None:
     nasty = ChannelView(handle='fake_"onclick', title=None, language=None)
     url = channel_link(nasty, "<id>&")
 
     assert url == 'https://www.youtube.com/@fake_"onclick'
-    assert video_link(VIDEO) == f"https://www.youtube.com/watch?v={VIDEO}"
 
 
 def test_a_payload_is_read_defensively() -> None:

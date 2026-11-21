@@ -4,7 +4,7 @@
 
 ### Requirement: Data From YouTube Has One Place
 
-**Reason**: Featured sections stop being a latest-payload table: every fetch appends a reading and nothing is replaced, so the scenario "a newer featured list replaces the old one" no longer holds, and the enumeration changes with it — featured joins the readings, and the chart's readings arrive. Renamed and re-added as "Data From YouTube Is Stored Once".
+**Reason**: Featured sections stop being a latest-payload table: every fetch appends a reading and nothing is replaced, so the scenario "a newer featured list replaces the old one" no longer holds, and the enumeration changes with it — featured joins the readings. Renamed and re-added as "Data From YouTube Is Stored Once".
 
 **Migration**: Nothing for an operator to do. The rows already stored become each seed's first reading; nothing about them changes.
 
@@ -12,7 +12,7 @@
 
 ### Requirement: Data From YouTube Is Stored Once
 
-The system SHALL store data read from the API in one place: a channel's and a video's as its latest payload, a reading's counters as that reading, the channel behind a linked video, handle or legacy name as its lookup, a seed's featured channels as its featured readings, a search's channels as its results, and the chart's videos as its chart readings. A title, handle, description or statistic MUST NOT be copied into another table, column or log record. What is worked out from a video's data SHALL be stored and removed with its payload.
+The system SHALL store data read from the API in one place: a channel's and a video's as its latest payload, a reading's counters as that reading, the channel behind a linked video, handle or legacy name as its lookup, a seed's featured channels as its featured readings, and a search's channels as its results. A title, handle, description or statistic MUST NOT be copied into another table, column or log record. What is worked out from a video's data SHALL be stored and removed with its payload.
 
 #### Scenario: The title lives in the payload alone
 
@@ -55,11 +55,6 @@ The system SHALL store data read from the API in one place: a channel's and a vi
 - **WHEN** a seed's sections are read again
 - **THEN** a new reading is appended, and the readings before it are unchanged
 
-#### Scenario: A chart reading holds ids only
-
-- **WHEN** a chart reading is stored
-- **THEN** it holds each video's id, its channel's id and its position, and nothing else
-
 #### Scenario: A search result holds a channel id only
 
 - **WHEN** a search's results are stored
@@ -76,7 +71,7 @@ The system SHALL store data read from the API in one place: a channel's and a vi
 
 ### Requirement: Nothing Is Removed By Age
 
-The system SHALL NOT remove YouTube data because of its age: channel and video payloads, readings, lookups, featured readings, chart readings, search runs and results, and the walk's records stay until YouTube stops returning the object or the operator removes them. An answer that decides what to ask YouTube next — a lookup, a featured reading, a search run and its results — SHALL be read only while younger than `youtube_answers_fresh_days` (30 by default); an older one is kept unread and replaced when asked again.
+The system SHALL NOT remove YouTube data because of its age: channel and video payloads, readings, lookups, featured readings, search runs and results, and the walk's records stay until YouTube stops returning the object or the operator removes them. An answer that decides what to ask YouTube next — a lookup, a featured reading, a search run and its results — SHALL be read only while younger than `youtube_answers_fresh_days` (30 by default); an older one is kept unread and replaced when asked again.
 
 #### Scenario: An old payload is kept
 
@@ -103,13 +98,6 @@ The system SHALL NOT remove YouTube data because of its age: channel and video p
 - **WHEN** a candidates report is made
 - **THEN** neither is read as evidence
 - **AND** both are still stored, the run with its results
-
-#### Scenario: An old chart reading is kept and not read
-
-- **GIVEN** a chart reading fetched eight days ago
-- **WHEN** the day's chart ranking is worked out
-- **THEN** that reading is not the day's chart
-- **AND** it is still stored
 
 #### Scenario: Walk records are kept
 

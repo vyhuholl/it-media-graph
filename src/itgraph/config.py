@@ -697,16 +697,6 @@ class Settings(BaseSettings):
     # The reading still counts as evidence for
     # `youtube_answers_fresh_days`, which is longer.
     youtube_sections_after_days: int = Field(default=7, ge=1)
-    # Which regional charts the refresh reads once a day, at the video
-    # category `youtube_chart_category` gives (28, science and
-    # technology). The Trending page left YouTube's interface in July
-    # 2025 and the endpoint outlived it — probed on 2026-11-18, both
-    # regions answered 200 videos of the category, fifty to a page, four
-    # units a region a day from the idle general pool. Empty means no
-    # chart is read, which is how the source is switched off should the
-    # endpoint ever die for good.
-    youtube_chart_regions: tuple[str, ...] = ("US", "RU")
-    youtube_chart_category: int = Field(default=28, ge=1)
     # The scheduled lookup pass (`yt rising-lookups`) stops each of its
     # two passes after this many requests: first the names the Telegram
     # seeds link, then the ones the seeds' videos reference — most
@@ -722,11 +712,9 @@ class Settings(BaseSettings):
     # list, a search run and its results. Past it the answer is no longer
     # read, and the question is asked again.
     youtube_answers_fresh_days: int = Field(default=30, ge=1)
-    # The rising review's daily sizes: how many channels of each region's
-    # chart and how many of the link ranking a day's selection offers,
-    # none offered before. The overflow waits for the next day's
-    # selection, which ranks again.
-    youtube_rising_chart_offers_per_region: int = Field(default=3, ge=1)
+    # The rising review's daily size: how many channels of the link
+    # ranking a day's selection offers, none offered before. The overflow
+    # waits for the next day's selection, which ranks again.
     youtube_rising_link_offers_per_day: int = Field(default=3, ge=1)
     # One request. The API answers in well under a second; this bounds
     # only the request that never answers.

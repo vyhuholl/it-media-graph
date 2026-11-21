@@ -27,8 +27,8 @@ async def arrange(database: Database) -> None:
         await session.execute(
             text(
                 "INSERT INTO yt_rising_offer_days "
-                "(day, computed_at, size_chart, size_links) "
-                "VALUES (:day, :at, 3, 3)"
+                "(day, computed_at, size_links) "
+                "VALUES (:day, :at, 3)"
             ),
             {"day": DAY, "at": AT},
         )
@@ -39,7 +39,6 @@ async def offer(database: Database, **columns: Any) -> None:
     values = {
         "day": DAY,
         "channel_id": CHANNEL,
-        "ranking": "link",
         "families": 2,
         "families_before": 0,
         "discovered_via": "telegram",
@@ -82,20 +81,6 @@ async def test_a_link_offer_with_its_decision_is_accepted(
     )
 
 
-async def test_a_chart_offer_is_accepted(database: Database) -> None:
-    await arrange(database)
-
-    await offer(
-        database,
-        ranking="chart",
-        families=None,
-        region="RU",
-        position=4,
-        discovered_via="chart",
-        topic="ru",
-    )
-
-
 @pytest.mark.parametrize(
     "columns",
     [
@@ -135,4 +120,4 @@ async def test_a_channel_is_offered_once(database: Database) -> None:
     await offer(database)
 
     with pytest.raises(IntegrityError):
-        await offer(database, ranking="chart", region="US", position=1)
+        await offer(database, topic="ru")

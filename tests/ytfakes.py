@@ -232,13 +232,10 @@ class FakeYouTube:
         videos: list[dict[str, Any]] | None = None,
         sections: dict[str, dict[str, Any]] | None = None,
         searches: dict[tuple[str, str], list[str]] | None = None,
-        charts: dict[str, list[tuple[str, str]]] | None = None,
     ) -> None:
         self.sections = dict(sections or {})
         # (query, type) -> the channel of each result, in order.
         self.searches = dict(searches or {})
-        # region -> (video id, channel id) in chart order.
-        self.charts = dict(charts or {})
         self.channels = {resource["id"]: resource for resource in resources}
         self.legacy = {
             name.lower(): id_ for name, id_ in (legacy or {}).items()
@@ -307,38 +304,6 @@ class FakeYouTube:
                 listing["nextPageToken"] = f"{PAGE_TOKEN}{start + limit}"
             return httpx.Response(200, json=listing)
         if self.method(request) == "videos":
-            if "chart" in params:
-                # A region's chart, paged as `maxResults` and `pageToken`
-                # say, the token offered only when `fields` asks for it.
-                found = self.charts.get(params.get("regionCode", ""), [])
-                limit = int(params.get("maxResults", "5"))
-                token = params.get("pageToken")
-                start = int(token.removeprefix(PAGE_TOKEN)) if token else 0
-                page = found[start : start + limit]
-                asked = params.get("fields", "")
-                chart: dict[str, Any] = {
-                    "items": [
-                        {
-                            "id": video,
-                            # As the real API filters by `fields`: a
-                            # title comes back only when asked for.
-                            "snippet": {
-                                "channelId": channel,
-                                **(
-                                    {"title": f"Fake video {video}"}
-                                    if "title" in asked
-                                    else {}
-                                ),
-                            },
-                        }
-                        for video, channel in page
-                    ]
-                }
-                if start + limit < len(
-                    found
-                ) and "nextPageToken" in params.get("fields", ""):
-                    chart["nextPageToken"] = f"{PAGE_TOKEN}{start + limit}"
-                return httpx.Response(200, json=chart)
             ids = params["id"].split(",")
             found = [self.videos[id_] for id_ in ids if id_ in self.videos]
             # `fields` decides what comes back: a request that names no

@@ -11,9 +11,7 @@ A card links the channel — by its handle when a stored payload carries
 one, by its id otherwise — and forces the preview to that link, which
 Telegram renders with the channel's own page: the recognition a card
 needs when it is sent before any payload has been fetched to give a
-title. A chart offer's card links the video that charted the channel
-too, named by its title when the day's reading holds one and by its id
-otherwise. Everything from a channel or a video is escaped.
+title. Everything from a channel is escaped.
 
 A press is `yv:<offer id>:<press>` — at most 64 bytes, as the Bot API
 requires. Seed opens the kinds, and then — only while the offer's
@@ -40,7 +38,6 @@ from itgraph.db.models import (
     YtLang,
     YtRejectReason,
 )
-from itgraph.derive.yt_rising import ChartEntry
 
 __all__ = [
     "BACK",
@@ -51,7 +48,6 @@ __all__ = [
     "REJECT",
     "SEED",
     "ChannelView",
-    "ChartCardView",
     "Decision",
     "Keyboard",
     "LinkCardView",
@@ -65,9 +61,7 @@ __all__ = [
     "parse",
     "read_channel",
     "reasons",
-    "render_chart_card",
     "render_link_card",
-    "video_link",
 ]
 
 PREFIX = "yv"
@@ -353,10 +347,6 @@ def channel_link(view: ChannelView, channel_id: str) -> str:
     return f"https://www.youtube.com/channel/{channel_id}"
 
 
-def video_link(video_id: str) -> str:
-    return f"https://www.youtube.com/watch?v={video_id}"
-
-
 def _escape(text: str) -> str:
     return html.escape(text, quote=False)
 
@@ -378,7 +368,7 @@ def _first_in(moment: datetime | None, zone: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class LinkCardView:
-    """What a link offer's card shows, read at sending."""
+    """What an offer's card shows, read at sending."""
 
     channel_id: str
     channel: ChannelView
@@ -387,24 +377,10 @@ class LinkCardView:
     first_in_window: datetime | None
 
 
-@dataclass(frozen=True, slots=True)
-class ChartCardView:
-    """What a chart offer's card shows, read at sending."""
-
-    channel_id: str
-    channel: ChannelView
-    region: str
-    position: int
-    # The video that charted the channel, if the day's reading still
-    # holds it; its title is None in a reading stored before titles
-    # were asked for.
-    video: ChartEntry | None
-
-
 def render_link_card(
     view: LinkCardView, *, window_days: int, zone: str
 ) -> str:
-    """A link offer's card, in Telegram's HTML."""
+    """An offer's card, in Telegram's HTML."""
     before = (
         f"{view.families_before} раньше"
         if view.families_before
@@ -422,18 +398,4 @@ def render_link_card(
     # takes: those the topic itself says.
     if view.channel.language not in ("en", "ru"):
         lines.append(f"Язык: {view.channel.language or 'не определён'}")
-    return "\n".join(lines)
-
-
-def render_chart_card(view: ChartCardView) -> str:
-    """A chart offer's card, in Telegram's HTML."""
-    head = (
-        f"📈 Чарт {_escape(view.region)}, позиция {view.position}: "
-        f"{_named(view.channel, view.channel_id)}"
-    )
-    lines = [head]
-    if view.video is not None:
-        name = _escape(view.video.title or view.video.video_id)
-        url = html.escape(video_link(view.video.video_id))
-        lines.append(f'🎬 <a href="{url}">{name}</a>')
     return "\n".join(lines)

@@ -30,8 +30,8 @@ The system SHALL accept exactly these review values for YouTube. Status: `candid
 - **THEN** their discovery source is `mention`, `featured` or `search` respectively
 - **AND** no option of `itgraph yt add` records any of the three
 
-#### Scenario: A chart offer records `chart`
+#### Scenario: Nothing records the removed chart source
 
-- **WHEN** the rising selection offers a channel of the day's chart
-- **THEN** the record it creates carries the discovery source `chart`
-- **AND** no option of `itgraph yt add` records it
+- **GIVEN** the `chart` value, kept in the type by records written before the source was removed
+- **WHEN** anything creates a record
+- **THEN** no record of it carries the discovery source `chart`

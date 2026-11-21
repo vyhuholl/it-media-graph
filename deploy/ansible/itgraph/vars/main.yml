@@ -455,7 +455,7 @@ __itgraph_cronjobs_youtube:
     mounts: []
     volumes: []
   # Both lookup queues under the day's bounds, after the refresh has
-  # read the charts and the featured lists. Counts only in its output.
+  # read the featured lists. Counts only in its output.
   - name: itgraph-yt-lookup
     schedule: "{{ itgraph_yt_lookup_schedule }}"
     # A run missed while the host was off starts when it is back, the

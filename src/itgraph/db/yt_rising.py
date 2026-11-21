@@ -1,16 +1,16 @@
-"""The rows the YouTube rising rankings read, in one snapshot.
+"""The rows the YouTube rising ranking reads, in one snapshot.
 
 Reads, and writes nothing: which families referred to which channel is
-joined from the stored payloads, the lookups, the featured readings
-and the charts each time it is asked, and never stored — the ranking's
-own rule, and Telegram's before it.
+joined from the stored payloads, the lookups and the featured readings
+each time it is asked, and never stored — the ranking's own rule, and
+Telegram's before it.
 
 One transaction at ``REPEATABLE READ``, as the queues' loaders open
-it: the inventory, the families, both platforms' evidence, the
-readings and the day's charts are read as of one moment, so a lookup
-run landing between two of the queries cannot make a name both
-answered and awaiting. The loader is the one place the level is set;
-the streams and readers it reads through set none of their own.
+it: the inventory, the families, both platforms' evidence and the
+readings are read as of one moment, so a lookup run landing between
+two of the queries cannot make a name both answered and awaiting. The
+loader is the one place the level is set; the streams and readers it
+reads through set none of their own.
 
 The mention side re-parses the seeds' stored descriptions, as the
 mention queue does — seconds of work at a few hundred seeds, paid by
@@ -21,21 +21,17 @@ appearances are read from the two newest readings below.
 
 import logging
 from collections.abc import Mapping
-from datetime import UTC, datetime, time
-from typing import Any
-from zoneinfo import ZoneInfo
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from itgraph.config import settings
 from itgraph.db import affiliation, yt_affiliation
 from itgraph.db.models import (
     ChannelStatus,
     YtChannel,
     YtRawChannelSections,
 )
-from itgraph.db.yt_chart import charts_of_the_day
 from itgraph.db.yt_references import video_sources
 from itgraph.db.yt_sections import seeds_without_list
 from itgraph.db.yt_telegram_links import known_answers, own_seed_posts
@@ -48,52 +44,14 @@ from itgraph.derive.tg_youtube import (
 )
 from itgraph.derive.yt_featured import featured_ids
 from itgraph.derive.yt_rising import (
-    ChartEntry,
     FeaturedReadings,
     LinkReference,
     YtRisingRows,
 )
 
-__all__ = ["chart_items", "load_yt_rising_rows", "moscow_day_start"]
+__all__ = ["load_yt_rising_rows"]
 
 logger = logging.getLogger(__name__)
-
-# The chart's day: the reading runs at five in the morning Moscow, and
-# "today's chart" is today's there. A constant of the module, as the
-# quota day's Los Angeles is of the ledger's.
-MOSCOW = ZoneInfo("Europe/Moscow")
-
-
-def moscow_day_start(moment: datetime) -> datetime:
-    """The start of the Moscow day ``moment`` falls in, as UTC."""
-    local = moment.astimezone(MOSCOW)
-    return datetime.combine(local.date(), time(), tzinfo=MOSCOW).astimezone(
-        UTC
-    )
-
-
-def chart_items(payload: Mapping[str, Any]) -> list[ChartEntry]:
-    """A chart reading's payload as its videos, in the reading's order."""
-    entries: list[ChartEntry] = []
-    items = payload.get("items")
-    for item in items if isinstance(items, list) else ():
-        if not isinstance(item, dict):
-            continue
-        video = item.get("id")
-        snippet = item.get("snippet")
-        channel = (
-            snippet.get("channelId") if isinstance(snippet, dict) else None
-        )
-        title = snippet.get("title") if isinstance(snippet, dict) else None
-        if isinstance(video, str) and isinstance(channel, str):
-            entries.append(
-                ChartEntry(
-                    video_id=video,
-                    channel_id=channel,
-                    title=title if isinstance(title, str) else None,
-                )
-            )
-    return entries
 
 
 async def _telegram_evidence(
@@ -213,7 +171,7 @@ async def _two_newest_readings(
 async def load_yt_rising_rows(
     session: AsyncSession, *, now: datetime | None = None
 ) -> YtRisingRows:
-    """Everything both rankings read, as of one snapshot.
+    """Everything the ranking reads, as of one snapshot.
 
     Must be the first thing done in the session's transaction: the
     isolation level is set on it.
@@ -238,32 +196,18 @@ async def load_yt_rising_rows(
     )
     featured = await _two_newest_readings(session, yt_families)
     out_of_date = await seeds_without_list(session, now=moment)
-    charts = {
-        region: chart_items(payload)
-        for region, payload in (
-            await charts_of_the_day(
-                session,
-                settings.youtube_chart_regions,
-                day_start=moscow_day_start(moment),
-            )
-        ).items()
-    }
 
     logger.debug(
-        "yt rising rows: %d links, %d references, %d featured seeds, "
-        "%d regions charted",
+        "yt rising rows: %d links, %d references, %d featured seeds",
         len(links),
         len(references),
         len(featured),
-        len(charts),
     )
     return YtRisingRows(
         inventory=inventory,
         links=tuple(links),
         references=tuple(references),
         featured=tuple(featured),
-        chart_regions=tuple(settings.youtube_chart_regions),
-        charts=charts,
         awaiting_lookup=len(tg_awaiting | mention_awaiting),
         not_found=len(tg_not_found | mention_not_found),
         lists_out_of_date=out_of_date,

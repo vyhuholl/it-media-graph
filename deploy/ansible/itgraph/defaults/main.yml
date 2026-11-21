@@ -55,8 +55,8 @@ itgraph_yt_watch_schedule: "*/15 * * * *"
 itgraph_backup_schedule: "40 */4 * * *"
 itgraph_baselines_schedule: "30 4 * * *"
 itgraph_yt_refresh_schedule: "0 5 * * *"
-# An hour after the refresh, so the day's chart readings and featured
-# readings are in place before the lookups read the queues.
+# An hour after the refresh, so the day's featured readings are in
+# place before the lookups read the queues.
 itgraph_yt_lookup_schedule: "0 6 * * *"
 # Six minutes after each poll pass, whose runs take seconds; the baselines half
 # an hour after the refresh, which brings the past uploads' readings.

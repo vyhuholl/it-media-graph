@@ -43,7 +43,6 @@ from itgraph.db.models import (
     YtQuotaExhausted,
     YtQuotaPool,
     YtRawChannel,
-    YtRawChart,
     YtRefreshRun,
     YtWatchPass,
     YtWeeklyList,
@@ -206,17 +205,8 @@ async def _youtube(session: AsyncSession, now: datetime) -> list[Family]:
         ages.append(
             ({"kind": "channel"}, (now - oldest_channel).total_seconds())
         )
-    # Each configured region's newest chart reading, and the scheduled
-    # lookup pass's newest end — the ages the shared monitoring alerts
-    # on. A region with no reading reads as 0, which is the alert.
-    charts_read = {
-        region: read
-        for region, read in await session.execute(
-            select(
-                YtRawChart.region, func.max(YtRawChart.fetched_at)
-            ).group_by(YtRawChart.region)
-        )
-    }
+    # The scheduled lookup pass's newest end — the age the shared
+    # monitoring alerts on.
     lookups_at = await session.scalar(
         select(func.max(YtLookupRun.finished_at))
     )
@@ -260,15 +250,6 @@ async def _youtube(session: AsyncSession, now: datetime) -> list[Family]:
             "itgraph_youtube_oldest_payload_age_seconds",
             "How long ago the oldest stored channel payload was read.",
             ages,
-        ),
-        Family(
-            "itgraph_youtube_chart_read_timestamp_seconds",
-            "When the newest chart reading of a configured region was "
-            "fetched, 0 when none.",
-            [
-                ({"region": region}, _timestamp(charts_read.get(region)))
-                for region in settings.youtube_chart_regions
-            ],
         ),
         _gauge(
             "itgraph_youtube_rising_lookups_timestamp_seconds",

@@ -107,7 +107,7 @@ def test_the_series_read_through_the_role(migrated: URL) -> None:
         finally:
             await engine.dispose()
 
-    assert len(asyncio.run(read())) == 30
+    assert len(asyncio.run(read())) == 29
 
 
 def test_the_role_reads_when_and_nothing_else_of_api_data(
@@ -119,9 +119,6 @@ def test_the_role_reads_when_and_nothing_else_of_api_data(
         ("yt_raw_video_stats", "observed_at"),
         ("yt_raw_lookups", "fetched_at"),
         ("yt_raw_channel_sections", "fetched_at"),
-        # A chart reading: its region and moment, and nothing of its videos.
-        ("yt_raw_charts", "region"),
-        ("yt_raw_charts", "fetched_at"),
     }
     columns = asyncio.run(columns_of_raw_tables(migrated))
     assert ("yt_raw_channels", "payload") in columns

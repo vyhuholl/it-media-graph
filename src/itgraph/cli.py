@@ -2793,15 +2793,13 @@ def yt_rising(
         typer.Option("--top", min=0, help="Link-ranked rows shown."),
     ] = 30,
 ) -> None:
-    """Which YouTube channels are rising: links and the day's charts.
+    """Which YouTube channels are rising: the link ranking.
 
-    The link ranking — channels outside the inventory referred to by at
-    least `rising_min_families` distinct families, Telegram's and
-    YouTube's both counting, within `rising_window_days`, evidence dated
-    by its content — then the chart ranking, every channel of the day's
-    regional mostPopular reading the inventory does not hold, in chart
-    order. Then what could not be counted: references awaiting a lookup,
-    looked up as none, seeds whose featured list is out of date.
+    Channels outside the inventory referred to by at least
+    `rising_min_families` distinct families, Telegram's and YouTube's
+    both counting, within `rising_window_days`, evidence dated by its
+    content. Then what could not be counted: references awaiting a
+    lookup, looked up as none, seeds whose featured list is out of date.
 
     Ids, numbers and dates only: what a channel *is* is read in the
     review round, from the API. Makes no request, writes nothing, needs
@@ -2854,18 +2852,16 @@ def yt_offer(
 ) -> None:
     """Select today's rising YouTube channels for review in the bot.
 
-    The two rankings' heads never offered before — at most
-    `youtube_rising_link_offers_per_day` of the links and
-    `youtube_rising_chart_offers_per_region` of each region's chart, a
-    channel both hold taken by the links — stored for the bot to send,
-    each offered channel becoming a candidate record. Where a key is
-    configured, one call buys their payloads with the day, so their
-    cards are titled the day they are sent; where none is, the refresh
-    fetches those. An empty day is stored too. A day is selected once.
-    Takes no lease, and without a key makes no request, so it runs in
-    every environment. Prints counts only, since the daily job's output
-    is kept; `--preview` names the channels by id and is for a person
-    at a terminal.
+    The ranking's head never offered before — at most
+    `youtube_rising_link_offers_per_day` of the links — stored for the
+    bot to send, each offered channel becoming a candidate record.
+    Where a key is configured, one call buys their payloads with the
+    day, so their cards are titled the day they are sent; where none
+    is, the refresh fetches those. An empty day is stored too. A day is
+    selected once. Takes no lease, and without a key makes no request,
+    so it runs in every environment. Prints counts only, since the
+    daily job's output is kept; `--preview` names the channels by id
+    and is for a person at a terminal.
     """
     from itgraph.db.session import Database
     from itgraph.derive.yt_offers import run_offer

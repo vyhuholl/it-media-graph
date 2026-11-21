@@ -1,29 +1,23 @@
 # youtube-rising-review Specification
 
 ## Purpose
-How YouTube's rising channels reach the operator for review: the daily selection from the two rankings, the record each offered channel gains, the card the bot sends into the topic of its language, the buttons that review it as `itgraph yt mark` does, and how a decision taken there reaches the inventory.
+How YouTube's rising channels reach the operator for review: the daily selection from the ranking, the record each offered channel gains, the card the bot sends into the topic of its language, the buttons that review it as `itgraph yt mark` does, and how a decision taken there reaches the inventory.
 
 ## Requirements
 
-### Requirement: A Daily Selection From Both Rankings
+### Requirement: The Daily Selection
 
-The system SHALL select, once a day, the highest-ranked rising channels that were never offered before: at most `youtube_rising_chart_offers_per_region` chart channels of each region, and at most `youtube_rising_link_offers_per_day` link channels. A channel that sits in both rankings SHALL be taken by the link one. A day's selection SHALL be computed once and stored, an empty one included. The day is the Moscow date of computing.
+The system SHALL select, once a day, the highest-ranked rising channels that were never offered before: at most `youtube_rising_link_offers_per_day` of them. A day's selection SHALL be computed once and stored, an empty one included. The day is the Moscow date of computing.
 
-#### Scenario: The head of both rankings
+#### Scenario: The head of the ranking
 
-- **GIVEN** seven never-offered chart channels of `RU` and four link channels, with sizes of three and three
+- **GIVEN** seven never-offered rising channels, with a size of three
 - **WHEN** the day's selection is computed
-- **THEN** the three chart channels ranked highest and the three link channels ranked highest are offered, in rank order, and the rest are not
-
-#### Scenario: The link ranking wins a channel both hold
-
-- **GIVEN** a channel ranked by both the link ranking and the chart ranking
-- **WHEN** the day's selection is computed
-- **THEN** it is offered as a link offer, and the chart offers go to channels the link ranking did not take
+- **THEN** the three ranked highest are offered, in rank order, and the rest are not
 
 #### Scenario: The overflow waits for the next day
 
-- **GIVEN** two link channels left out of yesterday's selection, still rising today
+- **GIVEN** two rising channels left out of yesterday's selection, still rising today
 - **WHEN** today's selection is computed
 - **THEN** they are ranked again with whatever rose since, and offered if they are among the three highest
 
@@ -35,13 +29,13 @@ The system SHALL select, once a day, the highest-ranked rising channels that wer
 
 #### Scenario: An empty day
 
-- **GIVEN** no never-offered channel in either ranking
+- **GIVEN** no never-offered rising channel
 - **WHEN** the day's selection is computed
 - **THEN** the day is recorded as computed, with nothing offered
 
 ### Requirement: An Offered Channel Becomes A Candidate Record
 
-The selection SHALL create, for each channel it offers, a record with status `candidate`, unreviewed, if the inventory holds none. A chart offer's record SHALL carry the discovery source `chart`; a link offer's the source of its strongest evidence, a tie going `telegram`, then `mention`, then `featured`. Where a YouTube key is configured, the selection SHALL buy the offered channels' payloads with one `channels.list` call, stored in the same transaction as the day and before any offer can be claimed, so a card is titled the day it is sent; where no key is configured — the test environment's selection — it SHALL make no request, and the records are created without API data.
+The selection SHALL create, for each channel it offers, a record with status `candidate`, unreviewed, if the inventory holds none. The record SHALL carry the discovery source of its strongest evidence, a tie going `telegram`, then `mention`, then `featured`. Where a YouTube key is configured, the selection SHALL buy the offered channels' payloads with one `channels.list` call, stored in the same transaction as the day and before any offer can be claimed, so a card is titled the day it is sent; where no key is configured — the test environment's selection — it SHALL make no request, and the records are created without API data.
 
 #### Scenario: A record without data
 
@@ -99,29 +93,23 @@ Computing a day's selection SHALL rank from what is stored alone: the ranking it
 
 - **GIVEN** an environment with no YouTube key
 - **WHEN** the day's selection is computed
-- **THEN** it completes, offering what the stored rankings' data supports, and makes no request
+- **THEN** it completes, offering what the stored ranking's data supports, and makes no request
 
 ### Requirement: An Offer Is A Card In The Topic Of Its Language
 
-The bot SHALL send each offer as one message to the YouTube chat: a chart offer of `US` to the English topic and of `RU` to the Russian; a link offer to the topic of its payload's `defaultLanguage` when that is `en` or `ru`, and otherwise to the English topic, the card marking the language unknown or other than these two. The card SHALL link the channel — by its handle when a stored payload carries one, by its id otherwise — and show its title when a stored payload holds one; a link offer's card SHALL name the families that referred to it in the window and before it, and the first reference in the window; a chart offer's card SHALL name the region, the position, and link the charting video, named by its title when the day's reading holds one and by its id otherwise. Everything from a channel or a video SHALL be escaped, and the link preview SHALL be forced to what the card links first.
+The bot SHALL send each offer as one message to the YouTube chat, to the topic of its payload's `defaultLanguage` when that is `en` or `ru`, and otherwise to the English topic, the card marking the language unknown or other than these two. The card SHALL link the channel — by its handle when a stored payload carries one, by its id otherwise — and show its title when a stored payload holds one, and name the families that referred to it in the window and before it, and the first reference in the window. Everything from a channel SHALL be escaped, and the link preview SHALL be forced to what the card links first.
 
-#### Scenario: A link offer of a known language
+#### Scenario: An offer of a known language
 
-- **GIVEN** a link offer whose payload's `defaultLanguage` is `ru`
+- **GIVEN** an offer whose payload's `defaultLanguage` is `ru`
 - **WHEN** the bot sends it
 - **THEN** the card goes to the Russian topic, links the channel, and shows its title and evidence
 
-#### Scenario: A link offer of an unknown language
+#### Scenario: An offer of an unknown language
 
-- **GIVEN** a link offer with no stored payload
+- **GIVEN** an offer with no stored payload
 - **WHEN** the bot sends it
 - **THEN** the card goes to the English topic, links the channel by its id, shows no title, and marks the language unknown
-
-#### Scenario: A chart offer
-
-- **GIVEN** a chart offer of `RU` at position four, whose day's reading holds the charting video's title
-- **WHEN** the bot sends it
-- **THEN** the card goes to the Russian topic, names the region and position, and links the charting video by its title
 
 #### Scenario: A title that looks like markup
 

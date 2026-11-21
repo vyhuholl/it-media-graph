@@ -1,9 +1,9 @@
-"""The YouTube rising rankings, pure: rows and a moment in, rankings out.
+"""The YouTube rising ranking, pure: rows and a moment in, the ranking out.
 
 A scenario for each requirement of `youtube-rising-candidates`: what
 counts as evidence, when an appearance is new, how families count
-across both platforms, what is rising, how the link ranking orders
-itself, and what the chart ranking does. Every channel id is invented.
+across both platforms, what is rising, and how the ranking orders
+itself. Every channel id is invented.
 """
 
 from dataclasses import replace
@@ -12,8 +12,6 @@ from datetime import UTC, datetime, timedelta
 from ytfakes import channel_id
 
 from itgraph.derive.yt_rising import (
-    ChartChannel,
-    ChartEntry,
     FeaturedReadings,
     LinkReference,
     YtRising,
@@ -70,12 +68,6 @@ def _readings(
             if previous is not None
             else None
         ),
-    )
-
-
-def _chart(channel: int, video: int) -> ChartEntry:
-    return ChartEntry(
-        video_id=f"fakechartv{video:03d}", channel_id=channel_id(channel)
     )
 
 
@@ -375,80 +367,3 @@ def test_evidence_after_the_moment_is_not_read() -> None:
     ranked = _rank(replace(EMPTY, links=(future,), references=(future,)))
 
     assert ranked.links == []
-
-
-# --- the chart ranking --------------------------------------------------
-
-
-def test_the_day_s_reading_in_order() -> None:
-    """First, third and seventh of the reading absent from the
-    inventory: those three rank, in the reading's order."""
-    ranked = _rank(
-        replace(
-            EMPTY,
-            inventory=frozenset(channel_id(n) for n in (1, 2, 4, 5, 6, 8)),
-            chart_regions=("US",),
-            charts={
-                "US": [
-                    _chart(1, 1),
-                    _chart(2, 2),
-                    _chart(90, 3),
-                    _chart(4, 4),
-                    _chart(5, 5),
-                    _chart(6, 6),
-                    _chart(91, 7),
-                    _chart(8, 8),
-                ]
-            },
-        )
-    )
-
-    assert ranked.chart == [
-        ChartChannel(channel_id=channel_id(90), region="US", position=3),
-        ChartChannel(channel_id=channel_id(91), region="US", position=7),
-    ]
-
-
-def test_the_chart_ranks_a_held_channel_never_and_noise_never() -> None:
-    """A held channel's video does not rank it; a gadget reviewer with
-    a million subscribers and a two-year-old channel with fifty videos
-    both do."""
-    ranked = _rank(
-        replace(
-            EMPTY,
-            inventory=frozenset({channel_id(1)}),
-            chart_regions=("RU",),
-            charts={"RU": [_chart(1, 1), _chart(90, 2), _chart(91, 3)]},
-        )
-    )
-
-    assert [row.channel_id for row in ranked.chart] == [
-        channel_id(90),
-        channel_id(91),
-    ]
-
-
-def test_a_region_without_a_reading_is_said() -> None:
-    ranked = _rank(
-        replace(
-            EMPTY, chart_regions=("US", "RU"), charts={"US": [_chart(90, 1)]}
-        )
-    )
-
-    assert [row.region for row in ranked.chart] == ["US"]
-    assert ranked.chart_without == ["RU"]
-
-
-def test_a_channel_charting_twice_ranks_once() -> None:
-    ranked = _rank(
-        replace(
-            EMPTY,
-            chart_regions=("US",),
-            charts={"US": [_chart(90, 1), _chart(91, 2), _chart(90, 3)]},
-        )
-    )
-
-    assert [(row.channel_id, row.position) for row in ranked.chart] == [
-        (channel_id(90), 1),
-        (channel_id(91), 2),
-    ]

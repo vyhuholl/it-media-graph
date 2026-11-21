@@ -88,7 +88,6 @@ __all__ = [
     "YtQuotaExhausted",
     "YtQuotaPool",
     "YtRawChannel",
-    "YtRawChart",
     "YtRawLookup",
     "YtRawVideo",
     "YtRawVideoStat",
@@ -465,9 +464,9 @@ class YtDiscoverySource(enum.StrEnum):
     videos reference), ``FEATURED`` (what seeds list in their channel
     sections) and ``SEARCH`` (what the operator's queries returned) —
     each written by its own ``--add`` alone, so ``discovered_via`` by
-    status is the yield of each source. ``CHART`` is the rising review's
-    alone: the day's selection writes it for a channel of the chart, and
-    no command writes it by hand.
+    status is the yield of each source. ``CHART`` names a channel the
+    removed chart source offered: nothing writes it now, and the
+    records written before the removal keep it as their history.
     """
 
     MANUAL = "manual"
@@ -695,18 +694,6 @@ class YtRequestOutcome(enum.StrEnum):
     NOT_FOUND = "not_found"
     QUOTA_EXCEEDED = "quota_exceeded"
     ERROR = "error"
-
-
-class YtRisingRanking(enum.StrEnum):
-    """Which of the two rankings offered a channel.
-
-    A chart offer is a channel of the day's regional reading; a link
-    offer one the seeds' evidence named. A channel both rank is taken by
-    the link ranking, which is why the column exists at all.
-    """
-
-    LINK = "link"
-    CHART = "chart"
 
 
 def _pg_enum(members: type[enum.Enum], name: str) -> Enum:
@@ -2351,35 +2338,6 @@ class YtRawChannelSections(Base):
         return f"YtRawChannelSections(channel_id={self.channel_id!r})"
 
 
-class YtRawChart(Base):
-    """One reading of a region's chart, and when it was taken.
-
-    The ``videos.list`` ``chart=mostPopular`` answer, trimmed by
-    ``fields`` to each video's id and its channel's id, in the order
-    YouTube ranked them — the position is the order, and the page token
-    is spent, not stored. Appended by every read and never rewritten,
-    like a statistics reading: the day's chart is whichever reading the
-    day holds, and an older one is history, not a lie.
-
-    No foreign key and no channel data: the chart names channels the
-    inventory mostly does not hold, and what is worked out from the
-    readings — which of them are rising — is never stored.
-    """
-
-    __tablename__ = "yt_raw_charts"
-
-    region: Mapped[str] = mapped_column(Text, primary_key=True)
-    fetched_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), primary_key=True
-    )
-    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
-
-    def __repr__(self) -> str:
-        return (
-            f"YtRawChart(region={self.region!r}, fetched_at={self.fetched_at})"
-        )
-
-
 class YtAffiliationRun(Base):
     """One YouTube affiliation detection run, and the parameters it used.
 
@@ -3472,17 +3430,15 @@ class YtRequest(Base):
 class YtRisingOfferDay(Base):
     """One day's selection of YouTube's rising channels, an empty one too.
 
-    Telegram's day, with the two sizes: which ranking could fill how
-    much is part of what the day says.
+    Telegram's day, with its size: how much the ranking could fill is
+    part of what the day says.
     """
 
     __tablename__ = "yt_rising_offer_days"
 
     day: Mapped[date] = mapped_column(Date, primary_key=True)
     computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    # `youtube_rising_chart_offers_per_region` and
     # `youtube_rising_link_offers_per_day` when it was computed.
-    size_chart: Mapped[int] = mapped_column(Integer)
     size_links: Mapped[int] = mapped_column(Integer)
 
 
@@ -3490,13 +3446,12 @@ class YtRisingOffer(Base):
     """A rising YouTube channel offered for review in the bot, and what
     came of it.
 
-    Telegram's offer, plus which ranking offered it and what it filled
-    — a chart offer's region and position, a link offer's evidence —
-    the discovery source the record it created carries, and the topic
-    its card goes to. A seed's decision here carries a language, as
-    ``itgraph yt mark`` records one. As on Telegram: a channel is
-    offered once, ever, nobody who pressed is recorded, and the bot
-    reads the channel at sending, never here.
+    Telegram's offer, plus the evidence the ranking counted for the
+    channel, the discovery source the record it created carries, and
+    the topic its card goes to. A seed's decision here carries a
+    language, as ``itgraph yt mark`` records one. As on Telegram: a
+    channel is offered once, ever, nobody who pressed is recorded, and
+    the bot reads the channel at sending, never here.
     """
 
     __tablename__ = "yt_rising_offers"
@@ -3547,26 +3502,19 @@ class YtRisingOffer(Base):
     channel_id: Mapped[str] = mapped_column(
         ForeignKey("yt_channels.channel_id", ondelete="CASCADE")
     )
-    ranking: Mapped[YtRisingRanking] = mapped_column(
-        _pg_enum(YtRisingRanking, "yt_rising_ranking")
-    )
-    # A chart offer's place in its region's reading; a link offer's
-    # evidence — each whichever its ranking fills.
-    region: Mapped[str | None] = mapped_column(Text)
-    position: Mapped[int | None] = mapped_column(Integer)
+    # The evidence the ranking counted for the channel.
     families: Mapped[int | None] = mapped_column(Integer)
     families_before: Mapped[int | None] = mapped_column(Integer)
     first_in_window: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
-    # The discovery source the record was created with; `chart` for a
-    # chart offer, the strongest of the others for a link one.
+    # The discovery source the record was created with: the strongest
+    # of the evidence's sources.
     discovered_via: Mapped[YtDiscoverySource] = mapped_column(
         _pg_enum(YtDiscoverySource, "yt_discovery_source")
     )
-    # Where the card goes: a chart offer's by its region, a link
-    # offer's the English default — its payload's language, once one is
-    # stored, may still move it at sending.
+    # Where the card goes: the English default — its payload's
+    # language, once one is stored, may still move it at sending.
     topic: Mapped[YtAlertRoute] = mapped_column(
         _pg_enum(YtAlertRoute, "yt_alert_route")
     )
@@ -3604,7 +3552,4 @@ class YtRisingOffer(Base):
     applied: Mapped[bool | None] = mapped_column()
 
     def __repr__(self) -> str:
-        return (
-            f"YtRisingOffer(day={self.day}, ranking={self.ranking}, "
-            f"decision={self.decision})"
-        )
+        return f"YtRisingOffer(day={self.day}, decision={self.decision})"
