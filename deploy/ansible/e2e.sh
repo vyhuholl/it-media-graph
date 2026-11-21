@@ -734,6 +734,14 @@ kubectl -n "$namespace" delete job e2e-offer >/dev/null
 [ "$(read_rows "SELECT count(*) FROM tg_rising_offer_days WHERE day = (now() AT TIME ZONE 'Europe/Moscow')::date")" = 1 ] ||
 	fail "the copy's selection of the day was not recorded"
 ok "Telegram's rising selection is scheduled on the copy, and a run records its day"
+kubectl -n "$namespace" get cronjob itgraph-embed >/dev/null 2>&1 || fail "no embedding job where nothing is collected"
+kubectl -n "$namespace" create job e2e-embed --from=cronjob/itgraph-embed >/dev/null
+kubectl -n "$namespace" wait --for=condition=complete job/e2e-embed --timeout=300s >/dev/null || fail 'the embedding pass failed on the copy'
+kubectl -n "$namespace" delete job e2e-embed >/dev/null
+[ "$(read_rows 'SELECT count(*) FROM tg_post_embeddings')" -gt 0 ] ||
+	fail "the copy's texts were not embedded"
+ok "the embedding pass is scheduled on the copy, and a run embeds its texts with the model from the image"
+
 say 'a second restore, from a dump of the neutralised copy'
 dump_from_claim "$work/neutralised.dump"
 # The dump at head names the reader, so that the restore below replays its grants

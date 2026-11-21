@@ -18,18 +18,18 @@
 ## 4. Search
 
 - [x] 4.1 Ranking and result assembly: load both tables' vectors and metadata, cosine-rank in numpy, skip foreign `model_key` rows, build links (`t.me/<username>/<msg_id>`, the `t.me/c/…` form without a username, `youtube.com/watch?v=<id>`), print top N with channel, date, text head. Verify: pytest with fake vectors, including the empty-table message.
-- [ ] 4.2 `itgraph search "<query>"` CLI command. Verify: pytest over the command with a fake model; `uv run itgraph search --help`.
+- [x] 4.2 `itgraph search "<query>"` CLI command. Verify: pytest over the command with a fake model; `uv run itgraph search --help`.
 
 ## 5. Deploy
 
-- [ ] 5.1 Dockerfile: add `--group embed` to both `uv sync` lines and bake the e5-small weights into a fixed path the wrapper loads. Verify: a local `docker build` succeeds and the image contains the weights (listing the path inside the built image).
-- [ ] 5.2 Role: the CronJob on the `itgraph embed` command, schedule input defaulting to 04:00 Moscow, database-only egress labels and secrets, bounded resources per the design. Verify: `make ansible-lint`.
-- [ ] 5.3 `make test-e2e` on the throwaway k3d cluster: the embedding CronJob exists, its pod carries only the configuration and database URL, and the role applies cleanly beside it. Verify: the e2e run's output.
+- [x] 5.1 Dockerfile: add `--group embed` to both `uv sync` lines and bake the e5-small weights into a fixed path the wrapper loads. Verify: a local `docker build` succeeds and the image contains the weights (listing the path inside the built image).
+- [x] 5.2 Role: the CronJob on the `itgraph embed` command, schedule input defaulting to 04:00 Moscow, database-only egress labels and secrets, bounded resources per the design. Verify: `make ansible-lint`.
+- [x] 5.3 `make test-e2e` on the throwaway k3d cluster: the embedding CronJob exists, its pod carries only the configuration and database URL, and the role applies cleanly beside it. Verify: the e2e run's output.
 
 ## 6. Whole-change verification
 
-- [ ] 6.1 `make validate` green over everything above. Verify: command output.
-- [ ] 6.2 Smoke with the real model against a scratch database (developer machine, test data only): run `itgraph embed` over a small fixture corpus, then two or three `itgraph search` queries whose expected hits are known, one Russian over Russian texts. Verify: the searches return the expected texts in the top results.
+- [x] 6.1 `make validate` green over everything above. Verify: command output.
+- [x] 6.2 Smoke with the real model against a scratch database (developer machine, test data only): run `itgraph embed` over a small fixture corpus, then two or three `itgraph search` queries whose expected hits are known, one Russian over Russian texts. Verify: the searches return the expected texts in the top results.
 
 ## Workflow follow-up
 

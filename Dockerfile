@@ -17,10 +17,30 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /app
 COPY pyproject.toml uv.lock README.md .python-version ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --no-install-project
+    uv sync --locked --no-dev --no-install-project --group embed
 COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked --no-dev --no-editable
+    uv sync --locked --no-dev --no-editable --group embed
+
+# The e5-small weights, fetched once here and pinned by revision as
+# everything else in this file is pinned by digest: `model_key` names
+# them, and an unpinned fetch would let upstream change the vectors
+# under that name. The int8 O4 export (235 MB, within 0.0002 cosine of
+# the fp32 one) and the tokenizer are all the wrapper loads — the
+# runtime never downloads, which the embed job's database-only egress
+# turns from a promise into a hard guarantee.
+RUN /app/.venv/bin/python -c "\
+    from huggingface_hub import snapshot_download; \
+    snapshot_download(\
+        repo_id='intfloat/multilingual-e5-small', \
+        revision='614241f622f53c4eeff9890bdc4f31cfecc418b3', \
+        allow_patterns=['onnx/model_O4.onnx', 'onnx/tokenizer.json'], \
+        local_dir='/tmp/e5-small')" \
+    && mkdir -p /app/models/multilingual-e5-small \
+    && mv /tmp/e5-small/onnx/model_O4.onnx \
+        /tmp/e5-small/onnx/tokenizer.json \
+        /app/models/multilingual-e5-small/ \
+    && rm -rf /tmp/e5-small
 
 FROM python:3.14.3-slim-trixie@sha256:5e59aae31ff0e87511226be8e2b94d78c58f05216efda3b07dbbed938ec8583b
 
@@ -56,6 +76,9 @@ WORKDIR /app
 COPY alembic.ini ./
 COPY src ./src
 COPY --from=builder /app/.venv ./.venv
+# The model the embed commands load, at the path settings names by
+# default: /app/models/multilingual-e5-small.
+COPY --from=builder /app/models ./models
 
 # The build checks itself, because the deploy has nowhere to install
 # what is missing: the entry point answers, the client is a 16, the
@@ -64,6 +87,8 @@ RUN set -eux; \
     itgraph --help > /dev/null; \
     pg_dump --version | grep -q '^pg_dump (PostgreSQL) 16\.'; \
     [ "$(date +%Z)" = MSK ]; \
+    [ -s /app/models/multilingual-e5-small/model_O4.onnx ]; \
+    [ -s /app/models/multilingual-e5-small/tokenizer.json ]; \
     command -v age; \
     command -v curl
 

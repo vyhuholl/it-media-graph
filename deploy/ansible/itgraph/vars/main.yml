@@ -265,6 +265,13 @@ __itgraph_job_resources:
 __itgraph_heavy_job_resources:
   requests: {cpu: 100m, memory: 256Mi}
   limits: {memory: 2Gi}
+# The embedding pass: CPU-bound on four ONNX threads, with the model
+# and a batch of texts in memory. A CPU limit, unlike every other
+# job's, because this one would otherwise take the node's every core
+# for its hour; 4 matches the wrapper's thread count.
+__itgraph_embed_resources:
+  requests: {cpu: 1, memory: 1Gi}
+  limits: {cpu: 4, memory: 4Gi}
 
 # Each scheduled pass. Every job: this time zone, Forbid, no retry, since a failed
 # run is retried by the next firing, and a deadline that ends a stuck run, so
@@ -407,6 +414,28 @@ __itgraph_cronjobs_always:
           {{ [__itgraph_from_config, __itgraph_from_database]
              + ([__itgraph_from_youtube] if __itgraph_has_youtube | bool else []) }}
         resources: "{{ __itgraph_job_resources }}"
+    mounts: []
+    volumes: []
+  # The text-embedding pass: needs only the database and the image,
+  # which carries the model, so it runs in every environment — a test
+  # environment embeds its restored texts like any other. The first
+  # run on a database is the backfill; every later one is the day's
+  # increment, and an interrupted run is resumed by the next.
+  - name: itgraph-embed
+    schedule: "{{ itgraph_embed_schedule }}"
+    # Twenty-three hours, as the baselines': a host down overnight
+    # starts the missed run when it is back, the same day.
+    starting_deadline: 82800
+    # Three hours: the nightly increment is minutes, the first backfill
+    # of the corpus about an hour, and a burst day of walks must fit
+    # inside one run.
+    active_deadline: 10800
+    labels: "{{ __itgraph_may_reach_database }}"
+    containers:
+      - name: itgraph
+        args: [embed]
+        env_from: ["{{ __itgraph_from_config }}", "{{ __itgraph_from_database }}"]
+        resources: "{{ __itgraph_embed_resources }}"
     mounts: []
     volumes: []
   - name: itgraph-backup

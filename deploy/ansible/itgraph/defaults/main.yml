@@ -53,6 +53,9 @@ itgraph_yt_watch_schedule: "*/15 * * * *"
 # Four-hourly, though dumps fall due daily and weekly: a run with nothing due
 # takes four seconds, and it catches up a failed upload within hours.
 itgraph_backup_schedule: "40 */4 * * *"
+# The day's texts become vectors before anything else wakes: embeds
+# what the collectors brought, and only reaches the database.
+itgraph_embed_schedule: "0 4 * * *"
 itgraph_baselines_schedule: "30 4 * * *"
 itgraph_yt_refresh_schedule: "0 5 * * *"
 # An hour after the refresh, so the day's featured readings are in

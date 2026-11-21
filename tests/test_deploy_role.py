@@ -270,6 +270,9 @@ SCHEDULES = {
     # Ten minutes: under Forbid a stuck pass blocks the passes after it.
     "itgraph-yt-watch": ("*/15 * * * *", 600, 600),
     "itgraph-backup": ("40 */4 * * *", 10800, 7200),
+    # The day's texts become vectors before anything else wakes; the
+    # baselines' twenty-three hours, and three to finish a backfill.
+    "itgraph-embed": ("0 4 * * *", 82800, 10800),
     "itgraph-baselines": ("30 4 * * *", 82800, 10800),
     "itgraph-yt-refresh": ("0 5 * * *", 82800, 10800),
     # Both lookup queues, an hour after the refresh; a missed run starts
@@ -489,6 +492,7 @@ def test_a_key_absent_means_no_youtube_job_and_no_key(
         "itgraph-detect",
         "itgraph-baselines",
         "itgraph-backup",
+        "itgraph-embed",
         "itgraph-yt-score",
         "itgraph-yt-baselines",
         "itgraph-yt-weekly",
@@ -553,6 +557,38 @@ def test_telegram_s_rising_selection_runs_in_every_environment(
     ]
     assert {k for k in labels if k.startswith("itgraph/")} == {
         "itgraph/database"
+    }
+
+
+@pytest.mark.parametrize("environment", SETS)
+def test_the_embedding_job_runs_in_every_environment(
+    rendered: dict[str, dict[str, Objects]], environment: str
+) -> None:
+    """Collecting or not, key or not: it needs only the database and
+    the image, which carries the model, so a test environment embeds
+    its restored texts like any other."""
+    objects = everything(rendered[environment])
+    job = named(objects, "CronJob", "itgraph-embed")
+    spec = job["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+    [container] = spec["containers"]
+    assert container["args"] == ["embed"]
+    assert job["spec"]["schedule"] == "0 4 * * *"
+    assert job["spec"]["timeZone"] == "Europe/Moscow"
+    keys = keys_of(objects, "CronJob", "itgraph-embed")
+    assert keys & SECRET_KEYS == set()
+    assert "DATABASE_URL" in keys
+    assert not [m for m in spec.get("volumes", []) if "session" in m["name"]]
+    labels = job["spec"]["jobTemplate"]["spec"]["template"]["metadata"][
+        "labels"
+    ]
+    assert {k for k in labels if k.startswith("itgraph/")} == {
+        "itgraph/database"
+    }
+    # Bounded, as the design says: four CPUs to match the wrapper's
+    # ONNX threads, and memory for the model and a batch of texts.
+    assert container["resources"] == {
+        "requests": {"cpu": 1, "memory": "1Gi"},
+        "limits": {"cpu": 4, "memory": "4Gi"},
     }
 
 
@@ -644,6 +680,7 @@ REACH = {
     "itgraph-yt-baselines": {"itgraph/database"},
     "itgraph-yt-weekly": {"itgraph/database"},
     "itgraph-weekly": {"itgraph/database"},
+    "itgraph-embed": {"itgraph/database"},
     "itgraph-offer": {"itgraph/database"},
     # Where a key is configured, the one call that buys the day's
     # payloads rides with the selection.
