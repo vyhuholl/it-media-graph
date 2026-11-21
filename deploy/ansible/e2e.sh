@@ -286,11 +286,11 @@ ok 'a new bot token restarts the bot alone'
 role main >"$work/token-back.log" 2>&1 || fail 'putting the token back failed'
 
 say 'a check on a namespace with a change to show'
-role main --check --diff -e itgraph_alert_chat_id=100000009 >"$work/check.log" 2>&1 || {
+role main --check --diff -e itgraph_alert_chat_id=-100000009 >"$work/check.log" 2>&1 || {
 	tail -30 "$work/check.log" >&2
 	fail 'a check with a change failed'
 }
-[ "$(kubectl -n "$namespace" get secret itgraph-bot -o jsonpath='{.data.ALERT_CHAT_ID}' | base64 -d)" = 100000003 ] ||
+[ "$(kubectl -n "$namespace" get secret itgraph-bot -o jsonpath='{.data.ALERT_CHAT_ID}' | base64 -d)" = -100000003 ] ||
 	fail 'a check changed something'
 ok 'a check changes nothing'
 
@@ -681,13 +681,13 @@ else
 		fail 'the bot did not deliver the synthetic alert'
 	telegram_calls >"$work/telegram.txt"
 	grep -q '"method": "sendMessage"' "$work/telegram.txt" || fail 'the stand-in saw no message'
-	[ "$(sent_to 100000003 none)" = 1 ] || fail 'the undelivered alert of the dump was sent, or the synthetic one was not'
-	ok 'the bot delivers one alert, the synthetic one, and none of the dump, to the chat and no topic'
+	[ "$(sent_to -100000003 7303)" = 1 ] || fail 'the undelivered alert of the dump was sent, or the synthetic one was not'
+	ok "the bot delivers one alert, the synthetic one, and none of the dump, to the chat's Telegram topic"
 	grep -q 'YouTube: to the topics en,ru' "$work/restore.log" || fail 'the YouTube trial did not reach both topics'
-	[ "$(sent_to -100000000000073 7301)" = 1 ] || fail 'the English topic did not receive the YouTube trial'
-	[ "$(sent_to -100000000000073 7302)" = 1 ] || fail 'the Russian topic did not receive the YouTube trial'
+	[ "$(sent_to -100000003 7301)" = 1 ] || fail 'the English topic did not receive the YouTube trial'
+	[ "$(sent_to -100000003 7302)" = 1 ] || fail 'the Russian topic did not receive the YouTube trial'
 	[ "$(read_rows "SELECT count(*) FROM yt_raw_videos")" = 0 ] || fail 'the synthetic videos were left behind'
-	ok 'a synthetic YouTube alert reaches each topic of the YouTube chat, and is removed after'
+	ok "a synthetic YouTube alert reaches each of the chat's YouTube topics, and is removed after"
 fi
 [ "$(read_rows 'SELECT count(*) FROM tg_baseline_runs WHERE completed_at IS NOT NULL')" -ge 1 ] || fail 'no baseline run on the copy'
 [ "$(read_rows 'SELECT count(*) FROM yt_baseline_runs WHERE completed_at IS NOT NULL')" -ge 1 ] || fail 'no YouTube baseline run on the copy'
@@ -734,7 +734,6 @@ kubectl -n "$namespace" delete job e2e-offer >/dev/null
 [ "$(read_rows "SELECT count(*) FROM tg_rising_offer_days WHERE day = (now() AT TIME ZONE 'Europe/Moscow')::date")" = 1 ] ||
 	fail "the copy's selection of the day was not recorded"
 ok "Telegram's rising selection is scheduled on the copy, and a run records its day"
-
 say 'a second restore, from a dump of the neutralised copy'
 dump_from_claim "$work/neutralised.dump"
 # The dump at head names the reader, so that the restore below replays its grants
@@ -1051,8 +1050,8 @@ tg_revived="$(read_rows "SELECT r.msg_id || ':' || l.second_wind_shown FROM tg_w
 	WHERE l.week_start = '$tg_week' AND r.channel_id = 9900000001")"
 [ "$tg_revived" = 9003:true ] || fail "the older post is not the list's second wind, shown: $tg_revived"
 tg_list_sent() {
-	telegram_calls | jq -s -e '[.[] | select(.method == "sendMessage" and .fields.chat_id == "100000003"
-		and (.fields.message_thread_id // "none") == "none"
+	telegram_calls | jq -s -e '[.[] | select(.method == "sendMessage" and .fields.chat_id == "-100000003"
+		and .fields.message_thread_id == "7303"
 		and (.fields.text | test("Telegram — выше нормы за неделю")) and (.fields.text | test("t.me/fake_e2e_weekly/9001"))
 		and (.fields.text | test("ещё 1 пост канала выше порога"))
 		and (.fields.text | test("Второе дыхание.*\n1\\. .*\nhttps://t\\.me/fake_e2e_weekly/9003"))
@@ -1066,7 +1065,7 @@ psql_in "$namespace" "DELETE FROM tg_baseline_runs WHERE id IN ($tg_run, $tg_new
 ok "Telegram's weekly list names the channel once, by its best post, then its older post that sped up, in its chat without a preview"
 
 telegram_control enqueue "$(jq -n --argjson at "$(date +%s)" '{message: {message_id: 5, date: $at,
-	chat: {id: -100000000000073, type: "supergroup", is_forum: true}, message_thread_id: 7301, is_topic_message: true,
+	chat: {id: -100000003, type: "supergroup", is_forum: true}, message_thread_id: 7301, is_topic_message: true,
 	from: {id: 7, is_bot: false, first_name: "fake"}, text: "/status@fake_bot",
 	entities: [{type: "bot_command", offset: 0, length: 16}]}}')"
 status_answered() {
@@ -1078,7 +1077,7 @@ ok '/status in a topic is answered in that topic, about YouTube'
 
 telegram_control enqueue "$(jq -n --argjson at "$(date +%s)" '{callback_query: {id: "1", chat_instance: "1",
 	from: {id: 7, is_bot: false, first_name: "fake"}, data: "useful:17",
-	message: {message_id: 33, date: $at, chat: {id: 100000003, type: "private"}, text: "an old alert"}}}')"
+	message: {message_id: 33, date: $at, chat: {id: -100000003, type: "private"}, text: "an old alert"}}}')"
 button_retired() {
 	telegram_calls | jq -s -e '([.[] | select(.method == "answerCallbackQuery")] | length == 1)
 		and ([.[] | select(.method == "editMessageReplyMarkup" and .fields.message_id == "33")] | length == 1)' >/dev/null

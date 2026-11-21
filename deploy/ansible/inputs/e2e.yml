@@ -12,7 +12,9 @@ itgraph_telegram_collection: false
 itgraph_telegram_api_id: 30507090
 itgraph_telegram_api_hash: fakeApiHashSetE
 itgraph_bot_token: "333:fakeBotTokenSetE"
-itgraph_alert_chat_id: 100000003
+# The one alert chat is a forum with its three topics, so its id is a
+# forum's: negative, which is how the Bot API stand-in tells one.
+itgraph_alert_chat_id: -100000003
 itgraph_telegram_alert_topic: 7303
 itgraph_youtube_alert_topic_en: 7301
 itgraph_youtube_alert_topic_ru: 7302

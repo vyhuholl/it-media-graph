@@ -6,7 +6,7 @@ What it answers, and what the suite steers through `/control/…`:
 
 * messages are numbered, as Telegram numbers them;
 * `getChat` knows every chat, and a chat whose id is below zero is a forum —
-  the suite's YouTube chat is one, its Telegram chat is not;
+  as the one alert chat is, with its three topics;
 * a topic the suite names through `/control/refuse` is refused as Telegram
   refuses a deleted one, until `/control/reset`;
 * updates the suite queues through `/control/enqueue` are handed out by the next
