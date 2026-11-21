@@ -2,7 +2,7 @@
 
 ## 1. Feasibility pin
 
-- [ ] 1.1 Confirm the inference stack on Python 3.14 before any code: add the `embed` group (`uv add --group embed fastembed`), check that onnxruntime wheels resolve, that `intfloat/multilingual-e5-small` is listed, and with a small local script that a query/passage pair of the same text scores above an unrelated pair — writing down whether fastembed applies e5's `query:`/`passage:` prefixes itself or the wrapper must. If wheels for 3.14 are missing, stop and report to the operator instead of pinning Python around it. Verify: the script's output, recorded in the change's notes or the task conversation.
+- [x] 1.1 Confirm the inference stack on Python 3.14 before any code: add the `embed` group (`uv add --group embed fastembed`), check that onnxruntime wheels resolve, that `intfloat/multilingual-e5-small` is listed, and with a small local script that a query/passage pair of the same text scores above an unrelated pair — writing down whether fastembed applies e5's `query:`/`passage:` prefixes itself or the wrapper must. If wheels for 3.14 are missing, stop and report to the operator instead of pinning Python around it. Verify: the script's output, recorded in the change's notes or the task conversation.
 
 ## 2. Schema
 

@@ -12,11 +12,13 @@ Non-goals: a bot button (later change), semantic clustering (reads the same tabl
 
 ## Decisions
 
-### Model: `intfloat/multilingual-e5-small`, 384 dims, ONNX via fastembed
+### Model: `intfloat/multilingual-e5-small`, 384 dims, ONNX directly
 
-Topic-level search in mixed Russian/English is what e5 was built for, and PLAN.md already names it. The small variant halves storage and compute against base with little loss at "what is it about" granularity; `model_key` on every row makes an upgrade to base a re-embed, not a redesign. fastembed runs ONNX weights with no torch: ~+200–300 MB to the image instead of +1–1.3 GB. Alternative rejected: `sentence-transformers` — standard but drags torch into a server image for no quality gain.
+Topic-level search in mixed Russian/English is what e5 was built for, and PLAN.md already names it. The small variant halves storage and compute against base with little loss at "what is it about" granularity; `model_key` on every row makes an upgrade to base a re-embed, not a redesign.
 
-e5 needs `query:` / `passage:` input prefixes; the design assumes the library applies them and the apply phase verifies this on a real pair (the check is a task, and if the library does not, the wrapper adds the prefixes itself).
+**The original plan — ONNX via fastembed — did not survive apply.** fastembed's registry does not carry `intfloat/multilingual-e5-small` (its only e5 is `multilingual-e5-large`, 1024 dims, 2.2 GB), and `TextEmbedding` refuses unlisted models, so the design as written would have forced the large model. The operator chose to keep e5-small and drop fastembed: the wrapper loads the canonical repo's own ONNX export with onnxruntime + tokenizers, both of which fastembed had pulled in anyway — the no-torch property fastembed was chosen for is kept, with ~80 lines of inference glue the project owns. Verified on apply (2026-11-21): wheels resolve on Python 3.14.3, `model_O4.onnx` (int8, 235 MB) runs on arm64 and scores within 0.0002 cosine of the fp32 export on a query/passage probe in both languages, same-subject pairs rank above unrelated ones, and the wrapped prefixes are ours to apply. The fp32 export (470 MB) stays the fallback; the avx512-only variant is excluded because the developer machine is arm64.
+
+e5 needs `query:` / `passage:` input prefixes and **the wrapper applies them itself** — fastembed's `query_embed`/`passage_embed` are thin wrappers over `embed` that add nothing (verified in source), so direct onnxruntime loses nothing here either.
 
 ### Storage: `bytea` float16 vectors, no pgvector
 
@@ -53,12 +55,12 @@ Embeds the query with the same configured model, loads both tables' vectors plus
 
 ### Dependencies and image
 
-`pyproject.toml` gains an `embed` group (`fastembed`); the Dockerfile's two `uv sync` lines gain `--group embed`. Model weights are fetched at image build into a fixed path and the wrapper points fastembed's cache there — the runtime never downloads (the job's egress denies internet, so this is also a hard guarantee). The `data` group on developer machines is unaffected.
+`pyproject.toml` gains an `embed` group (`numpy`, `onnxruntime`, `tokenizers`, `huggingface-hub` — the last only to fetch weights at build and on dev machines; the runtime loads from the baked path and never downloads, which the job's egress denies anyway, making it a hard guarantee); the Dockerfile's two `uv sync` lines gain `--group embed`. The `data` group on developer machines is unaffected.
 
 ## Risks / Trade-offs
 
-- [onnxruntime has no wheel for Python 3.14] → check wheel availability as the first apply task, before any code; if absent, stop and revisit with the operator rather than pinning Python down for the whole project.
-- [fastembed does not apply e5's query/passage prefixes] → verified in apply with a real query/passage pair; the wrapper adds them itself if not.
+- [onnxruntime has no wheel for Python 3.14] → checked first in apply: wheels resolve and run on 3.14.3, both arm64 (dev) and x86-64 (image).
+- [fastembed does not apply e5's query/passage prefixes] → verified in source: it does not, and the wrapper applies them. Moot for the stack itself since fastembed was dropped (see the model decision).
 - [small model misses nuance on short slang posts] → accepted for topic-level search; upgrade path is a `model_key` bump plus one re-embed run.
 - [float16 rounding shifts cosine ranks slightly] → irrelevant at top-20 granularity; measured, not assumed, if search quality ever looks off.
 - [burst day adds ~9k texts] → the loop shape absorbs it: minutes of work at batch 256 on 4 threads; no run ever exceeds what the next can finish.

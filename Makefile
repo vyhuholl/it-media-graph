@@ -1,6 +1,9 @@
 .PHONY: lint typecheck test test-e2e validate ansible-lint
 
-RUN_CMD := uv run
+# --group embed on every target: the suite typechecks and tests the
+# embedding code, whose dependencies (numpy, onnxruntime, tokenizers) are
+# deliberately not main ones — the image installs them by group too.
+RUN_CMD := uv run --group embed
 
 lint:
 	$(RUN_CMD) ruff check --fix .

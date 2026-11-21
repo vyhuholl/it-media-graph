@@ -40,6 +40,12 @@ dev = [
     "pytest-xdist>=3.8.0",
     "ruff>=0.16.0",
 ]
+embed = [
+    "huggingface-hub>=2.4.0",
+    "numpy>=2.5.1",
+    "onnxruntime>=1.32.0",
+    "tokenizers>=0.23.3",
+]
 
 [project.scripts]
 itgraph = "itgraph.cli:app"
