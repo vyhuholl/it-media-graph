@@ -77,11 +77,11 @@ python_version = "3.14"
 strict = true
 plugins = ["pydantic.mypy"]
 
-# Neither Telethon nor qrcode ships a py.typed marker, and no stubs exist.
-# Scoped to those two packages — do not widen this to silence errors in our
-# own code.
+# Neither Telethon nor qrcode nor onnxruntime ships a py.typed marker, and
+# no stubs exist. Scoped to those packages — do not widen this to silence
+# errors in our own code.
 [[tool.mypy.overrides]]
-module = ["qrcode.*", "telethon.*"]
+module = ["onnxruntime.*", "qrcode.*", "telethon.*"]
 ignore_missing_imports = true
 
 [tool.uv.sources]

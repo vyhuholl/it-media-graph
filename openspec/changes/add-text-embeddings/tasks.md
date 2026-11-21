@@ -10,14 +10,14 @@
 
 ## 3. Embedding core
 
-- [ ] 3.1 Model wrapper (`src/itgraph/embed/model.py`): load from the baked cache path, batch-embed passages, embed a single query, emit float16 little-endian bytes; apply e5 prefixes if 1.1 found the library does not. Tests with a fake backend (no network, no real weights). Verify: pytest for the wrapper, including the prefix decision from 1.1.
-- [ ] 3.2 Text extraction: Telegram `payload->>'message'`; YouTube `snippet.title` + `snippet.description` joined, title alone when the description is empty; `content_hash` of the joined YouTube text. Verify: pytest over payload fixtures, including the empty-description case.
-- [ ] 3.3 Selection and upsert (`db/embed.py`): one loop iteration selects up to a batch of texts whose embedding is missing, whose `model_key` is not the configured one, or — YouTube only — whose `content_hash` differs; embeds; upserts; commits per batch. Verify: pytest covering the nightly-increment, interrupted-backfill-resumes, model-change-stale and unchanged-hash-not-re-embedded cases.
-- [ ] 3.4 `itgraph embed` CLI command wiring the loop, with the model injectable for tests. Verify: pytest over the command with a fake model plus `uv run itgraph embed --help`.
+- [x] 3.1 Model wrapper (`src/itgraph/embed/model.py`): load from the baked cache path, batch-embed passages, embed a single query, emit float16 little-endian bytes; apply e5 prefixes if 1.1 found the library does not. Tests with a fake backend (no network, no real weights). Verify: pytest for the wrapper, including the prefix decision from 1.1.
+- [x] 3.2 Text extraction: Telegram `payload->>'message'`; YouTube `snippet.title` + `snippet.description` joined, title alone when the description is empty; `content_hash` of the joined YouTube text. Verify: pytest over payload fixtures, including the empty-description case.
+- [x] 3.3 Selection and upsert (`db/embed.py`): one loop iteration selects up to a batch of texts whose embedding is missing, whose `model_key` is not the configured one, or — YouTube only — whose `content_hash` differs; embeds; upserts; commits per batch. Verify: pytest covering the nightly-increment, interrupted-backfill-resumes, model-change-stale and unchanged-hash-not-re-embedded cases.
+- [x] 3.4 `itgraph embed` CLI command wiring the loop, with the model injectable for tests. Verify: pytest over the command with a fake model plus `uv run itgraph embed --help`.
 
 ## 4. Search
 
-- [ ] 4.1 Ranking and result assembly: load both tables' vectors and metadata, cosine-rank in numpy, skip foreign `model_key` rows, build links (`t.me/<username>/<msg_id>`, the `t.me/c/…` form without a username, `youtube.com/watch?v=<id>`), print top N with channel, date, text head. Verify: pytest with fake vectors, including the empty-table message.
+- [x] 4.1 Ranking and result assembly: load both tables' vectors and metadata, cosine-rank in numpy, skip foreign `model_key` rows, build links (`t.me/<username>/<msg_id>`, the `t.me/c/…` form without a username, `youtube.com/watch?v=<id>`), print top N with channel, date, text head. Verify: pytest with fake vectors, including the empty-table message.
 - [ ] 4.2 `itgraph search "<query>"` CLI command. Verify: pytest over the command with a fake model; `uv run itgraph search --help`.
 
 ## 5. Deploy

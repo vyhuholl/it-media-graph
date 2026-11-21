@@ -874,6 +874,16 @@ class Settings(BaseSettings):
     youtube_weekly_second_wind_norm_share: float = Field(default=0.5, gt=0)
     youtube_weekly_second_wind_size: int = Field(default=5, ge=1)
 
+    # --- embeddings ----------------------------------------------------
+    #
+    # Where the e5-small ONNX weights the embedder loads live. The image
+    # bakes them at build into this path; a developer machine fetches
+    # them once with huggingface-hub and points this at the fetch. The
+    # default is the image's path, so a bare machine fails by naming the
+    # directory it expected — the code never downloads at runtime, which
+    # the embed job's database-only egress makes a hard guarantee.
+    embed_model_dir: Path = Path("/app/models/multilingual-e5-small")
+
     backup_dir: Path = DEFAULT_BACKUP_DIR
 
     # Where the PostgreSQL tools run. The Mac keeps Postgres in a

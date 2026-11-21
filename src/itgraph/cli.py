@@ -4129,3 +4129,80 @@ def yt_family(
     except ValueError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(1) from exc
+
+
+@app.command()
+def embed() -> None:
+    """Embed the texts that are missing or stale, and nothing else.
+
+    One vector per stored text — Telegram post texts, YouTube titles
+    with descriptions — under the model the image carries, in batches,
+    one commit each: the first run on a database is the backfill, an
+    interrupted one is resumed by the next, and a model change re-embeds
+    everything with no special mode. A YouTube text whose refreshed
+    title or description changed is re-embedded; an unchanged one is
+    left alone. Makes no network request of any kind and takes no
+    session lease. Runs nightly on the host.
+    """
+    from itgraph.config import settings
+    from itgraph.db.embed import run_embed
+    from itgraph.db.session import Database
+    from itgraph.embed.model import EmbeddingModel
+
+    async def run() -> None:
+        model = EmbeddingModel.load(settings.embed_model_dir)
+        database = Database()
+        try:
+            summary = await run_embed(database, model)
+        finally:
+            await database.dispose()
+        typer.echo(summary.line())
+
+    _run(run())
+
+
+@app.command()
+def search(
+    query: Annotated[
+        str, typer.Argument(help="What the texts should be about.")
+    ],
+    top: Annotated[
+        int, typer.Option(min=1, help="How many results to print.")
+    ] = 20,
+) -> None:
+    """Find posts and videos by what they are about, not by their words.
+
+    The query is embedded with the model the image carries, Telegram
+    texts and YouTube texts are ranked together by cosine, and the best
+    matches print with their channel, date and a link — a Russian query
+    finds English posts and the other way round. Says so and exits
+    cleanly when nothing has been embedded yet. Reaches nothing beyond
+    the database; run it through the console.
+    """
+    from itgraph.config import settings
+    from itgraph.db.session import Database
+    from itgraph.embed.model import EmbeddingModel
+    from itgraph.embed.search import search as run_search
+
+    async def run() -> None:
+        model = EmbeddingModel.load(settings.embed_model_dir)
+        database = Database()
+        try:
+            hits = await run_search(database, model, query, top=top)
+        finally:
+            await database.dispose()
+        if not hits:
+            typer.echo(
+                "nothing to search yet: no text has been embedded by the "
+                "configured model"
+            )
+            return
+        for place, hit in enumerate(hits, start=1):
+            typer.echo(
+                f"{place:>3}  {hit.score:.3f}  {hit.platform}  "
+                f"{hit.date}  {hit.channel}"
+            )
+            typer.echo(f"        {hit.body_head}")
+            typer.echo(f"        {hit.link}")
+
+    _run(run())
