@@ -88,6 +88,44 @@ if [ "$1" = "--loop" ]; then
 	esac
 fi
 
+# `embed` is the one command that cannot run in the console's Job: the
+# console holds 1 Gi, and the pass — the model plus a batch of texts —
+# peaks just over 2 GiB. It runs from its CronJob's template instead,
+# which carries the resources and the deadline the role sized for it.
+# The Job runs the command itself, so nothing is exec'd into it: the
+# output arrives as logs, followed to the run's end. The Job is left
+# in place when this machine goes away — an interrupted pass is resumed
+# by the next run, and the Job's own deadline ends a stuck one — and
+# deleted by hand once its logs are no longer wanted.
+if [ "$1" = "embed" ]; then
+	exec ssh -T "$ITGRAPH_SSH" "$(cat <<EOF
+job=\$($KUBECTL create job --from=cronjob/itgraph-embed \\
+	itgraph-embed-manual-\$(date +%s) -o name </dev/null) || exit 1
+echo "started: \$job" >&2
+tries=0
+until $KUBECTL wait --for=condition=Ready pod \\
+	-l "batch.kubernetes.io/job-name=\${job#*/}" --timeout=180s </dev/null >/dev/null 2>&1; do
+	tries=\$((tries + 1))
+	if [ "\$tries" -ge 30 ] \\
+		|| [ "\$($KUBECTL get "\$job" -o jsonpath='{.status.failed}' \\
+		</dev/null)" = "1" ]; then
+		echo "the pass did not start: \$job" >&2
+		$KUBECTL logs "\$job" -c itgraph --tail=20 </dev/null >&2 || :
+		exit 1
+	fi
+	sleep 2
+done
+$KUBECTL logs -f "\$job" -c itgraph </dev/null
+if [ "\$($KUBECTL get "\$job" -o jsonpath='{.status.succeeded}' \\
+	</dev/null)" = "1" ]; then
+	exit 0
+fi
+echo "the pass failed: \$job" >&2
+exit 1
+EOF
+)"
+fi
+
 VARIANT=plain
 case "$1" in
 --session)
