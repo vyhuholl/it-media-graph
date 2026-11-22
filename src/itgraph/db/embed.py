@@ -24,8 +24,12 @@ from itgraph.db.session import Database
 from itgraph.embed.model import MODEL_KEY, EmbeddingModel
 
 # The design's batch: minutes of work on four threads, one commit's
-# worth of loss on an interrupt.
-BATCH = 256
+# worth of loss on an interrupt — and a memory the job's limit carries:
+# measured on the collection host, the loaded model takes 675 MiB and
+# each text in the batch ~22 MiB more, so 256 peaked at 9.1 GiB and was
+# OOM-killed inside the 4 Gi the job allows, while 64 stays under
+# 2.1 GiB.
+BATCH = 64
 
 # `yt_text` for Postgres: the title alone when there is no description,
 # title, blank line, description when there is. The escaped blank line

@@ -266,11 +266,14 @@ __itgraph_heavy_job_resources:
   requests: {cpu: 100m, memory: 256Mi}
   limits: {memory: 2Gi}
 # The embedding pass: CPU-bound on four ONNX threads, with the model
-# and a batch of texts in memory. A CPU limit, unlike every other
-# job's, because this one would otherwise take the node's every core
-# for its hour; 4 matches the wrapper's thread count.
+# and a batch of texts in memory — measured on the collection host,
+# the loaded model takes 675 MiB and every text in the batch ~22 MiB
+# more, so the 64-text batch peaks just over 2 GiB and the limit
+# carries it with headroom. A CPU limit, unlike every other job's,
+# because this one would otherwise take the node's every core for its
+# run; 4 matches the wrapper's thread count.
 __itgraph_embed_resources:
-  requests: {cpu: 1, memory: 1Gi}
+  requests: {cpu: 1, memory: 2Gi}
   limits: {cpu: 4, memory: 4Gi}
 
 # Each scheduled pass. Every job: this time zone, Forbid, no retry, since a failed
@@ -426,10 +429,11 @@ __itgraph_cronjobs_always:
     # Twenty-three hours, as the baselines': a host down overnight
     # starts the missed run when it is back, the same day.
     starting_deadline: 82800
-    # Three hours: the nightly increment is minutes, the first backfill
-    # of the corpus about an hour, and a burst day of walks must fit
-    # inside one run.
-    active_deadline: 10800
+    # Twelve hours: the nightly increment is minutes, but the corpus's
+    # first backfill — and a model change re-embeds everything the same
+    # way — measured nine hours on four threads, and a burst day of
+    # walks must fit inside one run too.
+    active_deadline: 43200
     labels: "{{ __itgraph_may_reach_database }}"
     containers:
       - name: itgraph

@@ -271,8 +271,8 @@ SCHEDULES = {
     "itgraph-yt-watch": ("*/15 * * * *", 600, 600),
     "itgraph-backup": ("40 */4 * * *", 10800, 7200),
     # The day's texts become vectors before anything else wakes; the
-    # baselines' twenty-three hours, and three to finish a backfill.
-    "itgraph-embed": ("0 4 * * *", 82800, 10800),
+    # baselines' twenty-three hours, and twelve to re-embed the corpus.
+    "itgraph-embed": ("0 4 * * *", 82800, 43200),
     "itgraph-baselines": ("30 4 * * *", 82800, 10800),
     "itgraph-yt-refresh": ("0 5 * * *", 82800, 10800),
     # Both lookup queues, an hour after the refresh; a missed run starts
@@ -585,9 +585,10 @@ def test_the_embedding_job_runs_in_every_environment(
         "itgraph/database"
     }
     # Bounded, as the design says: four CPUs to match the wrapper's
-    # ONNX threads, and memory for the model and a batch of texts.
+    # ONNX threads, and memory for the model (675 MiB) plus a batch of
+    # texts (~22 MiB each; a 64-text batch peaks just over 2 GiB).
     assert container["resources"] == {
-        "requests": {"cpu": 1, "memory": "1Gi"},
+        "requests": {"cpu": 1, "memory": "2Gi"},
         "limits": {"cpu": 4, "memory": "4Gi"},
     }
 
