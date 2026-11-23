@@ -262,9 +262,13 @@ __itgraph_metrics_spec:
 __itgraph_job_resources:
   requests: {cpu: 100m, memory: 256Mi}
   limits: {memory: 1Gi}
+# The heavy profile carries the console and the baselines' fit. The
+# console's ceiling is set by `itgraph search`: the model (675 MiB)
+# plus the whole corpus as one float32 matrix (~340 MiB at 285k rows)
+# plus the row buffer peaks ≈1.4 GiB lean, and the corpus only grows.
 __itgraph_heavy_job_resources:
   requests: {cpu: 100m, memory: 256Mi}
-  limits: {memory: 2Gi}
+  limits: {memory: 3Gi}
 # The embedding pass: CPU-bound on four ONNX threads, with the model
 # and a batch of texts in memory — measured on the collection host,
 # the loaded model takes 675 MiB and every text in the batch ~22 MiB

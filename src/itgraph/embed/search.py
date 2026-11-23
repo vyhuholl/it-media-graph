@@ -32,7 +32,7 @@ _POST_VECTORS = text(
            c.username AS username,
            COALESCE(c.title, c.username, c.tg_id::text) AS channel,
            m.payload ->> 'date' AS date,
-           m.payload ->> 'message' AS body
+           left(m.payload ->> 'message', 200) AS body
       FROM tg_post_embeddings e
       JOIN tg_raw_messages m
         ON m.channel_id = e.channel_id AND m.msg_id = e.msg_id
@@ -47,7 +47,7 @@ _VIDEO_VECTORS = text(
            COALESCE(rc.payload #>> '{snippet,title}',
                     v.payload #>> '{snippet,channelId}') AS channel,
            v.payload #>> '{snippet,publishedAt}' AS date,
-           v.payload #>> '{snippet,title}' AS body
+           left(v.payload #>> '{snippet,title}', 200) AS body
       FROM yt_video_embeddings e
       JOIN yt_raw_videos v ON v.video_id = e.video_id
       LEFT JOIN yt_raw_channels rc
@@ -113,10 +113,22 @@ def _decode(blob: bytes) -> NDArray[np.float32]:
 def _scores(
     blobs: Sequence[bytes], query: NDArray[np.float32]
 ) -> NDArray[np.float32]:
-    """Every blob's cosine against the query, in load order."""
+    """Every blob's cosine against the query, in load order.
+
+    One preallocated matrix, not a list of per-row arrays stacked into
+    a second copy: at the corpus's size the list-plus-stack held the
+    vectors twice, and the console's Job died on that duplicate. The
+    width comes off the blobs — one model's vectors share a dimension,
+    and which one it is is the table's business, not the ranking's.
+    """
     if not blobs:
         return np.empty(0, dtype=np.float32)
-    vectors = np.stack([_decode(blob) for blob in blobs])
+    vectors = np.empty((len(blobs), len(blobs[0]) // 2), dtype=np.float32)
+    for place, blob in enumerate(blobs):
+        vectors[place] = np.frombuffer(blob, dtype="<f2")
+    # Re-normalised rather than trusted: the stored vector was unit
+    # before float16 rounded it, and a dot product wants it unit after.
+    vectors /= np.linalg.norm(vectors, axis=1, keepdims=True)
     return vectors @ query
 
 
