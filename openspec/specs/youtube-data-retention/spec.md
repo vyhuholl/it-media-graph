@@ -56,7 +56,7 @@ The system SHALL run the refresh daily on the collection host without an operato
 
 ### Requirement: Nothing Is Removed By Age
 
-The system SHALL NOT remove YouTube data because of its age: channel and video payloads, readings, lookups, featured readings, search runs and results, and the walk's records stay until YouTube stops returning the object or the operator removes them. An answer that decides what to ask YouTube next — a lookup, a featured reading, a search run and its results — SHALL be read only while younger than `youtube_answers_fresh_days` (30 by default); an older one is kept unread and replaced when asked again.
+The system SHALL NOT remove YouTube data because of its age: channel and video payloads, readings, lookups, featured readings, search runs and results, the walk's records, and video embeddings stay until YouTube stops returning the object or the operator removes them. An answer that decides what to ask YouTube next — a lookup, a featured reading, a search run and its results — SHALL be read only while younger than `youtube_answers_fresh_days` (30 by default); an older one is kept unread and replaced when asked again.
 
 #### Scenario: An old payload is kept
 
@@ -68,7 +68,7 @@ The system SHALL NOT remove YouTube data because of its age: channel and video p
 
 - **GIVEN** a video whose payload was fetched 31 days ago, with readings taken 32 and 31 days ago
 - **WHEN** any YouTube command runs
-- **THEN** the video and both readings are still there
+- **THEN** the video, both readings and its embedding are still there
 
 #### Scenario: An old lookup is kept and not read
 
@@ -171,13 +171,13 @@ A review file holds collected channel data. Its header SHALL say to delete it on
 
 ### Requirement: Videos That Disappear
 
-The system SHALL remove at once a tracked video YouTube no longer returns when asked for by id, with its readings. One missing video MUST NOT cost the other videos in the same request their reading.
+The system SHALL remove at once a tracked video YouTube no longer returns when asked for by id, with its readings and its embedding. One missing video MUST NOT cost the other videos in the same request their reading.
 
 #### Scenario: A deleted or private video
 
 - **GIVEN** a tracked video with readings
 - **WHEN** a request for it is answered without it
-- **THEN** its payload and every reading of it are removed
+- **THEN** its payload, every reading of it and its embedding are removed
 
 #### Scenario: One missing video in a batch
 
