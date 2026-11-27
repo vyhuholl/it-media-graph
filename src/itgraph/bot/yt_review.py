@@ -222,9 +222,7 @@ def first_step(offer_id: int) -> Keyboard:
     )
 
 
-def _second_step(
-    offer_id: int, kind: PressKind, buttons: Sequence[Button]
-) -> Keyboard:
+def _second_step(offer_id: int, buttons: Sequence[Button]) -> Keyboard:
     """Two to a row, and back on a row of its own."""
     rows = [tuple(buttons[i : i + 2]) for i in range(0, len(buttons), 2)]
     rows.append(((BACK, _data(offer_id, PressKind.BACK)),))
@@ -235,7 +233,6 @@ def kinds(offer_id: int) -> Keyboard:
     """The kinds a seed is marked with."""
     return _second_step(
         offer_id,
-        PressKind.KIND,
         [
             (label, _data(offer_id, PressKind.KIND, kind.value))
             for kind, label in KIND_LABELS.items()
@@ -247,7 +244,6 @@ def reasons(offer_id: int) -> Keyboard:
     """The reasons a rejection is marked with."""
     return _second_step(
         offer_id,
-        PressKind.REASON,
         [
             (label, _data(offer_id, PressKind.REASON, reason.value))
             for reason, label in REASON_LABELS.items()

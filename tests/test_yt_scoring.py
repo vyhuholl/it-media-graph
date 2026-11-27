@@ -619,7 +619,6 @@ async def test_a_raised_alert_renders_as_change_6_s_message(
         platform=Platform.YOUTUBE,
         chat_id=-100,
         topic_id=1,
-        setting="YOUTUBE_ALERT_CHAT_ID",
         daily_cap=10,
         quiet_from=2,
         quiet_to=7,

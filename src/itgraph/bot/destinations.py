@@ -36,16 +36,13 @@ class Destination:
     """One place alerts are sent to, and the rules it is sent under.
 
     ``key`` names it in logs and in the bot's own memory of when each
-    digest went out; it is a constant, never an id. ``setting`` is the
-    environment name of the chat's setting, so that a chat the bot cannot
-    reach is refused by the name an operator can act on.
+    digest went out; it is a constant, never an id.
     """
 
     key: str
     platform: Platform
     chat_id: int
     topic_id: int | None
-    setting: str
     daily_cap: int
     quiet_from: int
     quiet_to: int
@@ -76,7 +73,6 @@ def telegram_destination(settings: Settings) -> Destination | None:
         platform=Platform.TELEGRAM,
         chat_id=settings.alert_chat_id,
         topic_id=settings.telegram_alert_topic,
-        setting="ALERT_CHAT_ID",
         daily_cap=settings.alert_daily_cap,
         quiet_from=settings.alert_quiet_from_hour,
         quiet_to=settings.alert_quiet_to_hour,
@@ -107,7 +103,6 @@ def youtube_destinations(
             platform=Platform.YOUTUBE,
             chat_id=chat,
             topic_id=topic,
-            setting="ALERT_CHAT_ID",
             daily_cap=settings.youtube_alert_daily_cap,
             quiet_from=settings.youtube_alert_quiet_from_hour,
             quiet_to=settings.youtube_alert_quiet_to_hour,

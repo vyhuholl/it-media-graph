@@ -19,7 +19,6 @@ from itgraph.bot.destinations import Destination
 from itgraph.bot.render import (
     MESSAGE_LIMIT,
     Carrier,
-    RenderedAlert,
     digest_parts,
     render_cascade,
     render_spike,
@@ -84,9 +83,8 @@ def configured(monkeypatch: pytest.MonkeyPatch) -> None:
 # --- rendering ------------------------------------------------------
 
 
-def rendered(**overrides: object) -> RenderedAlert:
+def rendered(**overrides: object) -> str:
     kwargs: dict[str, object] = {
-        "alert_id": 1,
         "channel_title": "Example Channel",
         "channel_username": "example",
         "msg_id": 500,
@@ -104,12 +102,12 @@ def rendered(**overrides: object) -> RenderedAlert:
 
 
 def test_the_message_links_to_the_post() -> None:
-    assert "https://t.me/example/500" in rendered().text
+    assert "https://t.me/example/500" in rendered()
 
 
 def test_a_channel_without_a_username_gets_no_link() -> None:
     """No link beats a broken one for a channel nobody can reach."""
-    assert "t.me" not in rendered(channel_username=None).text
+    assert "t.me" not in rendered(channel_username=None)
 
 
 def test_the_message_states_the_posts_age() -> None:
@@ -118,11 +116,11 @@ def test_the_message_states_the_posts_age() -> None:
     A cascade takes hours to form; someone expecting minutes concludes
     the system is broken.
     """
-    assert "3 ч 00 мин назад" in rendered().text
+    assert "3 ч 00 мин назад" in rendered()
 
 
 def test_the_message_names_the_carriers_once() -> None:
-    text = rendered().text
+    text = rendered()
     assert "@one" in text
     assert "@two" in text
     # One message about the post, not one per carrier.
@@ -131,17 +129,17 @@ def test_the_message_names_the_carriers_once() -> None:
 
 def test_a_long_post_is_excerpted() -> None:
     long = "слово " * 200
-    assert len(rendered(text=long).text) < 600
+    assert len(rendered(text=long)) < 600
 
 
 def test_a_post_with_no_text_still_renders() -> None:
-    assert "3" in rendered(text=None).text
+    assert "3" in rendered(text=None)
 
 
 def test_what_a_post_says_is_escaped() -> None:
     """The messages are HTML. A `<` in a post's text, or `&` in a title,
     was a message Telegram refused on every retry."""
-    text = rendered(channel_title="Dev & Ops", text="if a < b && c > d").text
+    text = rendered(channel_title="Dev & Ops", text="if a < b && c > d")
 
     assert "Dev &amp; Ops" in text
     assert "a &lt; b &amp;&amp; c &gt; d" in text
@@ -154,16 +152,15 @@ def test_a_cascade_with_every_channel_carrying_it_still_fits() -> None:
         Carrier(title=None, username=f"channel_number_{n:04d}")
         for n in range(400)
     ]
-    text = rendered(carriers=many).text
+    text = rendered(carriers=many)
 
     assert units(text) <= MESSAGE_LIMIT
     assert text.endswith("…")
     assert "<b>3</b>" in text
 
 
-def spike(**overrides: object) -> RenderedAlert:
+def spike(**overrides: object) -> str:
     kwargs: dict[str, object] = {
-        "alert_id": 1,
         "kind": AlertKind.VIEWS_SPIKE,
         "channel_title": "Example Channel",
         "channel_username": "example",
@@ -184,9 +181,9 @@ def test_a_spike_says_which_metric_it_is_about() -> None:
     argument — one wording covering all four would waste the distinction
     the kinds exist to carry.
     """
-    assert "Просмотры" in spike().text
-    assert "Реакции" in spike(kind=AlertKind.REACTION_SPIKE).text
-    assert "Пересылки" in spike(kind=AlertKind.FORWARD_SPIKE).text
+    assert "Просмотры" in spike()
+    assert "Реакции" in spike(kind=AlertKind.REACTION_SPIKE)
+    assert "Пересылки" in spike(kind=AlertKind.FORWARD_SPIKE)
 
 
 def test_a_spike_is_not_worded_as_a_cascade() -> None:
@@ -196,7 +193,7 @@ def test_a_spike_is_not_worded_as_a_cascade() -> None:
     have been delivered as "3 независимых источника репостят" — a
     sentence that is not merely awkward but false.
     """
-    assert "репостят" not in spike().text
+    assert "репостят" not in spike()
 
 
 def test_a_spike_states_the_posts_age() -> None:
@@ -205,37 +202,37 @@ def test_a_spike_states_the_posts_age() -> None:
     A spike can fire fifteen minutes after publication, and a reader who
     has learned from cascades to expect hours misreads how early it is.
     """
-    assert "40 мин назад" in spike().text
+    assert "40 мин назад" in spike()
 
 
 def test_a_bigger_spike_reads_as_bigger() -> None:
     """Words, plus the z for whoever is calibrating rather than reading."""
-    assert spike(z=3.2).text != spike(z=8.0).text
-    assert "z 8.0" in spike(z=8.0).text
+    assert spike(z=3.2) != spike(z=8.0)
+    assert "z 8.0" in spike(z=8.0)
 
 
 def test_a_spike_links_to_the_post() -> None:
-    assert "https://t.me/example/500" in spike().text
-    assert "t.me" not in spike(channel_username=None).text
+    assert "https://t.me/example/500" in spike()
+    assert "t.me" not in spike(channel_username=None)
 
 
 def test_a_head_says_the_whole_channel_moved() -> None:
     """Not "this post interests people" but "this channel's audience
     grew" — the finding a series of seven messages used to bury."""
-    text = spike(folded=6).text
+    text = spike(folded=6)
 
     assert "ещё 6 пост" in text
     assert "всего канала" in text
 
 
 def test_a_spike_with_nothing_folded_says_nothing_about_the_channel() -> None:
-    assert "📶" not in spike().text
+    assert "📶" not in spike()
 
 
 def test_a_comment_alert_states_the_count_and_the_usual() -> None:
     text = spike(
         kind=AlertKind.COMMENT_SPIKE, z=14.2, observed=117.0, expected=0.5
-    ).text
+    )
     assert text.splitlines()[0] == (
         "💬 Комментарии — 117, обычно меньше одного (z 14.2)"
     )
@@ -244,18 +241,18 @@ def test_a_comment_alert_states_the_count_and_the_usual() -> None:
 def test_a_comment_alert_rounds_the_usual() -> None:
     text = spike(
         kind=AlertKind.COMMENT_SPIKE, z=8.2, observed=1647.0, expected=9.3
-    ).text
+    )
     assert "1647, обычно около 9 (z 8.2)" in text
 
 
 def test_a_comment_alert_without_its_count_reads_like_the_others() -> None:
     """Raised before the count was kept: words, as every kind had."""
-    text = spike(kind=AlertKind.COMMENT_SPIKE, z=5.0).text
+    text = spike(kind=AlertKind.COMMENT_SPIKE, z=5.0)
     assert "Комментарии — намного выше обычного (z 5.0)" in text
 
 
 def test_the_other_kinds_never_state_a_count() -> None:
-    text = spike(observed=900.0, expected=300.0).text
+    text = spike(observed=900.0, expected=300.0)
     assert "900" not in text
     assert "выше обычного" in text
 
@@ -268,7 +265,7 @@ def test_the_longest_spike_fits_in_a_message() -> None:
         kind=AlertKind.COMMENT_SPIKE,
         observed=10**9,
         expected=10.0**8,
-    ).text
+    )
     assert units(longest) <= MESSAGE_LIMIT
 
 
@@ -277,7 +274,7 @@ def test_the_longest_spike_fits_in_a_message() -> None:
 
 def test_the_digest_says_how_many_it_covers() -> None:
     """What separates a digest from a silent drop."""
-    (part,) = digest_parts([rendered().text], held=7)
+    (part,) = digest_parts([rendered()], held=7)
     assert "7" in part.text
     assert part.entries == (0,)
 
@@ -290,7 +287,7 @@ def test_an_empty_digest_is_still_labelled() -> None:
 def test_a_long_digest_arrives_in_parts() -> None:
     """Thirty entries of a busy night: every one in some part, each part
     a message Telegram takes, the first saying how many the whole is."""
-    entries = [spike(alert_id=n, text="слово " * 40).text for n in range(30)]
+    entries = [spike(text="слово " * 40) for _ in range(30)]
 
     parts = digest_parts(entries, held=30)
 
@@ -303,7 +300,7 @@ def test_a_long_digest_arrives_in_parts() -> None:
 
 
 def test_a_short_digest_is_one_message_without_numbering() -> None:
-    (part,) = digest_parts([spike().text, spike().text], held=2)
+    (part,) = digest_parts([spike(), spike()], held=2)
     assert "(1/" not in part.text
 
 

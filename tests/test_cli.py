@@ -2031,9 +2031,7 @@ def test_bot_refuses_a_chat_it_cannot_reach_before_delivering(
     monkeypatch.setattr(live_settings, "youtube_alert_topic_ru", 7102)
 
     async def unreachable(bot: Any, destinations: Any) -> None:
-        raise handlers.ChatUnreachableError(
-            "ALERT_CHAT_ID", "the chat is not a forum"
-        )
+        raise handlers.ChatUnreachableError("the chat is not a forum")
 
     async def never(*args: Any, **kwargs: Any) -> None:
         raise AssertionError("nothing may be delivered")

@@ -168,43 +168,34 @@ def markup(keyboard: Keyboard) -> InlineKeyboardMarkup:
 
 
 class ChatUnreachableError(RuntimeError):
-    """A configured chat the bot cannot deliver to, named by its setting."""
+    """The alert chat, which the bot cannot deliver to; named by its setting."""
 
-    def __init__(self, setting: str, why: str) -> None:
-        super().__init__(f"{setting}: {why}")
-        self.setting = setting
+    def __init__(self, why: str) -> None:
+        super().__init__(f"ALERT_CHAT_ID: {why}")
 
 
 async def check_chats(bot: Bot, destinations: Sequence[Destination]) -> None:
-    """Ask Telegram about every configured chat before delivering anything.
+    """Ask Telegram about the alert chat before delivering anything.
 
-    A chat the bot is not in, or a chat named with topics that is not a
+    A chat the bot is not in, or one named with topics that is not a
     forum, would otherwise surface at the first alert, which may be days
-    away. Refused by the setting's name,
-    which is what an operator changes. Whether a topic exists the Bot API
-    cannot say without sending to it.
+    away. Refused by the setting's name, which is what an operator
+    changes. Whether a topic exists the Bot API cannot say without
+    sending to it.
     """
-    chats: dict[int, tuple[str, bool]] = {}
-    for destination in destinations:
-        setting, wants_topics = chats.get(
-            destination.chat_id, (destination.setting, False)
+    # Every destination is a topic of the one chat.
+    chat_id = destinations[0].chat_id
+    wants_topics = any(d.topic_id is not None for d in destinations)
+    try:
+        chat = await bot.get_chat(chat_id)
+    except TelegramAPIError as exc:
+        raise ChatUnreachableError(
+            f"Telegram does not give the bot this chat ({exc})"
+        ) from exc
+    if wants_topics and not chat.is_forum:
+        raise ChatUnreachableError(
+            "topics are configured, and the chat is not a forum"
         )
-        chats[destination.chat_id] = (
-            setting,
-            wants_topics or destination.topic_id is not None,
-        )
-
-    for chat_id, (setting, wants_topics) in chats.items():
-        try:
-            chat = await bot.get_chat(chat_id)
-        except TelegramAPIError as exc:
-            raise ChatUnreachableError(
-                setting, f"Telegram does not give the bot this chat ({exc})"
-            ) from exc
-        if wants_topics and not chat.is_forum:
-            raise ChatUnreachableError(
-                setting, "topics are configured, and the chat is not a forum"
-            )
 
 
 def build_dispatcher(
@@ -220,12 +211,6 @@ def build_dispatcher(
         for d in destinations
         if d.platform is Platform.YOUTUBE and d.route is not None
     }
-    # The YouTube chat the `yv:` buttons are taken in; both topics are
-    # the one chat.
-    youtube_chat = next(
-        (d.chat_id for d in destinations if d.platform is Platform.YOUTUBE),
-        None,
-    )
 
     # Applied as a filter rather than checked inside each handler: a
     # handler added later inherits it instead of having to remember. Any
@@ -277,7 +262,7 @@ def build_dispatcher(
 
     @dispatcher.callback_query(F.data.regexp(REVIEW_BUTTON))
     async def review(query: CallbackQuery) -> None:
-        """A press on a rising offer's card, in Telegram's chat alone.
+        """A press on a Telegram rising offer's card.
 
         Seed and reject show their second step and back the first, writing
         nothing; a deciding press records the decision once, and the card
@@ -286,13 +271,7 @@ def build_dispatcher(
         message = query.message
         press = parse(query.data)
         bot = query.bot
-        if (
-            press is None
-            or bot is None
-            or telegram is None
-            or not isinstance(message, Message)
-            or message.chat.id != telegram.chat_id
-        ):
+        if press is None or bot is None or not isinstance(message, Message):
             await query.answer()
             return
 
@@ -344,8 +323,7 @@ def build_dispatcher(
 
     @dispatcher.callback_query(F.data.regexp(YT_REVIEW_BUTTON))
     async def yt_review(query: CallbackQuery) -> None:
-        """A press on a YouTube rising offer's card, in the YouTube chat
-        alone.
+        """A press on a YouTube rising offer's card.
 
         Seed opens the kinds and — only while the offer's language is
         unknown or neither of the two a topic takes — the languages,
@@ -358,13 +336,7 @@ def build_dispatcher(
         message = query.message
         press = yt_parse(query.data)
         bot = query.bot
-        if (
-            press is None
-            or bot is None
-            or youtube_chat is None
-            or not isinstance(message, Message)
-            or message.chat.id != youtube_chat
-        ):
+        if press is None or bot is None or not isinstance(message, Message):
             await query.answer()
             return
 

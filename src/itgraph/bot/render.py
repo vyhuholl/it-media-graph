@@ -37,7 +37,6 @@ __all__ = [
     "MESSAGE_LIMIT",
     "Carrier",
     "DigestPart",
-    "RenderedAlert",
     "SummaryLine",
     "TgWeeklyEntryView",
     "WeeklyEntryView",
@@ -141,14 +140,6 @@ class Carrier:
         return _escape(self.title or "неизвестный канал")
 
 
-@dataclass(frozen=True, slots=True)
-class RenderedAlert:
-    """A message and the id it answers for."""
-
-    alert_id: int
-    text: str
-
-
 def post_link(username: str | None, msg_id: int) -> str | None:
     """A link to the post, or ``None`` for a channel without a handle.
 
@@ -205,7 +196,6 @@ def _who(title: str | None, username: str | None) -> str:
 
 def render_cascade(
     *,
-    alert_id: int,
     channel_title: str | None,
     channel_username: str | None,
     msg_id: int,
@@ -214,7 +204,7 @@ def render_cascade(
     families: int,
     carriers: Sequence[Carrier],
     text: str | None,
-) -> RenderedAlert:
+) -> str:
     """One post that is travelling, as one message.
 
     **One message per post, never one per carrier.** Three channels
@@ -246,7 +236,7 @@ def render_cascade(
         lines.append("")
         lines.append("Кто перенёс: " + ", ".join(c.label() for c in carriers))
 
-    return RenderedAlert(alert_id=alert_id, text=_fit("\n".join(lines)))
+    return _fit("\n".join(lines))
 
 
 def _magnitude(z: float) -> str:
@@ -275,7 +265,6 @@ def _usual(expected: float) -> str:
 
 def render_spike(
     *,
-    alert_id: int,
     kind: AlertKind,
     channel_title: str | None,
     channel_username: str | None,
@@ -287,7 +276,7 @@ def render_spike(
     folded: int = 0,
     observed: float | None = None,
     expected: float | None = None,
-) -> RenderedAlert:
+) -> str:
     """One post doing unusually well on one metric, as one message.
 
     No carrier list: a spike is a fact about the post's own audience, and
@@ -312,7 +301,7 @@ def render_spike(
     reads, unlike the multiple of a spread. Without them — an alert raised
     before they were kept — it reads like the other kinds.
     """
-    label = SPIKE_LABEL.get(kind, "📈 Активность")
+    label = SPIKE_LABEL[kind]
     if (
         kind is AlertKind.COMMENT_SPIKE
         and observed is not None
@@ -343,7 +332,7 @@ def render_spike(
             "накрутка), а не интерес к этому посту."
         )
 
-    return RenderedAlert(alert_id=alert_id, text=_fit("\n".join(lines)))
+    return _fit("\n".join(lines))
 
 
 def _clock(moment: datetime, *, now: datetime, zone: str) -> str:
@@ -362,7 +351,6 @@ def _count(value: int) -> str:
 
 def render_youtube(
     *,
-    alert_id: int,
     kind: YtAlertKind,
     route: YtAlertRoute,
     video_id: str,
@@ -378,7 +366,7 @@ def render_youtube(
     observed: int | None = None,
     expected: float | None = None,
     folded: int = 0,
-) -> RenderedAlert:
+) -> str:
     """One video doing unusually well, as one message or digest entry.
 
     What the site promises an alert holds:
@@ -439,7 +427,7 @@ def render_youtube(
             "похоже, вырос охват всего канала, а не интерес к этому видео."
         )
 
-    return RenderedAlert(alert_id=alert_id, text=_fit("\n".join(lines)))
+    return _fit("\n".join(lines))
 
 
 @dataclass(frozen=True, slots=True)
@@ -575,14 +563,11 @@ def render_tg_summary_entry(
         and expected is not None
     ):
         headline = (
-            f"{SPIKE_LABEL.get(kind, '📈 Активность')} — "
+            f"{SPIKE_LABEL[kind]} — "
             f"{round(observed)}, {_usual(expected)} (z {z:.1f})"
         )
     else:
-        headline = (
-            f"{SPIKE_LABEL.get(kind, '📈 Активность')} — "
-            f"{_magnitude(z)} (z {z:.1f})"
-        )
+        headline = f"{SPIKE_LABEL[kind]} — {_magnitude(z)} (z {z:.1f})"
     who = f"{_who(channel_title, channel_username)} · "
     lines = [headline, f"{who}{_clock_time(published_at, zone=zone)}"]
     link = post_link(channel_username, msg_id)
@@ -610,7 +595,7 @@ def render_yt_summary_entry(
     summary's reader has learned the scale by now — and the second line
     names the video and its channel with the video's clock time.
     """
-    label = YT_LABEL.get(kind, "📈 Активность")
+    label = YT_LABEL[kind]
     if (
         kind is YtAlertKind.COMMENT_SPIKE
         and observed is not None
@@ -949,7 +934,7 @@ def render_tg_weekly_entry(
     if first:
         lines.append(first)
 
-    label = SPIKE_LABEL.get(view.kind, "📈 Активность")
+    label = SPIKE_LABEL[view.kind]
     if view.kind is AlertKind.COMMENT_SPIKE:
         what = f"{label} — {round(view.observed)}, {_usual(view.expected)}"
     elif view.expected > 0:

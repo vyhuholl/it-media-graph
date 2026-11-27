@@ -450,7 +450,6 @@ async def test_routes_are_claimed_apart(database: Database) -> None:
 
 def youtube(**overrides: object) -> str:
     kwargs: dict[str, object] = {
-        "alert_id": 1,
         "kind": YtAlertKind.VIEWS_SPIKE,
         "route": YtAlertRoute.EN,
         "video_id": "fakeVid0001",
@@ -465,7 +464,7 @@ def youtube(**overrides: object) -> str:
         "zone": "Europe/Moscow",
     }
     kwargs.update(overrides)
-    return render_youtube(**kwargs).text  # type: ignore[arg-type]
+    return render_youtube(**kwargs)  # type: ignore[arg-type]
 
 
 def test_a_youtube_alert_names_its_source_and_links_to_the_video() -> None:

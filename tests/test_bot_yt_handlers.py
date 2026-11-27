@@ -2,8 +2,7 @@
 
 Mirrors the Telegram press tests: the same OfflineSession, the same
 guarantees — a deciding press writes once and redraws the card decided,
-a decided card changes nothing, a press is taken in the YouTube chat
-alone, and nobody who pressed is recorded. Ids, handles and titles are
+a decided card changes nothing, and nobody who pressed is recorded. Ids, handles and titles are
 fake and spelled so.
 """
 
@@ -23,8 +22,7 @@ from aiogram.types import (
 )
 from sqlalchemy import text
 from test_bot_handlers import (
-    OPERATOR,
-    YOUTUBE_CHAT,
+    CHAT,
     OfflineSession,
     calls,
     feed,
@@ -149,10 +147,8 @@ def card_press(chat_id: int, data: str) -> Update:
     )
 
 
-async def press(
-    database_url: str, data: str, chat_id: int = YOUTUBE_CHAT
-) -> OfflineSession:
-    _, session = await feed(database_url, card_press(chat_id, data))
+async def press(database_url: str, data: str) -> OfflineSession:
+    _, session = await feed(database_url, card_press(CHAT, data))
     return session
 
 
@@ -323,17 +319,6 @@ async def test_an_unknown_offer_is_answered_and_writes_nothing(
     session = await press(database_url, "yv:99999:maybe")
 
     assert answered(session) == ["нет такого предложения"]
-    assert await decision_of(database_url) == (None, None, None, None, False)
-    assert calls(session, "EditMessageText") == []
-
-
-async def test_a_press_in_the_telegram_chat_decides_nothing(
-    database_url: str,
-) -> None:
-    offer = await an_offer(database_url)
-
-    session = await press(database_url, f"yv:{offer}:maybe", OPERATOR)
-
     assert await decision_of(database_url) == (None, None, None, None, False)
     assert calls(session, "EditMessageText") == []
 

@@ -215,7 +215,6 @@ class TelegramQueue(Queue[tg.PendingAlert]):
 
         if spike:
             return render_spike(
-                alert_id=alert.id,
                 kind=alert.kind,
                 channel_title=evidence.channel_title,
                 channel_username=evidence.channel_username,
@@ -227,10 +226,9 @@ class TelegramQueue(Queue[tg.PendingAlert]):
                 folded=folded,
                 observed=alert.observed,
                 expected=alert.expected,
-            ).text
+            )
 
         return render_cascade(
-            alert_id=alert.id,
             channel_title=evidence.channel_title,
             channel_username=evidence.channel_username,
             msg_id=alert.msg_id,
@@ -242,7 +240,7 @@ class TelegramQueue(Queue[tg.PendingAlert]):
                 for title, username in evidence.carriers
             ],
             text=evidence.text,
-        ).text
+        )
 
     async def summary_entries(
         self,
@@ -384,7 +382,6 @@ class YoutubeQueue(Queue[yt.YtPendingAlert]):
         if evidence is None:
             return None
         return render_youtube(
-            alert_id=alert.id,
             kind=alert.kind,
             route=_route(destination),
             video_id=alert.video_id,
@@ -404,7 +401,7 @@ class YoutubeQueue(Queue[yt.YtPendingAlert]):
             ),
             expected=alert.expected,
             folded=folded,
-        ).text
+        )
 
     async def summary_entries(
         self,

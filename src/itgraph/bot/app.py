@@ -203,7 +203,6 @@ class BotStats:
     lists: int = 0
     offers: int = 0
     summaries: int = 0
-    cycles: int = 0
     # When each destination's digest last went out, by its key. In memory:
     # a bot that restarts sends its next digest at the next hour, not at
     # once, so restarting is not a way to make it repeat itself.
@@ -1237,7 +1236,6 @@ async def run_bot(
     sender: Sender,
     *,
     stop: asyncio.Event | None = None,
-    max_cycles: int | None = None,
 ) -> BotStats:
     """Deliver alerts until stopped.
 
@@ -1248,9 +1246,6 @@ async def run_bot(
     stop = stop or asyncio.Event()
 
     while not stop.is_set():
-        if max_cycles is not None and stats.cycles >= max_cycles:
-            break
-        stats.cycles += 1
         await deliver_once(database, sender, stats)
         with suppress(TimeoutError):
             await asyncio.wait_for(

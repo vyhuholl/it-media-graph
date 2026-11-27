@@ -129,7 +129,7 @@ async def youtube_status(
             YtWatchPass.outcome == YtPassOutcome.COMPLETE
         )
     )
-    zone = next(iter(destinations.values())).zone if destinations else "UTC"
+    zone = next(iter(destinations.values())).zone
 
     lines = []
     lines.append(

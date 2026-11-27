@@ -47,8 +47,8 @@ from itgraph.bot.handlers import (
 from itgraph.db.models import YtAlertRoute
 from itgraph.db.session import Database
 
-OPERATOR = 4242
-YOUTUBE_CHAT = -100777
+# One alert chat: every destination is a topic of it.
+CHAT = 4242
 STRANGER = 9999
 TOPIC_EN = 11
 TOPIC_RU = 12
@@ -70,9 +70,6 @@ def destination(
         platform=platform,
         chat_id=chat_id,
         topic_id=topic_id,
-        setting="ALERT_CHAT_ID"
-        if platform is Platform.TELEGRAM
-        else "YOUTUBE_ALERT_CHAT_ID",
         daily_cap=20,
         quiet_from=0,
         quiet_to=0,
@@ -82,12 +79,12 @@ def destination(
     )
 
 
-TELEGRAM = destination("telegram", Platform.TELEGRAM, OPERATOR)
+TELEGRAM = destination("telegram", Platform.TELEGRAM, CHAT)
 YOUTUBE_EN = destination(
-    "youtube_en", Platform.YOUTUBE, YOUTUBE_CHAT, TOPIC_EN, YtAlertRoute.EN
+    "youtube_en", Platform.YOUTUBE, CHAT, TOPIC_EN, YtAlertRoute.EN
 )
 YOUTUBE_RU = destination(
-    "youtube_ru", Platform.YOUTUBE, YOUTUBE_CHAT, TOPIC_RU, YtAlertRoute.RU
+    "youtube_ru", Platform.YOUTUBE, CHAT, TOPIC_RU, YtAlertRoute.RU
 )
 ALL = [TELEGRAM, YOUTUBE_EN, YOUTUBE_RU]
 
@@ -218,7 +215,7 @@ class OfflineSession(BaseSession):
         return Message(
             message_id=2,
             date=datetime(2026, 8, 4, 12, 0, tzinfo=UTC),
-            chat=Chat(id=OPERATOR, type="private"),
+            chat=Chat(id=CHAT, type="private"),
         )
 
     async def stream_content(
@@ -268,7 +265,7 @@ async def feed(
 
 async def status(
     database_url: str,
-    chat_id: int = OPERATOR,
+    chat_id: int = CHAT,
     *,
     text: str = "/status",
     kind: str = "private",
@@ -332,14 +329,14 @@ async def test_a_command_for_another_bot_is_not_answered(
     assert replies == []
 
 
-# --- the YouTube chat -----------------------------------------------
+# --- the chat's topics ---
 
 
 async def test_the_youtube_chat_is_told_about_youtube(
     database_url: str,
 ) -> None:
     _, replies = await status(
-        database_url, YOUTUBE_CHAT, kind="supergroup", topic=TOPIC_RU
+        database_url, CHAT, kind="supergroup", topic=TOPIC_RU
     )
 
     (reply,) = replies
@@ -354,9 +351,7 @@ async def test_the_answer_lands_in_the_topic_it_was_asked_in(
 ) -> None:
     _, session = await feed(
         database_url,
-        command_from(
-            YOUTUBE_CHAT, text="/status", kind="supergroup", topic=TOPIC_RU
-        ),
+        command_from(CHAT, text="/status", kind="supergroup", topic=TOPIC_RU),
     )
 
     (sent,) = [m for m in session.calls if type(m).__name__ == "SendMessage"]
@@ -365,9 +360,7 @@ async def test_the_answer_lands_in_the_topic_it_was_asked_in(
 
 async def test_general_is_answered_too(database_url: str) -> None:
     """Any topic of a configured chat, and General has no topic id."""
-    outcome, replies = await status(
-        database_url, YOUTUBE_CHAT, kind="supergroup"
-    )
+    outcome, replies = await status(database_url, CHAT, kind="supergroup")
 
     assert outcome is not UNHANDLED
     assert len(replies) == 1
@@ -392,7 +385,7 @@ async def test_alerts_are_sent_without_buttons_to_their_topic() -> None:
     await BotSender(bot).send("an alert", destination=YOUTUBE_EN)
 
     (sent,) = session.calls
-    assert getattr(sent, "chat_id", None) == YOUTUBE_CHAT
+    assert getattr(sent, "chat_id", None) == CHAT
     assert getattr(sent, "message_thread_id", None) == TOPIC_EN
     assert getattr(sent, "reply_markup", None) is None
     # An alert keeps its link's preview: YouTube's own card.
@@ -415,28 +408,28 @@ async def test_a_list_is_sent_without_a_link_preview() -> None:
 # --- the chats at start ---------------------------------------------
 
 
-async def test_reachable_chats_pass() -> None:
-    bot = offline_bot({OPERATOR: False, YOUTUBE_CHAT: True})
+async def test_a_reachable_forum_passes() -> None:
+    bot = offline_bot({CHAT: True})
 
     await check_chats(bot, ALL)
 
 
 async def test_a_chat_with_topics_that_is_no_forum_is_refused() -> None:
-    bot = offline_bot({OPERATOR: False, YOUTUBE_CHAT: False})
+    bot = offline_bot({CHAT: False})
 
     with pytest.raises(ChatUnreachableError) as refused:
         await check_chats(bot, ALL)
 
-    assert refused.value.setting == "YOUTUBE_ALERT_CHAT_ID"
+    assert str(refused.value).startswith("ALERT_CHAT_ID: ")
 
 
 async def test_a_chat_the_bot_is_not_in_is_refused() -> None:
-    bot = offline_bot({YOUTUBE_CHAT: True})
+    bot = offline_bot()
 
     with pytest.raises(ChatUnreachableError) as refused:
         await check_chats(bot, ALL)
 
-    assert refused.value.setting == "ALERT_CHAT_ID"
+    assert str(refused.value).startswith("ALERT_CHAT_ID: ")
 
 
 # --- what /status can tell apart ------------------------------------
@@ -490,9 +483,7 @@ async def status_under(
         dispatcher = build_dispatcher(database, destinations)
         bot = offline_bot()
         session: OfflineSession = bot.session  # type: ignore[assignment]
-        await dispatcher.feed_update(
-            bot, command_from(OPERATOR, text="/status")
-        )
+        await dispatcher.feed_update(bot, command_from(CHAT, text="/status"))
         return session.sent
     finally:
         await database.dispose()
@@ -715,10 +706,8 @@ def labels(markup: Any) -> list[str]:
     return [button.text for row in markup.inline_keyboard for button in row]
 
 
-async def press(
-    database_url: str, data: str, chat_id: int = OPERATOR
-) -> OfflineSession:
-    _, session = await feed(database_url, card_press(chat_id, data))
+async def press(database_url: str, data: str) -> OfflineSession:
+    _, session = await feed(database_url, card_press(CHAT, data))
     return session
 
 
@@ -825,17 +814,6 @@ async def test_an_offer_the_bot_did_not_send_decides_nothing(
     session = await press(database_url, f"rv:{target}:maybe")
 
     assert answered(session) == ["нет такого предложения"]
-    assert await decision_of(database_url) == (None, None, None, False)
-    assert calls(session, "EditMessageText") == []
-
-
-async def test_a_press_in_the_youtube_chat_decides_nothing(
-    database_url: str,
-) -> None:
-    offer = await an_offer(database_url)
-
-    session = await press(database_url, f"rv:{offer}:maybe", YOUTUBE_CHAT)
-
     assert await decision_of(database_url) == (None, None, None, False)
     assert calls(session, "EditMessageText") == []
 
