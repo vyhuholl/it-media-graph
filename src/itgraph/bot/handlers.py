@@ -103,10 +103,6 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-# What the feedback buttons sent, under messages from before they were
-# removed. Matched only to retire them.
-OLD_BUTTON = r"^(useful|boring):\d+$"
-
 # What a rising offer's buttons send; `bot/review.py` and
 # `bot/yt_review.py` read the rest.
 REVIEW_BUTTON = r"^rv:"
@@ -418,24 +414,6 @@ def build_dispatcher(
                 chat_id=message.chat.id,
                 message_id=message.message_id,
                 reply_markup=markup(_yt_step(press, state.known_language)),
-            )
-
-    @dispatcher.callback_query(F.data.regexp(OLD_BUTTON))
-    async def retired_button(query: CallbackQuery) -> None:
-        """A press on a button from before feedback was removed.
-
-        Recorded nowhere. Answered, so the client stops showing the press
-        as loading, and the message's buttons taken off, which the Bot
-        API allows at any age for the bot's own messages.
-        """
-        await query.answer("отзывы больше не собираются")
-        if query.message is None or query.bot is None:
-            return
-        with suppress(TelegramBadRequest):
-            await query.bot.edit_message_reply_markup(
-                chat_id=query.message.chat.id,
-                message_id=query.message.message_id,
-                reply_markup=None,
             )
 
     return dispatcher

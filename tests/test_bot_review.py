@@ -202,7 +202,7 @@ def test_what_each_press_decides() -> None:
     [
         None,
         "",
-        "useful:12",
+        "yv:12:seed",
         "rv:12",
         "rv:x:maybe",
         "rv:12:promote",

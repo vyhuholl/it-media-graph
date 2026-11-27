@@ -153,7 +153,7 @@ def press_from(chat_id: int, *, data: str) -> Update:
                 message_id=33,
                 date=datetime(2026, 8, 4, 12, 0, tzinfo=UTC),
                 chat=Chat(id=chat_id, type="supergroup"),
-                text="an old alert",
+                text="an offer's card",
             ),
         ),
     )
@@ -332,19 +332,6 @@ async def test_a_command_for_another_bot_is_not_answered(
     assert replies == []
 
 
-async def test_the_interactions_are_registered(database_url: str) -> None:
-    """`/status`, a press on a rising offer of either platform, a press
-    on a retired button."""
-    database = Database(database_url)
-    try:
-        dispatcher = build_dispatcher(database, ALL)
-    finally:
-        await database.dispose()
-
-    assert len(dispatcher.message.handlers) == 1
-    assert len(dispatcher.callback_query.handlers) == 3
-
-
 # --- the YouTube chat -----------------------------------------------
 
 
@@ -386,50 +373,12 @@ async def test_general_is_answered_too(database_url: str) -> None:
     assert len(replies) == 1
 
 
-# --- old buttons ----------------------------------------------------
-
-
-async def test_an_old_button_is_answered_and_taken_off(
-    database_url: str,
-) -> None:
-    outcome, session = await feed(
-        database_url, press_from(OPERATOR, data="useful:17")
-    )
-
-    names = [type(method).__name__ for method in session.calls]
-    assert outcome is not UNHANDLED
-    assert "AnswerCallbackQuery" in names
-    (edit,) = [
-        m
-        for m in session.calls
-        if type(m).__name__ == "EditMessageReplyMarkup"
-    ]
-    assert getattr(edit, "reply_markup", "unset") is None
-    assert getattr(edit, "message_id", None) == 33
-
-
-async def test_an_old_button_records_nothing(database_url: str) -> None:
-    from sqlalchemy import text
-
-    await feed(database_url, press_from(OPERATOR, data="boring:17"))
-
-    database = Database(database_url)
-    try:
-        async with database.session() as session:
-            tables = await session.scalar(
-                text(
-                    "SELECT count(*) FROM information_schema.tables "
-                    "WHERE table_name = 'alert_feedback'"
-                )
-            )
-    finally:
-        await database.dispose()
-    assert tables == 0
+# --- strangers --------------------------------------------------------
 
 
 async def test_a_press_from_a_stranger_is_ignored(database_url: str) -> None:
     outcome, session = await feed(
-        database_url, press_from(STRANGER, data="useful:17")
+        database_url, press_from(STRANGER, data="rv:12:seed")
     )
 
     assert outcome is UNHANDLED

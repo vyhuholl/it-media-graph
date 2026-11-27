@@ -800,7 +800,7 @@ ok 'the next run brings an emptied environment back'
 
 # --- the bot's routes ----------------------------------------------------------------
 
-say 'the routes, a digest in parts, a refused topic, /status in a topic, an old button'
+say 'the routes, a digest in parts, a refused topic, /status in a topic'
 # Settings of the suite's own on the bot, taken off at the end: no quiet hours, the
 # digest due at once, a quick poll, so that nothing here waits on the clock. Seeded
 # with the bot stopped, so that its first pass sees the rows: a first digest with
@@ -1082,16 +1082,6 @@ status_answered() {
 }
 until_true 60 '/status in the English topic was not answered there' status_answered
 ok '/status in a topic is answered in that topic, about YouTube'
-
-telegram_control enqueue "$(jq -n --argjson at "$(date +%s)" '{callback_query: {id: "1", chat_instance: "1",
-	from: {id: 7, is_bot: false, first_name: "fake"}, data: "useful:17",
-	message: {message_id: 33, date: $at, chat: {id: -100000003, type: "private"}, text: "an old alert"}}}')"
-button_retired() {
-	telegram_calls | jq -s -e '([.[] | select(.method == "answerCallbackQuery")] | length == 1)
-		and ([.[] | select(.method == "editMessageReplyMarkup" and .fields.message_id == "33")] | length == 1)' >/dev/null
-}
-until_true 60 'the old button was not answered and taken off' button_retired
-ok 'a press on an old button is answered, and its buttons taken off'
 
 kubectl -n "$namespace" set env deployment/itgraph-bot ALERT_QUIET_FROM_HOUR- ALERT_QUIET_TO_HOUR- \
 	YOUTUBE_ALERT_QUIET_FROM_HOUR- YOUTUBE_ALERT_QUIET_TO_HOUR- YOUTUBE_ALERT_DIGEST_HOUR- ALERT_POLL_SECONDS- >/dev/null

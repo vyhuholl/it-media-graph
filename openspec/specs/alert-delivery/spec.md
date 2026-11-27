@@ -442,16 +442,9 @@ At start, the bot SHALL ask Telegram about the alert chat, and SHALL refuse to s
 - **WHEN** the bot starts
 - **THEN** it exits non-zero naming that chat's setting
 
-### Requirement: Buttons Under Old Alerts Are Retired
+### Requirement: Alerts Carry No Buttons
 
-A press on a feedback button under a message sent before feedback was removed SHALL record nothing. The bot SHALL answer that feedback is no longer collected and remove the buttons from that message.
-
-#### Scenario: A press on an old button
-
-- **GIVEN** a message in the Telegram chat with the old two buttons
-- **WHEN** someone presses one
-- **THEN** nothing is written to the database
-- **AND** the press is answered and the message's buttons are removed
+An alert's message SHALL carry no buttons. Feedback was asked of every alert from the first one, pressed once in three months, and is no longer collected.
 
 #### Scenario: New alerts carry no buttons
 
