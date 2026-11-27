@@ -1001,13 +1001,12 @@ def bot() -> None:
     assert telegram_chat is not None  # checked above
     destinations = [telegram_chat, *youtube_destinations(settings).values()]
 
-    # The bot's own connection when one is configured. Reported either
-    # way: running under the collector's credentials is a supported
-    # state, not a secret one, and silence about it would make the
-    # hardened and unhardened deployments look identical.
+    # Which role the bot connects as is its workload's to say: the role
+    # gives the bot a DATABASE_URL of its own, under `itgraph_bot`. Said
+    # at start, so a pod handed another role's does not look the same.
     from sqlalchemy.engine import make_url
 
-    url = str(settings.bot_database_url or settings.database_url)
+    url = str(settings.database_url)
     logging.getLogger("itgraph.bot").info(
         "connecting to the database as %r", make_url(url).username
     )

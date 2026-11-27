@@ -25,7 +25,7 @@ def env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
     Every other setting is cleared rather than left standing. ``build()``
     passes ``_env_file=None`` so the file cannot leak in, but that says
     nothing about the *environment*, and pydantic-settings reads it
-    either way — so a `BOT_DATABASE_URL` exported in a shell, or loaded
+    either way — so a `TELEGRAM_BOT_TOKEN` exported in a shell, or loaded
     from `.env` by `conftest`, used to reach the tests that assert an
     optional setting is unset and fail them. Derived from the model's own
     fields, so a setting added later is cleared without anyone
@@ -159,35 +159,6 @@ def test_an_inverted_idle_clamp_is_refused(env: pytest.MonkeyPatch) -> None:
     env.setenv("WATCH_IDLE_MAX_MINUTES", "30")
     with pytest.raises(ValidationError, match="watch_idle_min_minutes"):
         build()
-
-
-def test_the_bot_gets_its_own_connection(env: pytest.MonkeyPatch) -> None:
-    """A separate setting, not a repointed `DATABASE_URL`.
-
-    The instruction "run the bot with DATABASE_URL pointing at the bot
-    role" is one the operator has to remember forever and cannot verify:
-    the collector reads its settings once at startup, so a `.env` pointed
-    at the restricted role keeps working until something restarts — and
-    then every collection write fails at once.
-    """
-    env.setenv(
-        "BOT_DATABASE_URL", "postgresql+asyncpg://itgraph_bot:p@localhost/db"
-    )
-    settings = build()
-
-    assert settings.bot_database_url is not None
-    assert "itgraph_bot" in str(settings.bot_database_url)
-    # And the collector's own connection is untouched by it.
-    assert "itgraph_bot" not in str(settings.database_url)
-
-
-def test_the_bot_connection_is_optional(env: pytest.MonkeyPatch) -> None:
-    """Unset means the bot shares the collector's credentials.
-
-    Supported and unhardened; the bot logs which of the two it got, so
-    the state is visible rather than assumed.
-    """
-    assert build().bot_database_url is None
 
 
 # Not a plausible password: `tests/` is deliberately not excluded from

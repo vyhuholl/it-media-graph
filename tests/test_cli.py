@@ -2018,8 +2018,8 @@ def test_bot_refuses_a_chat_it_cannot_reach_before_delivering(
     from itgraph.bot import handlers
     from itgraph.config import settings as live_settings
 
-    # The bot builds its database from its own URL, given one; the test's.
-    monkeypatch.setattr(live_settings, "bot_database_url", database_url)
+    # The bot builds its database from the setting: here, the test's.
+    monkeypatch.setattr(live_settings, "database_url", database_url)
     monkeypatch.setattr(
         live_settings,
         "telegram_bot_token",
