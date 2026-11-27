@@ -112,7 +112,7 @@ The schema SHALL have a revision that removes what names a person from every pay
 
 - **GIVEN** a working database whose schema is brought to head
 - **WHEN** the dump taken before the migration is listed
-- **THEN** it holds the people as they were, and is kept and pruned like any other full dump, by age
+- **THEN** it holds the people as they were, and is kept and pruned as a pre-migration dump is: among the five newest, whatever their age, apart from the full dumps
 
 #### Scenario: Going back
 

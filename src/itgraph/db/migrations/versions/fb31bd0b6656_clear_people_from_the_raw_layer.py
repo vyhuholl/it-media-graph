@@ -26,8 +26,8 @@ payload ran the database out of its 2 GiB on 2026-11-06; this is one
 size before it ran there.
 
 **The downgrade does nothing:** what this removed cannot come back, and
-nothing needs it. The full dump taken before an upgrade still holds it,
-and is pruned by age like every other.
+nothing needs it. The dump taken before an upgrade still holds it: the
+pre-migration tier, of which the five newest are kept whatever their age.
 """
 
 from collections.abc import Sequence

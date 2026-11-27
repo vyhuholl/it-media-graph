@@ -421,7 +421,7 @@ Each workload's pods SHALL receive only the configuration that workload reads. A
 
 ### Requirement: Egress Is Denied Unless Named
 
-Every pod's outbound traffic SHALL be denied except what its workload needs. The collector SHALL reach DNS, the database and the proxy, and nothing else. Passes that make no request outside the cluster SHALL reach DNS and the database alone. Of the workloads, only the proxy, the bot, the YouTube collection jobs and the backup SHALL reach the internet; the YouTube scoring and baseline jobs SHALL NOT.
+Every pod's outbound traffic SHALL be denied except what its workload needs. The collector SHALL reach DNS, the database and the proxy, and nothing else. Passes that make no request outside the cluster SHALL reach DNS and the database alone. Of the workloads, only the proxy, the bot, the YouTube collection jobs, the backup and — where a YouTube key is configured — YouTube's rising selection SHALL reach the internet; the YouTube scoring and baseline jobs SHALL NOT, and neither SHALL the selection where no key is.
 
 #### Scenario: The collector going direct
 
@@ -793,7 +793,7 @@ Every run of the detection job SHALL apply the decisions taken on the rising off
 
 ### Requirement: YouTube's Rising Selection Runs In Every Environment
 
-The daily selection of YouTube's rising channels SHALL be scheduled wherever the role runs, whether or not the environment collects, every day at 11:00 Moscow time, beside Telegram's. A run missed while the host was down SHALL start when it is back, within the day. Its pod SHALL reach the database alone and hold no secret but the database's URL: the selection makes no request and needs no YouTube key.
+The daily selection of YouTube's rising channels SHALL be scheduled wherever the role runs, whether or not the environment collects, every day at 11:00 Moscow time, beside Telegram's. A run missed while the host was down SHALL start when it is back, within the day. Where no YouTube key is configured, its pod SHALL reach the database alone and hold no secret but the database's URL: the selection ranks from what is stored. Where a key is configured, its pod SHALL also hold the key and reach the internet, for the one call that buys the offered channels' payloads — the cards are titled the day they are sent — and no other secret.
 
 #### Scenario: A test environment
 
@@ -812,10 +812,17 @@ The daily selection of YouTube's rising channels SHALL be scheduled wherever the
 - **WHEN** it is back
 - **THEN** the missed run starts, and computes that day's selection
 
-#### Scenario: What the pod holds
+#### Scenario: What the pod holds without a key
 
+- **GIVEN** an environment with no YouTube key
 - **WHEN** the role renders the selection's CronJob
 - **THEN** its pod has the configuration and the database's URL, no YouTube key, Telegram session, API hash, bot token, proxy password or other secret, and may reach the database and nothing else
+
+#### Scenario: What the pod holds with a key
+
+- **GIVEN** an environment with a YouTube key
+- **WHEN** the role renders the selection's CronJob
+- **THEN** its pod has the configuration, the database's URL and the YouTube key, no Telegram session, API hash, bot token, proxy password or other secret, and may reach the database and the internet and nothing else
 
 ### Requirement: Text Embeddings Run In Every Environment
 
