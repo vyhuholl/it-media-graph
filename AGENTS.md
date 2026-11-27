@@ -44,9 +44,11 @@ uv run itgraph --help    # CLI entrypoint (typer)
 - **Each externally visible result is asserted once, at the widest seam that can fail for it.** A test one layer below stays only for what the wider one cannot see: a boundary, a distinct rejection, a numerical case. A count of handlers, statements or rows that follows the implementation is not a result.
 - **Test this repository, not its vendors.** What a third-party tool does with its own input is exercised where this repository calls it, and nowhere else.
 - **A fixture or helper copied into a third test module moves to `conftest.py`**, and takes the suffix rail and the migration lock with it, unchanged.
+- **An oracle lives in the tests.** A function, constant or re-export that only tests call belongs to the test file, not to `src/`.
 - **No network in tests.** Telethon is mocked; fixtures are saved, anonymized payloads under `tests/fixtures/`.
 - Real `api_id` / `api_hash` / session files never appear in tests. CI holds no secret but its own token, so there is nowhere to add them to, and making it run the collector "for real" is not a reason to give it more.
 - Fake credentials are spelled out in words (`test-api-hash`, `fake-…`), never as plausible-looking hex. `tests/` is deliberately **not** excluded from the gitleaks hook, so a realistic fake trips it — and the fix is to make the value obviously fake, not to add an exclude, a `# gitleaks:allow`, or a fingerprint allowlist. A fake that looks real also costs a human reviewer the ability to tell the difference.
+- **A fake id cannot be real.** Ids in tests are patterned or below any real id's range, never a plausible number: one generated id matched a chat in the inventory. 
 - Tests use separate databases on the same Postgres instance, created and dropped by a fixture in `conftest.py`. That fixture refuses to run against a database whose name does not end in `_test` — never weaken the check, per-worker names included.
 - `make test` runs eight workers (`pytest-xdist`), one database each (`itgraph_gw0_test`, …). The schema is built once per run and the tables are emptied with `TRUNCATE` between tests — building it per test was two thirds of the suite's wall clock. **Nothing in the suite may alter the schema**, because it now outlives the test that changed it; a test that needs its own schema has to build its own database. `make test WORKERS=0` runs in one process, which is how a failure is read.
 - **A push to `master` gates nothing, and a tag does.** One person works on this repository, so pre-commit is the gate for a push: ruff and ansible-lint on commit, mypy and pytest on push. `.github/workflows/image.yml` builds `linux/amd64` and pushes `ghcr.io/vyhuholl/it-media-graph:<commit>` on every push to master; it runs no tests and blocks nothing. A hook skipped with `--no-verify` is still not caught there. A version tag means something, since what it publishes is what an operator will run: `.github/workflows/release.yml` runs the suite and the role's checks first, and publishes nothing if they fail.
@@ -91,12 +93,14 @@ When the prompt and the actual behaviour of a library or of the code disagree, d
 - Standard / infrastructure tasks (collector, schema, API, bot): implement via OpenSpec: `/opsx:explore` -> write change artifacts -> `/opsx:apply` -> `/opsx:verify` -> `/opsx:archive`.
 - A small change — a bugfix, a narrow cleanup — needs no new OpenSpec change. But if it changes behaviour an existing spec describes, the spec in `openspec/specs/` should be updated, so the specs never disagree with what the code does.
 - Exploratory analytics (clustering, edge weights, engagement baselines): no spec. Iterate in `notebooks/`, promote to `src/` only once the approach is settled.
-- **A change that makes something unreachable removes it in the same commit**: the code, the option, the test, and the comment or docstring that explained why it existed. That nobody calls it any more is the reason to delete.
-- **A rule is stated once, where it is read.** A bound belongs on the option's declaration, not in a check after it; an envelope, a lock or a check belongs in the one place every caller passes through, not spelled again at each call site.
-- **A guard fails closed.** Nothing that protects the database, the session or a secret may be switched off by a missing attribute, an empty value or a default: a fallback that would silence a guard is a bug, not robustness.
 - One commit per logical unit of work.
 - Commit messages — in English. Follow conventional commits standard.
 - **Commit to `master`. Never create a branch unless asked for one.** One person works on this repository, so a branch buys no review and costs a merge on every change. If something is risky enough to want isolating, say so and ask — do not decide it by branching.
+- **A change that makes something unreachable removes it in the same commit**: the code, the option, the test, and the comment or docstring that explained why it existed. That nobody calls it any more is the reason to delete.
+- **A rule is stated once, where it is read.** A bound belongs on the option's declaration, not in a check after it; an envelope, a lock or a check belongs in the one place every caller passes through, not spelled again at each call site.
+- **A guard fails closed.** Nothing that protects the database, the session or a secret may be switched off by a missing attribute, an empty value or a default: a fallback that would silence a guard is a bug, not robustness.
+- **A document states the present.** A change that removes or renames a command, target, setting or source corrects every place that names it; a dated record of a decision is labelled as history.
+- **A comment cites only what exists**: a spec requirement it names is in a spec, and a reason it gives still holds.
 
 ## Style
 - ruff and mypy settings are deliberate. Do not loosen config or sprinkle `# type: ignore` to make an error disappear — fix the code, or ask.
