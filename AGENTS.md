@@ -40,6 +40,10 @@ uv run itgraph --help    # CLI entrypoint (typer)
 - The collector must be resumable: persist `offset_id` per channel, so an interrupted backfill continues instead of restarting.
 
 ## Testing
+- **A test runs the production code it is named for, and its fixture can produce the failure it describes.** A test that only stores and reads back, or scans a file for an absence, proves nothing; and when a change removes or inverts a behavior, its test goes or is rewritten in the same commit, not flipped to assert the new state.
+- **Each externally visible result is asserted once, at the widest seam that can fail for it.** A test one layer below stays only for what the wider one cannot see: a boundary, a distinct rejection, a numerical case. A count of handlers, statements or rows that follows the implementation is not a result.
+- **Test this repository, not its vendors.** What a third-party tool does with its own input is exercised where this repository calls it, and nowhere else.
+- **A fixture or helper copied into a third test module moves to `conftest.py`**, and takes the suffix rail and the migration lock with it, unchanged.
 - **No network in tests.** Telethon is mocked; fixtures are saved, anonymized payloads under `tests/fixtures/`.
 - Real `api_id` / `api_hash` / session files never appear in tests. CI holds no secret but its own token, so there is nowhere to add them to, and making it run the collector "for real" is not a reason to give it more.
 - Fake credentials are spelled out in words (`test-api-hash`, `fake-…`), never as plausible-looking hex. `tests/` is deliberately **not** excluded from the gitleaks hook, so a realistic fake trips it — and the fix is to make the value obviously fake, not to add an exclude, a `# gitleaks:allow`, or a fingerprint allowlist. A fake that looks real also costs a human reviewer the ability to tell the difference.
@@ -87,6 +91,9 @@ When the prompt and the actual behaviour of a library or of the code disagree, d
 - Standard / infrastructure tasks (collector, schema, API, bot): implement via OpenSpec: `/opsx:explore` -> write change artifacts -> `/opsx:apply` -> `/opsx:verify` -> `/opsx:archive`.
 - A small change — a bugfix, a narrow cleanup — needs no new OpenSpec change. But if it changes behaviour an existing spec describes, the spec in `openspec/specs/` should be updated, so the specs never disagree with what the code does.
 - Exploratory analytics (clustering, edge weights, engagement baselines): no spec. Iterate in `notebooks/`, promote to `src/` only once the approach is settled.
+- **A change that makes something unreachable removes it in the same commit**: the code, the option, the test, and the comment or docstring that explained why it existed. That nobody calls it any more is the reason to delete.
+- **A rule is stated once, where it is read.** A bound belongs on the option's declaration, not in a check after it; an envelope, a lock or a check belongs in the one place every caller passes through, not spelled again at each call site.
+- **A guard fails closed.** Nothing that protects the database, the session or a secret may be switched off by a missing attribute, an empty value or a default: a fallback that would silence a guard is a bug, not robustness.
 - One commit per logical unit of work.
 - Commit messages — in English. Follow conventional commits standard.
 - **Commit to `master`. Never create a branch unless asked for one.** One person works on this repository, so a branch buys no review and costs a merge on every change. If something is risky enough to want isolating, say so and ask — do not decide it by branching.
