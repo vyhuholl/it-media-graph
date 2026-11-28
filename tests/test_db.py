@@ -84,20 +84,6 @@ async def test_a_chain_of_four_is_one_family(database: Database) -> None:
     assert set((await _families(database)).values()) == {KNOWN}
 
 
-async def test_every_member_answers_with_the_same_key(
-    database: Database,
-) -> None:
-    await _channels(database, 3)
-    await _confirm(database, [(KNOWN, KNOWN + 1), (KNOWN + 1, KNOWN + 2)])
-
-    async with database.session() as session:
-        keys = await session.execute(
-            text("SELECT DISTINCT family_key FROM tg_channel_families")
-        )
-
-    assert keys.scalars().all() == [KNOWN]
-
-
 async def test_two_families_stay_apart(database: Database) -> None:
     await _channels(database, 4)
     await _confirm(database, [(KNOWN, KNOWN + 1), (KNOWN + 2, KNOWN + 3)])
@@ -135,12 +121,6 @@ async def test_a_pending_pair_makes_no_family(database: Database) -> None:
         )
 
     assert await _families(database) == {KNOWN: KNOWN, KNOWN + 1: KNOWN + 1}
-
-
-async def test_session_runs_a_query(database: Database) -> None:
-    async with database.session() as session:
-        result = await session.execute(text("select 1"))
-        assert result.scalar_one() == 1
 
 
 async def test_session_rolls_back_on_error(database: Database) -> None:

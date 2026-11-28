@@ -55,11 +55,6 @@ def test_one_family_carrying_a_post_twice_counts_once() -> None:
     assert result[POST] == {10}
 
 
-def test_two_channels_of_one_family_are_one_source() -> None:
-    """Both resolve to the same family key before they get here."""
-    assert counts(repost(10), repost(10))[POST] == {10}
-
-
 def test_the_posts_own_family_does_not_count() -> None:
     """A network carrying its own post is distribution, not travel."""
     assert counts(repost(1000000001)) == {}

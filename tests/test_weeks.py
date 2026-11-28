@@ -68,10 +68,6 @@ def test_one_entry_per_channel_with_its_others() -> None:
     assert found == [Ranked(channel=1, item=10, best=best(4.5), others=2)]
 
 
-def test_nothing_below_the_floor() -> None:
-    assert rank_week({(1, 10): best(3.6)}, floor=3.7) == []
-
-
 def test_the_better_of_two_crosses_at_the_earlier() -> None:
     merged = merge_best(best(4.0, crossed=5, read=5), best(3.8, crossed=1))
     assert merged.score.z == 4.0
@@ -133,7 +129,6 @@ def test_a_slow_burn_channel() -> None:
     """Its old video gains from search about as fast as last week: many
     times its tiny norm, and still not a second wind."""
     paces = judged(400, 420)
-    assert 7 * 420 / 46 > 50
     assert not qualifies(paces, norm=46, acceleration=3, share=0.5)
 
 

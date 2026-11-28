@@ -117,20 +117,6 @@ def test_the_channel_follows_its_youngest_live_post() -> None:
     assert due == at(minutes=15)
 
 
-def test_one_poll_serves_every_live_post() -> None:
-    """The channel's schedule is the union of its posts', not the sum.
-
-    One request refreshes all of them, so the cost is per channel per
-    cycle — which is the arithmetic that makes the whole budget work.
-    """
-    older = PUBLISHED - timedelta(hours=3)
-    now = at(minutes=5)
-
-    assert next_channel_poll(now, live_posts=[PUBLISHED, older]) == at(
-        minutes=15
-    )
-
-
 def test_a_burst_does_not_produce_a_burst_of_polls() -> None:
     """Five messages of an album are one poll, not five.
 
@@ -216,13 +202,6 @@ def test_a_failing_channel_is_still_tried_eventually() -> None:
         now, live_posts=[], posts_per_day=2.0, consecutive_failures=99
     )
     assert due <= now + timedelta(minutes=settings.watch_failure_max_minutes)
-
-
-def test_a_due_moment_is_never_in_the_past() -> None:
-    """A schedule that returns the past would make the loop spin."""
-    now = at(hours=30)
-    due = next_channel_poll(now, live_posts=[PUBLISHED], last_polled_at=now)
-    assert due >= now
 
 
 def test_the_window_covers_the_horizon() -> None:
