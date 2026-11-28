@@ -88,10 +88,12 @@ if [ "$1" = "--loop" ]; then
 	esac
 fi
 
-# `embed` is the one command that cannot run in the console's Job: the
-# console holds 1 Gi, and the pass — the model plus a batch of texts —
-# peaks just over 2 GiB. It runs from its CronJob's template instead,
-# which carries the resources and the deadline the role sized for it.
+# `embed` is the one command that cannot run in the console's Job: a
+# first backfill, or a model change, measured nine hours on four threads
+# against the console's four, and only the nightly increment is minutes.
+# Nor does the console cap its CPU, and the pass takes every core it can
+# see. It runs from its CronJob's template instead, which carries the
+# cores, the memory and the deadline the role sized for it.
 # The Job runs the command itself, so nothing is exec'd into it: the
 # output arrives as logs, followed to the run's end. The Job is left
 # in place when this machine goes away — an interrupted pass is resumed

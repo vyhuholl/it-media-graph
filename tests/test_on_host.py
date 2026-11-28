@@ -25,6 +25,10 @@ case " $* " in
     printf 'a diagnostic\\n' >&2
     exit "${FAKE_EXIT:-0}"
     ;;
+  *" create job --from=cronjob/itgraph-embed "*)
+    printf 'job.batch/itgraph-embed-manual-fake\\n'
+    exit 0
+    ;;
   *" create "*)
     cat > "$HOME/created.txt"
     if [ -n "${FAKE_CREATE_FAILS:-}" ]; then exit 1; fi
@@ -33,6 +37,14 @@ case " $* " in
     ;;
   *" get configmap "*) printf 'the-manifest'; exit 0 ;;
   *" wait "*) exit "${FAKE_WAIT_EXIT:-0}" ;;
+  *" get job.batch/"*"{.status.failed}"*)
+    printf '%s' "${FAKE_JOB_FAILED:-}"
+    exit 0
+    ;;
+  *" get job.batch/"*"{.status.succeeded}"*)
+    printf '%s' "${FAKE_JOB_SUCCEEDED:-}"
+    exit 0
+    ;;
   *" get "*) printf '%s' "${FAKE_PODS:-}"; exit 0 ;;
 esac
 exit 0
@@ -213,6 +225,52 @@ def test_a_pod_that_never_starts_fails_saying_so_and_goes(
     assert "did not start" in done.stderr
     assert [call for call in calls_of(env) if "delete" in call]
     assert not [call for call in calls_of(env) if "exec" in call]
+
+
+def test_embed_runs_in_a_job_of_its_cronjob_and_leaves_it(
+    env: dict[str, str],
+) -> None:
+    done = run({**env, "FAKE_JOB_SUCCEEDED": "1"}, "embed")
+
+    assert done.returncode == 0, done.stderr
+    calls = calls_of(env)
+    [created] = [call for call in calls if "create" in call]
+    assert "--from=cronjob/itgraph-embed" in created
+    [waited] = [call for call in calls if "wait" in call]
+    assert "batch.kubernetes.io/job-name=itgraph-embed-manual-fake" in waited
+    # The Job runs the command itself: its logs are read, nothing is exec'd
+    # into it, and it stays for the next run to resume and for its logs.
+    [followed] = [call for call in calls if "logs" in call]
+    assert followed[followed.index("-f") + 1 :] == [
+        "job.batch/itgraph-embed-manual-fake",
+        "-c",
+        "itgraph",
+    ]
+    assert not [
+        call for call in calls if {"configmap", "exec", "delete"} & set(call)
+    ]
+
+
+def test_a_failed_pass_fails_the_command(env: dict[str, str]) -> None:
+    done = run(env, "embed")
+
+    assert done.returncode == 1
+    assert "the pass failed" in done.stderr
+    assert [call for call in calls_of(env) if "logs" in call]
+
+
+def test_a_pass_whose_job_failed_before_its_pod_was_ready_stops_waiting(
+    env: dict[str, str],
+) -> None:
+    done = run({**env, "FAKE_WAIT_EXIT": "1", "FAKE_JOB_FAILED": "1"}, "embed")
+
+    assert done.returncode == 1
+    assert "did not start" in done.stderr
+    calls = calls_of(env)
+    # Not waited out, as a pod that is merely slow is: one try, and its
+    # last lines are on screen.
+    assert sum("wait" in call for call in calls) == 1
+    assert any("--tail=20" in call for call in calls)
 
 
 def test_a_job_that_cannot_be_made_runs_nothing(env: dict[str, str]) -> None:
