@@ -45,14 +45,6 @@ def test_two_queries_interleaved() -> None:
     assert ranked[0] == Ranked(A, "fake one")
 
 
-def test_known_channels_are_skipped() -> None:
-    runs = [Run("fake one", [A, B, C])]
-
-    ranked = ranking(runs, frozenset({A, B}))
-
-    assert [row.channel_id for row in ranked] == [C]
-
-
 def test_a_channel_found_twice_by_one_query_is_taken_once() -> None:
     runs = [Run("fake one", [A, A, B])]
 

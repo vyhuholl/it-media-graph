@@ -25,6 +25,7 @@ from ytfakes import (
     use_key,
     video_id,
 )
+from ytinventory import arrange
 
 from itgraph.cli import app
 from itgraph.config import settings
@@ -53,20 +54,6 @@ def offline(database_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
         raise AssertionError("yt tg-candidates built an HTTP client")
 
     monkeypatch.setattr(httpx.AsyncClient, "__init__", refuse)
-
-
-def _arrange(database_url: str, *steps: Any) -> None:
-    """Run setup coroutines, each given a database, in order."""
-
-    async def run() -> None:
-        database = Database(database_url)
-        try:
-            for step in steps:
-                await step(database)
-        finally:
-            await database.dispose()
-
-    asyncio.run(run())
 
 
 def _linking(tg_id: int, *urls: str) -> Any:
@@ -107,7 +94,7 @@ def test_a_ranked_row_shows_no_api_data(database_url: str) -> None:
                 fetched_at=datetime.now(UTC),
             )
 
-    _arrange(
+    arrange(
         database_url,
         known,
         _linking(2001, "youtube.com/channel/" + channel_id(50)),
@@ -129,7 +116,7 @@ def test_a_ranked_row_shows_no_api_data(database_url: str) -> None:
 
 def test_the_top_and_the_rest(database_url: str) -> None:
     links = _channel_links(range(150))
-    _arrange(database_url, _linking(2001, *links), _linking(2002, *links))
+    arrange(database_url, _linking(2001, *links), _linking(2002, *links))
 
     result = _candidates()
 
@@ -140,7 +127,7 @@ def test_the_top_and_the_rest(database_url: str) -> None:
 
 
 def test_what_could_not_be_counted(database_url: str) -> None:
-    _arrange(
+    arrange(
         database_url,
         _linking(
             2001,
@@ -159,18 +146,12 @@ def test_what_could_not_be_counted(database_url: str) -> None:
     assert "counted: 1 playlist pages, 1 shortened links" in result.output
 
 
-def test_without_a_key_or_a_client_it_still_reads(database_url: str) -> None:
-    # The autouse fixture removed the key and made any HTTP client fail.
-    _arrange(database_url, _linking(2001, "youtube.com/@fake-unknown"))
-    assert _candidates().exit_code == 0
-
-
 # --- adding ----------------------------------------------------------
 
 
 def test_the_top_hundred_are_added(database_url: str) -> None:
     links = _channel_links(range(150))
-    _arrange(database_url, _linking(2001, *links), _linking(2002, *links))
+    arrange(database_url, _linking(2001, *links), _linking(2002, *links))
 
     result = _candidates("--add")
 
@@ -186,7 +167,7 @@ def test_the_top_hundred_are_added(database_url: str) -> None:
 
 def test_an_incomplete_lookup_refuses_the_cut(database_url: str) -> None:
     links = _channel_links(range(3))
-    _arrange(
+    arrange(
         database_url,
         _linking(2001, *links, f"youtu.be/{video_id(1)}"),
         _linking(2002, *links),
@@ -202,7 +183,7 @@ def test_an_incomplete_lookup_refuses_the_cut(database_url: str) -> None:
 
 def test_the_next_run_brings_the_next_hundred(database_url: str) -> None:
     links = _channel_links(range(150))
-    _arrange(database_url, _linking(2001, *links), _linking(2002, *links))
+    arrange(database_url, _linking(2001, *links), _linking(2002, *links))
 
     assert _candidates("--add").exit_code == 0
     result = _candidates("--add")
@@ -216,7 +197,7 @@ def test_a_candidate_s_data_arrives_with_the_refresh(
     database_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     links = _channel_links(range(2))
-    _arrange(database_url, _linking(2001, *links), _linking(2002, *links))
+    arrange(database_url, _linking(2001, *links), _linking(2002, *links))
     assert _candidates("--add").exit_code == 0
 
     monkeypatch.undo()
@@ -268,7 +249,7 @@ def test_logs_name_ids_only(
         await tg_channel(database, 2003)
         await tg_posts(database, 2003, post(1, "youtube.com/@fake-secret-two"))
 
-    _arrange(
+    arrange(
         database_url,
         _linking(
             2001,

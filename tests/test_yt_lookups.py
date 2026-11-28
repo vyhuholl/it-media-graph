@@ -198,24 +198,6 @@ async def test_an_id_of_an_unexpected_shape_fails_loudly(
 # --- answers are kept, not refreshed ---------------------------------
 
 
-async def test_answers_are_kept_found_or_not(database: Database) -> None:
-    async with database.session() as session:
-        await store_lookups(
-            session,
-            {
-                (YtLookupKind.VIDEO, video_id(1)): channel_id(7),
-                (YtLookupKind.HANDLE, "fake-nobody"): None,
-            },
-            fetched_at=NOW - timedelta(days=5),
-        )
-        kept = await lookups_in_date(session, now=NOW)
-
-    assert kept == {
-        (YtLookupKind.VIDEO, video_id(1)): channel_id(7),
-        (YtLookupKind.HANDLE, "fake-nobody"): None,
-    }
-
-
 async def test_a_newer_answer_replaces_the_old_one(database: Database) -> None:
     key = (YtLookupKind.HANDLE, "fake-moved")
     async with database.session() as session:

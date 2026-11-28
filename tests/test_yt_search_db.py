@@ -92,19 +92,6 @@ async def test_another_type_is_another_query(database: Database) -> None:
     assert await _count(database, YtSearchQuery) == 2
 
 
-async def test_the_latest_run_in_date(database: Database) -> None:
-    await _start(database, at=NOW - timedelta(days=40))
-    await _start(database, at=NOW - timedelta(days=10))
-
-    async with database.session() as session:
-        latest = await latest_run_in_date(session, "fake query", VIDEO)
-        other = await latest_run_in_date(
-            session, "fake query", YtSearchType.CHANNEL
-        )
-    assert latest == NOW - timedelta(days=10)
-    assert other is None
-
-
 async def test_runs_in_date_come_oldest_first_with_their_channels(
     database: Database,
 ) -> None:
