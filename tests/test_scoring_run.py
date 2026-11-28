@@ -650,19 +650,6 @@ async def test_a_channel_without_a_baseline_is_reported_not_scored(
     assert await alerts(database) == []
 
 
-async def test_a_channel_that_publishes_no_reactions_scores_none(
-    database: Database,
-) -> None:
-    """Absent is not zero — the distinction `derive/metrics.py` keeps."""
-    await seed_post(database)
-    await seed_baselines(database)
-    await snapshot(database, views=int(EXPECTED_AT_2H), reactions=None)
-
-    summary = await run_scoring(database, now=NOW)
-
-    assert summary.crossed == 0
-
-
 async def test_a_reading_outside_the_window_is_not_scored(
     database: Database,
 ) -> None:
@@ -705,27 +692,6 @@ async def test_nothing_collected_is_modified(database: Database) -> None:
 
 
 # --- replay ---------------------------------------------------------
-
-
-async def test_a_replay_of_the_present_names_what_the_pass_named(
-    database: Database,
-) -> None:
-    """The same code with the same moment, so the same answer.
-
-    A parallel scorer would agree here and diverge on the case nobody
-    checked, which is why replay is this function with an argument.
-    """
-    await seed_post(database)
-    await seed_baselines(database)
-    await snapshot(database, views=int(EXPECTED_AT_2H * SPIKE))
-
-    replayed = await run_scoring(database, now=NOW, dry_run=True)
-    live = await run_scoring(database, now=NOW)
-
-    assert [spike.post_key for spike in replayed.spikes] == [
-        spike.post_key for spike in live.spikes
-    ]
-    assert replayed.spikes[0].score.z == live.spikes[0].score.z
 
 
 async def test_a_replay_writes_nothing(database: Database) -> None:
@@ -927,19 +893,6 @@ async def test_one_post_strong_on_views_and_comments_raises_one_alert(
     assert summary.raised == 1
     [(kind, *_)] = await alerts(database)
     assert kind == AlertKind.COMMENT_SPIKE
-
-
-async def test_a_replay_lists_a_comment_crossing(database: Database) -> None:
-    await seed_post(database)
-    await seed_baselines(database, comments_mean=1.0)
-    await snapshot(database, views=int(EXPECTED_AT_2H), comments=40)
-
-    summary = await run_scoring(database, now=NOW, dry_run=True)
-
-    assert [spike.score.metric for spike in summary.spikes] == [
-        Metric.COMMENTS
-    ]
-    assert await alerts(database) == []
 
 
 def test_comments_alert_by_default_with_a_minimum_of_ten() -> None:

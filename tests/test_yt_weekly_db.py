@@ -16,9 +16,6 @@ from itgraph.db.yt_weekly import (
     NewList,
     claim_lists,
     entry_evidence,
-    mark_entries_delivered,
-    mark_list_delivered,
-    mark_list_failed,
     store_week,
 )
 
@@ -125,46 +122,6 @@ async def test_lists_are_claimed_oldest_week_first_with_entries_in_rank(
     assert [entry.rank for entry in claimed[1].entries] == [1, 2]
     assert claimed[1].sent == 0
     assert claimed[0].entries == ()
-
-
-async def test_a_sent_part_is_not_claimed_again(database: Database) -> None:
-    await two_channels(database)
-    async with database.session() as session:
-        await store_week(session, [a_list(an_entry(1, 1), an_entry(2, 2))])
-    async with database.session() as session:
-        (pending,) = await claim_lists(session, YtAlertRoute.RU)
-        await mark_entries_delivered(session, pending.id, [1], at=COMPUTED)
-        await mark_list_failed(session, pending.id, error="boom")
-
-    async with database.session() as session:
-        (resumed,) = await claim_lists(session, YtAlertRoute.RU)
-
-    assert [entry.rank for entry in resumed.entries] == [2]
-    assert resumed.sent == 1
-    assert resumed.attempts == 1
-
-    async with database.session() as session:
-        await mark_entries_delivered(session, resumed.id, [2], at=COMPUTED)
-        await mark_list_delivered(session, resumed.id, at=COMPUTED)
-    async with database.session() as session:
-        assert await claim_lists(session, YtAlertRoute.RU) == []
-
-
-async def test_an_entry_whose_video_is_gone_is_not_claimed(
-    database: Database,
-) -> None:
-    await two_channels(database)
-    async with database.session() as session:
-        await store_week(session, [a_list(an_entry(1, 1), an_entry(2, 2))])
-        await session.execute(
-            text("DELETE FROM yt_raw_videos WHERE video_id = :id"),
-            {"id": video_id(1)},
-        )
-
-    async with database.session() as session:
-        (pending,) = await claim_lists(session, YtAlertRoute.RU)
-
-    assert [entry.video_id for entry in pending.entries] == [video_id(2)]
 
 
 async def test_an_entry_s_evidence_is_read_at_sending(

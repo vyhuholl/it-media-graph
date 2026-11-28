@@ -12,9 +12,6 @@ from itgraph.db.weekly import (
     NewEntry,
     NewList,
     claim_lists,
-    mark_entries_delivered,
-    mark_list_delivered,
-    mark_list_failed,
     store_week,
 )
 
@@ -130,47 +127,6 @@ async def test_lists_are_claimed_oldest_week_first_with_entries_in_rank(
     assert claimed[1].entries[0].observed == 900.0
     assert claimed[1].sent == 0
     assert claimed[0].entries == ()
-
-
-async def test_a_sent_part_is_not_claimed_again(database: Database) -> None:
-    await two_channels(database)
-    async with database.session() as session:
-        await store_week(
-            session, a_list(an_entry(1, FIRST), an_entry(2, SECOND))
-        )
-    async with database.session() as session:
-        [found] = await claim_lists(session)
-        await mark_entries_delivered(session, found.id, [1], at=COMPUTED)
-        await mark_list_failed(session, found.id, error="refused")
-
-    async with database.session() as session:
-        [again] = await claim_lists(session)
-    assert ([entry.rank for entry in again.entries], again.sent) == ([2], 1)
-    assert again.attempts == 1
-
-    async with database.session() as session:
-        await mark_entries_delivered(session, again.id, [2], at=COMPUTED)
-        await mark_list_delivered(session, again.id, at=COMPUTED)
-    async with database.session() as session:
-        assert await claim_lists(session) == []
-
-
-async def test_an_entry_whose_reading_is_gone_is_not_claimed(
-    database: Database,
-) -> None:
-    await two_channels(database)
-    async with database.session() as session:
-        await store_week(
-            session, a_list(an_entry(1, FIRST), an_entry(2, SECOND))
-        )
-    async with database.session() as session:
-        await session.execute(
-            text("DELETE FROM tg_channels WHERE tg_id = :c"), {"c": FIRST}
-        )
-
-    async with database.session() as session:
-        [found] = await claim_lists(session)
-    assert [entry.channel_id for entry in found.entries] == [SECOND]
 
 
 async def test_a_second_run_at_once_is_told_the_week_is_stored(

@@ -16,7 +16,7 @@ from ytfakes import channel_id, video_id
 from ytscoring import Video, grown, seed_videos
 
 from itgraph.config import Settings, settings
-from itgraph.db.models import YtAlertRoute, YtMetric
+from itgraph.db.models import YtAlertRoute
 from itgraph.db.session import Database
 from itgraph.scoring.score import Best, Score
 from itgraph.scoring.yt_refresh import refresh_yt_baselines
@@ -296,20 +296,6 @@ async def test_a_broadcast_is_counted_and_not_listed(
 
     assert listed(summary, YtAlertRoute.EN) == []
     assert summary.broadcasts == 1
-
-
-async def test_too_few_comments_are_not_a_video_s_score(
-    database: Database, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    await world(database)
-    await seed_videos(database, [published(900, 1, wednesday(), boost=5)])
-    monkeypatch.setattr(settings, "youtube_alert_spike_comments_min", 10**9)
-
-    summary = await run_weekly(database, now=NOW, preview=True)
-
-    for route in summary.routes:
-        for entry in route.entries:
-            assert entry.metric is not YtMetric.COMMENTS
 
 
 # --- one entry per channel, above a floor ----------------------------

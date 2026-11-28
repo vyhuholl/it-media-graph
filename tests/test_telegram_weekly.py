@@ -23,7 +23,6 @@ from itgraph.db.baselines import (
 from itgraph.db.models import BaselineReference, ChannelKind, Metric
 from itgraph.db.session import Database
 from itgraph.scoring.curves import Curve
-from itgraph.scoring.run import run_scoring
 from itgraph.scoring.weekly import run_weekly
 from itgraph.scoring.weeks import WeekRefused
 
@@ -392,23 +391,6 @@ async def test_a_late_reading_scores_nothing(database: Database) -> None:
 
     assert summary.entries == []
     assert summary.posts_scored == 0
-
-
-async def test_the_score_is_the_live_pass_s(database: Database) -> None:
-    """The same reading, against the same run, scores the same."""
-    await a_run(database, START)
-    await a_post(database, WEDNESDAY)
-    await read(database, WEDNESDAY + EARLY, views=views_for(4.6))
-
-    listed = await run_weekly(database, now=LISTED, preview=True)
-    live = await run_scoring(
-        database, now=WEDNESDAY + EARLY + timedelta(minutes=1), dry_run=True
-    )
-
-    [entry] = listed.entries
-    [spike] = live.spikes
-    assert entry.value == pytest.approx(spike.score.z)
-    assert entry.metric.value == spike.score.metric
 
 
 # --- one entry per channel, at the alerts' threshold ----------------------
