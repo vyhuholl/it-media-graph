@@ -64,35 +64,6 @@ DEEPER = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 @pytest.fixture
-def slept(monkeypatch: pytest.MonkeyPatch) -> list[float]:
-    """Record sleeps instead of taking them.
-
-    Both seams: pacing gaps come from ``tg.pacing``, FloodWait sleeps
-    from ``waiting_out_floods`` in ``tg.backfill``. One list, because
-    what most tests want to know is simply that a run never sleeps for
-    real.
-    """
-    taken: list[float] = []
-
-    async def sleep(seconds: float) -> None:
-        taken.append(seconds)
-
-    monkeypatch.setattr(pacing_module.asyncio, "sleep", sleep)
-    monkeypatch.setattr(backfill_module.asyncio, "sleep", sleep)
-    return taken
-
-
-@pytest.fixture
-def no_long_pauses(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Switch off the rare long pause, so a band assertion is decidable.
-
-    Tests that care about the band want the band; the long pause has its
-    own test.
-    """
-    monkeypatch.setattr(settings, "pacing_long_pause_chance", 0.0)
-
-
-@pytest.fixture
 def gaps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     """Only the pacing gaps, in order, with the channel pauses removed.
 

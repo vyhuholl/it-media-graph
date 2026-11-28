@@ -31,9 +31,7 @@ from itgraph.db.models import (
     RawMessage,
 )
 from itgraph.db.session import Database
-from itgraph.tg import backfill as backfill_module
 from itgraph.tg import floods as floods_module
-from itgraph.tg import pacing as pacing_module
 from itgraph.tg.backfill import backfill_channels
 from itgraph.tg.floods import UNKNOWN_METHOD, method_name
 
@@ -100,18 +98,6 @@ def test_an_unknown_wrapper_shape_does_not_crash() -> None:
 
 
 # --- recording, end to end --------------------------------------------
-
-
-@pytest.fixture
-def slept(monkeypatch: pytest.MonkeyPatch) -> list[float]:
-    taken: list[float] = []
-
-    async def sleep(seconds: float) -> None:
-        taken.append(seconds)
-
-    monkeypatch.setattr(pacing_module.asyncio, "sleep", sleep)
-    monkeypatch.setattr(backfill_module.asyncio, "sleep", sleep)
-    return taken
 
 
 @pytest.fixture

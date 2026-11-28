@@ -38,8 +38,6 @@ from itgraph.db.models import (
 from itgraph.db.raw import store_messages
 from itgraph.db.session import Database
 from itgraph.derive.edges import derive_graph
-from itgraph.tg import backfill as backfill_module
-from itgraph.tg import pacing as pacing_module
 from itgraph.tg.resolve import resolve_inventory
 
 SRC = 1000000001
@@ -47,31 +45,6 @@ FWD_ID = 2000000001  # discovered by forward, resolved by id
 FAIL_ID = 2000000002  # an id the session cannot place yet
 NEWCOMER = 3000000001  # what @newcomer resolves to
 MENTIONED_AT = datetime(2026, 3, 14, tzinfo=UTC)  # when a source named one
-
-
-@pytest.fixture
-def slept(monkeypatch: pytest.MonkeyPatch) -> list[float]:
-    """Record sleeps instead of taking them, on both paced paths.
-
-    Pacing sleeps in the resolver, FloodWait sleeps in the collector's
-    ``waiting_out_floods`` the resolver reuses — patch both.
-    """
-    taken: list[float] = []
-
-    async def sleep(seconds: float) -> None:
-        taken.append(seconds)
-
-    monkeypatch.setattr(pacing_module.asyncio, "sleep", sleep)
-    monkeypatch.setattr(backfill_module.asyncio, "sleep", sleep)
-    return taken
-
-
-@pytest.fixture
-def no_long_pauses(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Switch off the rare long pause, so a band assertion is decidable."""
-    from itgraph.config import settings
-
-    monkeypatch.setattr(settings, "pacing_long_pause_chance", 0.0)
 
 
 async def add_forward_channel(database: Database, tg_id: int) -> None:

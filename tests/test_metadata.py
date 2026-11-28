@@ -30,8 +30,6 @@ from itgraph.db.models import (
     RawChannel,
 )
 from itgraph.db.session import Database
-from itgraph.tg import backfill as backfill_module
-from itgraph.tg import pacing as pacing_module
 from itgraph.tg.backfill import backfill_channels
 from itgraph.tg.metadata import refresh_metadata
 
@@ -40,19 +38,6 @@ CHAT = FakeChannel(1000000002, "example_notes_chat", "Example Notes - chat")
 JOBS = FakeChannel(1000000005, "example_jobs", "Example Jobs")
 
 CUTOFF = datetime(2026, 5, 1, tzinfo=UTC)
-
-
-@pytest.fixture
-def slept(monkeypatch: pytest.MonkeyPatch) -> list[float]:
-    """Record sleeps instead of taking them."""
-    taken: list[float] = []
-
-    async def sleep(seconds: float) -> None:
-        taken.append(seconds)
-
-    monkeypatch.setattr(pacing_module.asyncio, "sleep", sleep)
-    monkeypatch.setattr(backfill_module.asyncio, "sleep", sleep)
-    return taken
 
 
 @pytest.fixture

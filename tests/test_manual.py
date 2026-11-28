@@ -33,34 +33,11 @@ from itgraph.db.models import (
     ResolutionOutcome,
 )
 from itgraph.db.session import Database
-from itgraph.tg import backfill as backfill_module
-from itgraph.tg import pacing as pacing_module
 from itgraph.tg.manual import Review, add_channels
 
 SRC = 1000000001
 NEW = 3000000001
 OTHER = 3000000002
-
-
-@pytest.fixture
-def slept(monkeypatch: pytest.MonkeyPatch) -> list[float]:
-    """Record sleeps instead of taking them, on both paced paths."""
-    taken: list[float] = []
-
-    async def sleep(seconds: float) -> None:
-        taken.append(seconds)
-
-    monkeypatch.setattr(pacing_module.asyncio, "sleep", sleep)
-    monkeypatch.setattr(backfill_module.asyncio, "sleep", sleep)
-    return taken
-
-
-@pytest.fixture
-def no_long_pauses(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Switch off the rare long pause, so a band assertion is decidable."""
-    from itgraph.config import settings
-
-    monkeypatch.setattr(settings, "pacing_long_pause_chance", 0.0)
 
 
 @pytest.fixture

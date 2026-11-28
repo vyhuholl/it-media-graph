@@ -273,3 +273,37 @@ def dialog_records() -> list[dict[str, Any]]:
 @pytest.fixture
 def telegram(dialog_records: list[dict[str, Any]]) -> FakeTelegramClient:
     return FakeTelegramClient(dialog_records)
+
+
+@pytest.fixture
+def slept(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Record sleeps instead of taking them, on both paced paths.
+
+    Both seams: pacing gaps come from ``tg.pacing``, FloodWait sleeps
+    from ``waiting_out_floods`` in ``tg.backfill``. One list, because
+    what most tests want to know is simply that a run never sleeps for
+    real.
+    """
+    from itgraph.tg import backfill as backfill_module
+    from itgraph.tg import pacing as pacing_module
+
+    taken: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        taken.append(seconds)
+
+    monkeypatch.setattr(pacing_module.asyncio, "sleep", sleep)
+    monkeypatch.setattr(backfill_module.asyncio, "sleep", sleep)
+    return taken
+
+
+@pytest.fixture
+def no_long_pauses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Switch off the rare long pause, so a band assertion is decidable.
+
+    Tests that care about the band want the band; the long pause has its
+    own test.
+    """
+    from itgraph.config import settings
+
+    monkeypatch.setattr(settings, "pacing_long_pause_chance", 0.0)
