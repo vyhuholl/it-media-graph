@@ -10,7 +10,7 @@ argument_specs:
       - Applies the objects, brings the schema to head, rolls out the workloads
         and checks what it can of each.
       - Never restores data, and never writes a Telegram session.
-    options: &main_options
+    options:
       itgraph_namespace:
         type: str
         required: true

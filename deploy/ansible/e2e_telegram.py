@@ -87,7 +87,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 {
                     "method": method,
                     "fields": fields,
-                    "raw": raw.decode(errors="replace"),
                 }
             )
         if method == "getMe":
