@@ -25,7 +25,7 @@ from itgraph.db.offsite import OffsiteError
 from itgraph.tg import auth as tg_auth
 from itgraph.tg import backfill as tg_backfill
 from itgraph.tg import client as tg_client
-from itgraph.tg.errors import WatchStalled
+from itgraph.tg.errors import NotAuthorizedError, WatchStalled
 
 runner = CliRunner()
 
@@ -150,7 +150,7 @@ def test_an_unauthorized_session_exits_non_zero(
 
     @asynccontextmanager
     async def refuse(command: str) -> AsyncIterator[None]:
-        raise tg_client.NotAuthorizedError("no authorized session at x")
+        raise NotAuthorizedError("no authorized session at x")
         yield  # pragma: no cover - unreachable by design
 
     monkeypatch.setattr(tg_client, "connected", refuse)
@@ -2108,14 +2108,6 @@ def test_offline_commands_do_not_import_telethon() -> None:
     )
 
     assert result.returncode == 0, result.stderr
-
-
-def test_the_networked_path_still_carries_the_exception() -> None:
-    """Moving it must not break the name every call site already uses."""
-    from itgraph.tg.client import NotAuthorizedError as from_client
-    from itgraph.tg.errors import NotAuthorizedError as from_errors
-
-    assert from_client is from_errors
 
 
 @pytest.fixture

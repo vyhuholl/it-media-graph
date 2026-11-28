@@ -100,7 +100,7 @@ from itgraph.tg.backfill import (
     RequestTimedOut,
     cached_peer,
     classify,
-    waiting_out_floods,
+    fetch_window,
     walk_page,
 )
 from itgraph.tg.errors import WatchStalled
@@ -139,7 +139,6 @@ class PollOutcome:
     stored: int = 0
     snapshots: int = 0
     late: int = 0
-    newest_id: int | None = None
 
 
 @dataclass(slots=True)
@@ -272,24 +271,6 @@ class _Walker:
     held_until: datetime | None = None
 
 
-async def _window(
-    client: TelegramClient,
-    entity: Any,
-    *,
-    size: int,
-    recorder: FloodRecorder,
-) -> list[Any]:
-    """The newest ``size`` messages of a channel, as one request."""
-
-    async def fetch() -> list[Any]:
-        return [
-            message
-            async for message in client.iter_messages(entity, limit=size)
-        ]
-
-    return await waiting_out_floods(fetch, recorder)
-
-
 async def poll_channel(
     client: TelegramClient,
     session: AsyncSession,
@@ -316,7 +297,9 @@ async def poll_channel(
 
     size = window_size(channel.posts_per_day)
     await pace(settings.watch_request_delay)
-    window = await _window(client, entity, size=size, recorder=recorder)
+    window = await fetch_window(
+        client, entity, offset_id=0, size=size, recorder=recorder
+    )
     if not window:
         return PollOutcome()
 
@@ -372,7 +355,6 @@ async def poll_channel(
         stored=stored,
         snapshots=snapshots,
         late=len(late),
-        newest_id=newest_id,
     )
 
 

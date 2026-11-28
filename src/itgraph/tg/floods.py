@@ -105,8 +105,8 @@ class FloodRecorder:
         """Write one event. Any failure is logged and then dropped.
 
         On a session of its own, never the caller's. The handler that
-        calls this runs mid-walk, and ``backfill_channel`` commits per
-        batch — so writing on the caller's session would mean either
+        calls this runs mid-walk, and ``walk_page`` commits per
+        page — so writing on the caller's session would mean either
         committing a half-finished batch or rolling it back inside the
         handler for an unrelated error, and that is how a run loses
         history it already fetched. A separate session is a separate

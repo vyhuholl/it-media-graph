@@ -63,17 +63,16 @@ from itgraph.tg.pacing import pace, pause_between_channels
 from itgraph.tg.payload import encode_payload
 
 __all__ = [
-    "ChannelRun",
     "FloodWaitTooLong",
     "PageOutcome",
     "PeerNotCached",
     "RequestTimedOut",
     "RunSummary",
-    "backfill_channel",
     "backfill_channels",
     "cached_peer",
     "ceiling_for",
     "classify",
+    "fetch_window",
     "walk_page",
 ]
 
@@ -142,19 +141,6 @@ class RequestTimedOut(TimeoutError):
             f"no answer within {seconds:.0f}s; abandoning the request. "
             "The connection is not usable and will be discarded."
         )
-
-
-@dataclass(slots=True)
-class ChannelRun:
-    """What one channel's walk did, and why it stopped.
-
-    ``capped`` means the ceiling ended it rather than the cutoff: this
-    channel has contributed all it is ever going to, and later runs will
-    not ask it for more.
-    """
-
-    stored: int = 0
-    capped: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -329,7 +315,7 @@ async def waiting_out_floods[T](
             await asyncio.sleep(seconds)
 
 
-async def _fetch_window(
+async def fetch_window(
     client: TelegramClient,
     entity: Any,
     *,
@@ -413,55 +399,6 @@ async def cached_peer(
         raise PeerNotCached(tg_id, username) from exc
 
 
-async def backfill_channel(
-    client: TelegramClient,
-    session: AsyncSession,
-    *,
-    channel_id: int,
-    username: str | None,
-    cutoff: datetime,
-    batch_size: int | None = None,
-    request_delay: float | None = None,
-    max_messages: int | None = None,
-    recorder: FloodRecorder,
-) -> ChannelRun:
-    """Walk one channel back to ``cutoff``, or until it holds its share.
-
-    Takes an id and a username rather than a mapped ``Channel`` on
-    purpose. This function commits, and its caller rolls back when a
-    channel fails; both expire mapped instances, and reading an attribute
-    off one afterwards is a lazy load that an async session cannot
-    perform. Plain values do not go stale, so the walk cannot be made to
-    depend on where the transaction happens to be.
-
-    Commits per batch, so the caller's session is left between
-    transactions rather than inside one. That is the point: an
-    interrupted walk must leave the cursor consistent with the rows.
-
-    ``max_messages`` bounds the channel, not the run. A channel that
-    reaches it is finished for good: the walk stops there and later runs
-    do not come back for the rest, however deep a cutoff they are given.
-    An aggregator that posts fifty times a day would otherwise be most of
-    the corpus, and it is the least informative node in the graph.
-    """
-    stored = 0
-    while True:
-        page = await walk_page(
-            client,
-            session,
-            channel_id=channel_id,
-            username=username,
-            cutoff=cutoff,
-            batch_size=batch_size,
-            request_delay=request_delay,
-            max_messages=max_messages,
-            recorder=recorder,
-        )
-        stored += page.stored
-        if page.done:
-            return ChannelRun(stored=stored, capped=page.capped)
-
-
 async def walk_page(
     client: TelegramClient,
     session: AsyncSession,
@@ -477,7 +414,7 @@ async def walk_page(
     """Ask for one page of a channel's history, older than what is held.
 
     One request at most, so that whoever calls it decides what comes
-    between two pages: `backfill_channel` asks for the next at once, the
+    between two pages: `itgraph backfill` asks for the next at once, the
     poll loop only once nothing is due. Everything a page needs is read
     from the database each time — the cursor, the rows held against the
     ceiling — which is what lets the loop take one page, poll a dozen
@@ -496,11 +433,6 @@ async def walk_page(
         else settings.backfill_request_delay
     )
     ceiling = ceiling_for(max_messages)
-
-    if not username:
-        raise ValueError(
-            f"{channel_id} has no username; there is nothing to resolve"
-        )
 
     # Counted from the rows, so the ceiling holds across runs and across
     # pages: what was collected last week, or by a poll a minute ago,
@@ -528,7 +460,7 @@ async def walk_page(
     # going to be stored, so the request buys nothing.
     want = size if remaining is None else min(size, remaining)
     await pace(delay)
-    window = await _fetch_window(
+    window = await fetch_window(
         client,
         entity,
         offset_id=offset_id or 0,
@@ -693,17 +625,25 @@ async def backfill_channels(
         worked = True
 
         try:
-            result = await backfill_channel(
-                client,
-                session,
-                channel_id=tg_id,
-                username=username,
-                cutoff=cutoff,
-                batch_size=batch_size,
-                request_delay=request_delay,
-                max_messages=max_messages,
-                recorder=recorder.for_channel(tg_id),
-            )
+            # Page after page until the walk is done: the cutoff crossed,
+            # the history run out, or the channel at its ceiling.
+            stored, capped = 0, False
+            while True:
+                page = await walk_page(
+                    client,
+                    session,
+                    channel_id=tg_id,
+                    username=username,
+                    cutoff=cutoff,
+                    batch_size=batch_size,
+                    request_delay=request_delay,
+                    max_messages=max_messages,
+                    recorder=recorder.for_channel(tg_id),
+                )
+                stored += page.stored
+                if page.done:
+                    capped = page.capped
+                    break
         except PeerNotCached as exc:
             # Not a failure: the channel is fine, this session simply has
             # never seen it. Recording it as failed would be worse than
@@ -735,16 +675,16 @@ async def backfill_channels(
             summary.failed += 1
             continue
 
-        if result.capped:
+        if capped:
             summary.capped += 1
         else:
             summary.completed += 1
-        summary.stored += result.stored
+        summary.stored += stored
         logger.info(
             "@%s: %d new messages%s",
             username,
-            result.stored,
-            " (ceiling reached)" if result.capped else "",
+            stored,
+            " (ceiling reached)" if capped else "",
         )
 
     return summary

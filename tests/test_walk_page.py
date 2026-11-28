@@ -1,7 +1,7 @@
 """One page of the history walk, as the poll loop takes it.
 
-`itgraph backfill` asks for page after page through `backfill_channel`,
-and its own suite holds that. These hold what the loop relies on when it
+`itgraph backfill` asks for page after page, and its own
+suite holds that. These hold what the loop relies on when it
 takes one page, polls a dozen channels and comes back: one request a
 call, everything read anew from the database, and the walk recorded
 complete the moment nothing older is to be asked for.

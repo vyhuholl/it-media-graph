@@ -49,9 +49,9 @@ from itgraph.tg import pacing as pacing_module
 from itgraph.tg.backfill import (
     FloodWaitTooLong,
     RequestTimedOut,
-    backfill_channel,
     backfill_channels,
     waiting_out_floods,
+    walk_page,
 )
 from itgraph.tg.floods import FloodRecorder
 
@@ -912,7 +912,7 @@ async def test_the_walker_refuses_a_channel_already_at_its_ceiling(
 
     later = client(histories={NOTES.id: history(40)})
     async with inventory.session() as session:
-        result = await backfill_channel(
+        page = await walk_page(
             later,
             session,
             channel_id=NOTES.id,
@@ -922,8 +922,8 @@ async def test_the_walker_refuses_a_channel_already_at_its_ceiling(
             recorder=FloodRecorder(inventory, CollectionCommand.BACKFILL),
         )
 
-    assert result.capped
-    assert result.stored == 0
+    assert page.asked is False
+    assert (page.done, page.capped, page.stored) == (True, True, 0)
     # Not even the username was resolved.
     assert later.resolved == []
     assert later.windows == []

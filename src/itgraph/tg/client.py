@@ -9,10 +9,6 @@ from telethon import TelegramClient
 from telethon.utils import maybe_async
 
 from itgraph.config import settings
-
-# Re-exported: the exception is defined without Telethon so that
-# `cli.py` can catch it in commands that never connect. Importing it
-# from here still works, and every existing call site does.
 from itgraph.tg.errors import NotAuthorizedError
 
 if TYPE_CHECKING:
@@ -22,7 +18,6 @@ if TYPE_CHECKING:
     from itgraph.db.session_lease import SessionLease
 
 __all__ = [
-    "NotAuthorizedError",
     "build_client",
     "connected",
     "connected_with_lease",

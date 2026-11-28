@@ -10,6 +10,7 @@ from pydantic import SecretStr
 from itgraph.config import ProxyType
 from itgraph.db import session_lease as session_lease_module
 from itgraph.tg import client as tg_client
+from itgraph.tg.errors import NotAuthorizedError
 
 # Obviously fake, because `tests/` is not excluded from the gitleaks
 # hook and a realistic-looking value would trip it.
@@ -61,7 +62,7 @@ def test_no_credentials_refuse_before_anything_is_built(
     with (
         caplog.at_level(logging.INFO, logger=tg_client.__name__),
         pytest.raises(
-            tg_client.NotAuthorizedError,
+            NotAuthorizedError,
             match="TELEGRAM_API_ID and TELEGRAM_API_HASH",
         ),
     ):
@@ -198,7 +199,7 @@ async def test_connected_refuses_an_unauthorized_session(
     client = FakeClient(authorized=False)
     fake.return_value = client
 
-    with pytest.raises(tg_client.NotAuthorizedError):
+    with pytest.raises(NotAuthorizedError):
         async with tg_client.connected("backfill"):
             pass
 
