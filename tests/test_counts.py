@@ -8,11 +8,29 @@ import pytest
 
 from itgraph.scoring.counts import (
     CEILING,
+    MEAN_FLOOR,
     count_z,
     fit_dispersion,
-    log_pmf,
     tail,
 )
+
+
+def log_pmf(observed: int, mean: float, dispersion: float) -> float:
+    """The pmf of the negative binomial, as a second implementation.
+
+    An oracle, not an import: it shares none of `counts.py`'s code, so
+    the two can only agree where the distribution itself agrees.
+    """
+    n = 1.0 / dispersion
+    mean = max(mean, MEAN_FLOOR)
+    return (
+        math.lgamma(observed + n)
+        - math.lgamma(n)
+        - math.lgamma(observed + 1.0)
+        + n * math.log(n / (n + mean))
+        + observed * math.log(mean / (n + mean))
+    )
+
 
 # (observed, mean, dispersion, P(X >= observed), z), computed once with
 # scipy.stats.nbinom.sf and norm.isf on 2026-11-07; scipy is not a
@@ -118,4 +136,5 @@ def test_a_known_dispersion_is_recovered(dispersion: float) -> None:
 
 
 def test_nothing_to_fit_is_no_dispersion() -> None:
+    """The bracket search never runs on an empty history."""
     assert fit_dispersion([]) is None

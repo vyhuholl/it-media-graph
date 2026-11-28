@@ -29,7 +29,6 @@ __all__ = [
     "MEAN_FLOOR",
     "count_z",
     "fit_dispersion",
-    "log_pmf",
     "tail",
 ]
 
@@ -145,19 +144,6 @@ def count_z(observed: int, mean: float, dispersion: float) -> float:
     return max(-CEILING, min(CEILING, -_NORMAL.inv_cdf(probability)))
 
 
-def log_pmf(observed: int, mean: float, dispersion: float) -> float:
-    """``log P(X = observed)``, for the likelihood a dispersion is fitted by."""
-    n = 1.0 / dispersion
-    mean = max(mean, MEAN_FLOOR)
-    return (
-        math.lgamma(observed + n)
-        - math.lgamma(n)
-        - math.lgamma(observed + 1.0)
-        + n * math.log(n / (n + mean))
-        + observed * math.log(mean / (n + mean))
-    )
-
-
 # Where the dispersion is looked for, on a log scale. A kind measured at
 # 0.4–17 on production; the bounds leave room on both sides.
 _LOWEST = math.log(0.01)
@@ -182,6 +168,8 @@ def fit_dispersion(pairs: Iterable[tuple[int, float]]) -> float | None:
     """
     data = [(observed, max(mean, MEAN_FLOOR)) for observed, mean in pairs]
     if not data:
+        # The bracket search would run on nothing and return its lower
+        # bound, which reads as a measurement.
         return None
 
     # The terms that do not move with the dispersion are left out, and the

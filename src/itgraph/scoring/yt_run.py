@@ -58,7 +58,6 @@ __all__ = [
     "YtSpikeSummary",
     "best_per_video",
     "prepare_readings",
-    "replay_yt_scoring",
     "run_yt_scoring",
     "sweep_yt_scoring",
 ]
@@ -692,28 +691,3 @@ async def sweep_yt_scoring(
         _replay(period, threshold=threshold, comments_min=minimum)
         for threshold in thresholds
     ]
-
-
-async def replay_yt_scoring(
-    database: Database,
-    *,
-    days: float,
-    now: datetime | None = None,
-    threshold: float | None = None,
-    comments_min: int | None = None,
-    late_settled: bool = False,
-) -> YtReplay:
-    """The replay at one threshold, the configured one unless given."""
-    [found] = await sweep_yt_scoring(
-        database,
-        days=days,
-        now=now,
-        thresholds=[
-            threshold
-            if threshold is not None
-            else settings.youtube_alert_spike_z
-        ],
-        comments_min=comments_min,
-        late_settled=late_settled,
-    )
-    return found

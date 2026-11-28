@@ -44,14 +44,12 @@ __all__ = [
     "AGE_BANDS",
     "BAND_EDGES_MINUTES",
     "REFERENCE_BAND",
-    "REFERENCE_SETTLED",
     "TELEGRAM_BANDS",
     "YOUTUBE_BANDS",
     "YOUTUBE_BAND_EDGES_MINUTES",
     "AgeBands",
     "Curve",
     "Observation",
-    "band_of",
     "fit_band_spreads",
     "fit_count_curve",
     "fit_curve",
@@ -183,10 +181,9 @@ YOUTUBE_BANDS = AgeBands(
     edges_minutes=YOUTUBE_BAND_EDGES_MINUTES, reference_age=timedelta(hours=24)
 )
 
-# Telegram's, under the names every caller before YouTube used.
+# Telegram's, under the names two settings and one loader read.
 AGE_BANDS: tuple[tuple[timedelta, timedelta, str], ...] = TELEGRAM_BANDS.bands
 REFERENCE_BAND = TELEGRAM_BANDS.reference
-REFERENCE_SETTLED = TELEGRAM_BANDS.settled
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,17 +233,6 @@ class Curve:
         """The fraction for this age, or ``None`` outside every band."""
         band = self.bands.band_of(age)
         return None if band is None else self.fractions.get(band)
-
-
-def band_of(age: timedelta, bands: AgeBands = TELEGRAM_BANDS) -> str | None:
-    """Which fitted band an age falls in, or ``None`` outside them all.
-
-    The bands are contiguous, so ``None`` now means only what it says:
-    the reading is younger than the first edge or older than the alerting
-    window. It no longer means "this age happens to sit between two
-    sample offsets", which is what it used to mean for 84% of readings.
-    """
-    return bands.band_of(age)
 
 
 def median(values: Sequence[float]) -> float:

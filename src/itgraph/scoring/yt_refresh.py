@@ -46,7 +46,6 @@ from itgraph.db.yt_baselines import (
 from itgraph.derive.yt_videos import Counters
 from itgraph.scoring.curves import (
     YOUTUBE_BANDS,
-    Curve,
     Observation,
     fit_count_curve,
     fit_curve,
@@ -325,11 +324,7 @@ def _stored(found: Fit, *, borrowed: bool) -> MetricFit:
         factor=found.factor,
         spread=found.spread,
         samples=found.samples,
-        curve=Curve(
-            fractions=found.curve.fractions,
-            samples=found.curve.samples,
-            bands=YOUTUBE_BANDS,
-        ),
+        curve=found.curve,
         band_spreads=found.band_spreads,
         dispersion=found.dispersion,
         borrowed=borrowed,

@@ -61,6 +61,7 @@ from itgraph.scoring.score import Best
 from itgraph.scoring.weeks import (
     WEEK,
     Candidate,
+    Ranked,
     Revival,
     WeekRefused,
     check_week,
@@ -68,9 +69,9 @@ from itgraph.scoring.weeks import (
     merge_best,
     pace_of,
     rank_revivals,
+    rank_week,
     week_bounds,
 )
-from itgraph.scoring.weeks import rank_week as rank_items
 from itgraph.scoring.yt_run import best_per_video, prepare_readings
 
 __all__ = [
@@ -79,7 +80,6 @@ __all__ = [
     "WeeklySummary",
     "check_week",
     "last_ended_week",
-    "rank_week",
     "run_weekly",
     "score_week",
     "second_wind",
@@ -146,35 +146,6 @@ def score_week(
         unreadable=everything.unreadable,
         unscored_readings=unscored,
     )
-
-
-@dataclass(frozen=True, slots=True)
-class Standing:
-    """A channel's best video of the week, and how many more reached the floor."""
-
-    channel_id: str
-    video_id: str
-    best: Best
-    others: int
-
-
-def rank_week(
-    best: Mapping[tuple[str, str], Best], *, floor: float
-) -> list[Standing]:
-    """Every channel with a video at or above the floor, best first.
-
-    The ranking is the platforms' shared one (``scoring.weeks``); this
-    names its items as videos.
-    """
-    return [
-        Standing(
-            channel_id=ranked.channel,
-            video_id=ranked.item,
-            best=ranked.best,
-            others=ranked.others,
-        )
-        for ranked in rank_items(best, floor=floor)
-    ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,7 +235,7 @@ class WeeklyRoute:
     route: YtAlertRoute
     videos_scored: int
     videos_above: int
-    standings: list[Standing]
+    standings: list[Ranked[str, str]]
     entries: list[NewEntry]
     second_wind_judged: int = 0
     second_wind_channels: int = 0
@@ -377,12 +348,14 @@ class WeeklySummary:
         return lines
 
 
-def _entries(standings: Sequence[Standing], *, size: int) -> list[NewEntry]:
+def _entries(
+    standings: Sequence[Ranked[str, str]], *, size: int
+) -> list[NewEntry]:
     return [
         NewEntry(
             rank=rank,
-            channel_id=standing.channel_id,
-            video_id=standing.video_id,
+            channel_id=standing.channel,
+            video_id=standing.item,
             scored_at=standing.best.scored_at,
             metric=YtMetric(standing.best.score.metric),
             value=standing.best.score.z,

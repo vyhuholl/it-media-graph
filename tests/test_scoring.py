@@ -15,10 +15,9 @@ import pytest
 
 from itgraph.scoring.curves import (
     AGE_BANDS,
-    REFERENCE_SETTLED,
+    TELEGRAM_BANDS,
     Curve,
     Observation,
-    band_of,
     fit_band_spreads,
     fit_curve,
     fit_factor,
@@ -81,10 +80,10 @@ def test_a_reading_lands_in_a_band_wherever_it_falls() -> None:
     The six offset windows this replaced covered 273 minutes out of the
     whole window, which discarded 84% of readings.
     """
-    assert band_of(timedelta(minutes=16)) == "15m"
-    assert band_of(timedelta(minutes=62)) == "48m"
+    assert TELEGRAM_BANDS.band_of(timedelta(minutes=16)) == "15m"
+    assert TELEGRAM_BANDS.band_of(timedelta(minutes=62)) == "48m"
     # Three hours used to sit between the two-hour and four-hour fits.
-    assert band_of(timedelta(hours=3)) == "150m"
+    assert TELEGRAM_BANDS.band_of(timedelta(hours=3)) == "150m"
 
 
 def test_the_bands_leave_no_gap() -> None:
@@ -95,8 +94,8 @@ def test_the_bands_leave_no_gap() -> None:
 
 def test_an_age_outside_the_window_belongs_to_no_band() -> None:
     """`None` now means only what it says: outside, not between."""
-    assert band_of(timedelta(minutes=5)) is None
-    assert band_of(timedelta(days=2)) is None
+    assert TELEGRAM_BANDS.band_of(timedelta(minutes=5)) is None
+    assert TELEGRAM_BANDS.band_of(timedelta(days=2)) is None
 
 
 # --- fitting --------------------------------------------------------
@@ -613,7 +612,7 @@ def test_a_reference_never_contains_the_post_or_what_followed() -> None:
 def test_a_post_whose_band_is_still_open_is_left_out() -> None:
     """Its largest reading so far is not its largest reading."""
     settled = [(timedelta(days=d), 100.0) for d in range(2, 12)]
-    still_open = REFERENCE_SETTLED - timedelta(minutes=1)
+    still_open = TELEGRAM_BANDS.settled - timedelta(minutes=1)
     posts = history(*settled, (still_open, 1.0))
 
     reference = reference_at(

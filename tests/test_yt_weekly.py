@@ -253,7 +253,7 @@ async def test_each_reading_is_scored_against_the_run_in_force(
 
     summary = await run_weekly(database, now=NOW, preview=True)
     (route,) = [r for r in summary.routes if r.route is YtAlertRoute.EN]
-    (standing,) = [s for s in route.standings if s.video_id == video_id(900)]
+    (standing,) = [s for s in route.standings if s.item == video_id(900)]
 
     assert summary.runs == 2
     assert standing.best.scored_at < later
@@ -484,7 +484,7 @@ def test_three_videos_of_a_channel_are_one_standing() -> None:
         floor=2.0,
     )
 
-    assert [(s.video_id, s.others) for s in found] == [("a1", 2)]
+    assert [(s.item, s.others) for s in found] == [("a1", 2)]
 
 
 def test_channels_rank_by_their_best_then_by_crossing_then_id() -> None:
@@ -499,4 +499,4 @@ def test_channels_rank_by_their_best_then_by_crossing_then_id() -> None:
         floor=2.0,
     )
 
-    assert [s.video_id for s in found] == ["c2", "b1", "d9", "a1"]
+    assert [s.item for s in found] == ["c2", "b1", "d9", "a1"]

@@ -14,7 +14,6 @@ import pytest
 from itgraph.scoring.curves import (
     AGE_BANDS,
     REFERENCE_BAND,
-    REFERENCE_SETTLED,
     TELEGRAM_BANDS,
     YOUTUBE_BANDS,
     AgeBands,
@@ -32,9 +31,7 @@ NOW = datetime(2026, 11, 20, 12, 0, tzinfo=UTC)
 
 def test_telegram_s_bands_are_what_they_were() -> None:
     assert TELEGRAM_BANDS.reference == REFERENCE_BAND == "420m"
-    assert (
-        TELEGRAM_BANDS.settled == REFERENCE_SETTLED == timedelta(minutes=570)
-    )
+    assert TELEGRAM_BANDS.settled == timedelta(minutes=570)
     assert TELEGRAM_BANDS.bands == AGE_BANDS
     assert AGE_BANDS[0][2] == "10m"
 

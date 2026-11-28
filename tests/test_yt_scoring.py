@@ -33,7 +33,6 @@ from itgraph.scoring.yt_refresh import refresh_yt_baselines
 from itgraph.scoring.yt_run import (
     Outcome,
     YtReplay,
-    replay_yt_scoring,
     run_yt_scoring,
     sweep_yt_scoring,
 )
@@ -645,7 +644,9 @@ async def test_a_replay_writes_nothing(database: Database) -> None:
     await world(database)
     await seed_videos(database, [fresh(900, 1, boost=5)])
 
-    found = await replay_yt_scoring(database, days=2, now=NOW, threshold=CLEAR)
+    [found] = await sweep_yt_scoring(
+        database, days=2, now=NOW, thresholds=[CLEAR]
+    )
 
     assert [spike.post_key[1] for spike in found.spikes] == [video_id(900)]
     assert await alerts(database) == []
@@ -675,8 +676,11 @@ async def test_a_replay_of_the_present_names_what_the_pass_named(
     )
 
     live = await run_yt_scoring(database, now=NOW)
-    replayed = await replay_yt_scoring(
-        database, days=(NOW - day_start) / timedelta(days=1), now=NOW
+    [replayed] = await sweep_yt_scoring(
+        database,
+        days=(NOW - day_start) / timedelta(days=1),
+        now=NOW,
+        thresholds=[settings.youtube_alert_spike_z],
     )
 
     assert {spike.post_key[1] for spike in replayed.spikes} == {
@@ -735,8 +739,12 @@ async def test_a_replay_scores_a_day_against_that_day_s_fit(
         ],
     )
 
-    found = await replay_yt_scoring(database, days=6, now=NOW)
-
+    [found] = await sweep_yt_scoring(
+        database,
+        days=6,
+        now=NOW,
+        thresholds=[settings.youtube_alert_spike_z],
+    )
     assert video_id(900) not in {spike.post_key[1] for spike in found.spikes}
 
 
@@ -755,7 +763,9 @@ async def test_a_replay_reports_per_language_and_folds(
         + [fresh(910, 4, boost=5)],
     )
 
-    found = await replay_yt_scoring(database, days=3, now=NOW, threshold=CLEAR)
+    [found] = await sweep_yt_scoring(
+        database, days=3, now=NOW, thresholds=[CLEAR]
+    )
 
     totals = found.per_language()
     assert totals["en"] == (3, 1, 2)
@@ -809,7 +819,9 @@ async def test_a_crossing_that_stays_high_held(database: Database) -> None:
         ],
     )
 
-    found = await replay_yt_scoring(database, days=6, now=NOW, threshold=CLEAR)
+    [found] = await sweep_yt_scoring(
+        database, days=6, now=NOW, thresholds=[CLEAR]
+    )
 
     [spike] = [s for s in found.spikes if s.post_key[1] == video_id(900)]
     assert found.outcome(spike) == Outcome.HELD
@@ -831,7 +843,9 @@ async def test_a_crossing_that_falls_back_faded(database: Database) -> None:
     }
     await seed_videos(database, [_shaped(900, 1, published, boosts=boosts)])
 
-    found = await replay_yt_scoring(database, days=6, now=NOW, threshold=CLEAR)
+    [found] = await sweep_yt_scoring(
+        database, days=6, now=NOW, thresholds=[CLEAR]
+    )
 
     [spike] = [s for s in found.spikes if s.post_key[1] == video_id(900)]
     assert found.outcome(spike) == Outcome.FADED
@@ -844,7 +858,9 @@ async def test_a_crossing_younger_than_three_days_is_too_early(
     await world(database)
     await seed_videos(database, [fresh(900, 1, boost=5)])
 
-    found = await replay_yt_scoring(database, days=2, now=NOW, threshold=CLEAR)
+    [found] = await sweep_yt_scoring(
+        database, days=2, now=NOW, thresholds=[CLEAR]
+    )
 
     [spike] = [s for s in found.spikes if s.post_key[1] == video_id(900)]
     assert found.outcome(spike) == Outcome.EARLY
@@ -888,9 +904,18 @@ async def test_a_replay_can_lower_the_comment_minimum(
         ],
     )
 
-    shipped = await replay_yt_scoring(database, days=2, now=NOW)
-    lowered = await replay_yt_scoring(
-        database, days=2, now=NOW, comments_min=5
+    [shipped] = await sweep_yt_scoring(
+        database,
+        days=2,
+        now=NOW,
+        thresholds=[settings.youtube_alert_spike_z],
+    )
+    [lowered] = await sweep_yt_scoring(
+        database,
+        days=2,
+        now=NOW,
+        thresholds=[settings.youtube_alert_spike_z],
+        comments_min=5,
     )
 
     def commented(found: YtReplay) -> set[str]:
@@ -941,11 +966,11 @@ async def test_late_settled_readings_score_the_days_before_them(
         ],
     )
 
-    strict = await replay_yt_scoring(
-        database, days=6, now=NOW, threshold=CLEAR
+    [strict] = await sweep_yt_scoring(
+        database, days=6, now=NOW, thresholds=[CLEAR]
     )
-    late = await replay_yt_scoring(
-        database, days=6, now=NOW, threshold=CLEAR, late_settled=True
+    [late] = await sweep_yt_scoring(
+        database, days=6, now=NOW, thresholds=[CLEAR], late_settled=True
     )
 
     [early] = [s for s in late.spikes if s.post_key[1] == video_id(900)]
