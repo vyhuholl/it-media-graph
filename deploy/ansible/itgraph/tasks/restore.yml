@@ -5,6 +5,9 @@
 # runs in the database's pod connects over its local socket. The dump crosses on stdin
 # and is read in the pod alone, and the session's volume is never touched.
 
+- name: Check the inputs
+  ansible.builtin.import_tasks: inputs.yml
+
 - name: Assert a restore belongs here
   ansible.builtin.assert:
     that:
@@ -15,12 +18,6 @@
       {% if ansible_check_mode %}The restore has no check mode.{% elif itgraph_telegram_collection | bool %}This
       environment collects: a restore would replace data that cannot be rebuilt.{% else %}itgraph_restore_allowed
       is not true. A restore replaces the data it lands on, and belongs in a test environment alone.{% endif %}
-    quiet: true
-
-- name: Assert the namespace is a DNS label
-  ansible.builtin.assert:
-    that: itgraph_namespace is match('^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$')
-    fail_msg: itgraph_namespace is not a DNS label.
     quiet: true
 
 # One line, the script in a variable: a folded block keeps the newline beside a more
