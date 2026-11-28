@@ -1,21 +1,50 @@
 {#- A pod the role runs once, reads and deletes: bare and not a Job, so that one
     expected to fail raises no shared alert.
 
+    The caller gives the name, the deadline, the containers and the volumes;
+    this fills the rest of the envelope every one-shot pod carries, so
+    INFRASTRUCTURE.md's requirement 7 is stated here and nowhere else. A
+    container that carries no security context gets the standard one; the
+    collector's trial passes the whole watch container, which has its own.
+
     It waits a moment before it does anything. The cluster's network policies reach a
     new pod a fraction of a second after it starts, and until then the database and
     the proxy refuse it: measured at about 0.3 s, enough to make a `curl` read a
     working proxy as a broken one. -#}
+{%- set container = __itgraph_shot.containers[0] -%}
 {%- set settle = {
       'name': 'settle',
-      'image': __itgraph_shot.spec.containers[0].image,
+      'image': container.image,
       'command': ['sleep', '3'],
       'securityContext': __itgraph_container_security,
       'resources': {'requests': {'cpu': '10m', 'memory': '16Mi'}, 'limits': {'memory': '64Mi'}},
     } -%}
+{%- set spec = {
+      'restartPolicy': 'Never',
+      'activeDeadlineSeconds': __itgraph_shot.deadline,
+      'automountServiceAccountToken': false,
+      'securityContext': __itgraph_pod_security,
+      'containers': [
+        container
+        | combine(
+            {'securityContext': __itgraph_container_security}
+            if container.securityContext is not defined
+            else {}
+        )
+      ],
+    }
+    | combine(
+        {'terminationGracePeriodSeconds': __itgraph_shot.termination_grace}
+        if __itgraph_shot.termination_grace is defined
+        else {}
+    )
+    | combine({'volumes': __itgraph_shot.volumes} if __itgraph_shot.volumes is defined else {})
+    | combine({'initContainers': [settle]})
+-%}
 apiVersion: v1
 kind: Pod
 metadata:
   name: {{ __itgraph_shot.name }}
   namespace: {{ itgraph_namespace | to_json }}
   labels: {{ ({'app': __itgraph_shot.name} | combine(__itgraph_shot.labels | default({}))) | to_json }}
-spec: {{ __itgraph_shot.spec | combine({'initContainers': [settle]}) | to_json }}
+spec: {{ spec | to_json }}

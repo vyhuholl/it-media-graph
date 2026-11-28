@@ -9,34 +9,29 @@
   vars:
     __itgraph_shot:
       name: itgraph-check-session
-      spec:
-        restartPolicy: Never
-        activeDeadlineSeconds: 120
-        automountServiceAccountToken: false
-        securityContext: "{{ __itgraph_pod_security }}"
-        containers:
-          - name: itgraph
-            image: "{{ itgraph_image }}"
-            command:
-              - sh
-              - -c
-              - test -f "$0" && test -s "$0"
-              - "{{ itgraph_session_path }}"
-            securityContext: "{{ __itgraph_container_security }}"
-            resources: "{{ __itgraph_job_resources }}"
-            volumeMounts:
-              - name: session
-                mountPath: /session
-                readOnly: true
-        volumes:
-          - "{{ __itgraph_session_volume }}"
+      deadline: 120
+      containers:
+        - name: itgraph
+          image: "{{ itgraph_image }}"
+          command:
+            - sh
+            - -c
+            - test -f "$0" && test -s "$0"
+            - "{{ itgraph_session_path }}"
+          resources: "{{ __itgraph_job_resources }}"
+          volumeMounts:
+            - name: session
+              mountPath: /session
+              readOnly: true
+      volumes:
+        - "{{ __itgraph_session_volume }}"
 
 - name: Assert the session is there
   ansible.builtin.assert:
     that: __itgraph_shot_result.phase == 'Succeeded'
     fail_msg: >-
-      No session at {{ itgraph_session_path }} in the session's volume, or it is empty, or not a regular
-      file, and nothing here creates or replaces one. Bring it from where it was collecting, by
+      No session at {{ itgraph_session_path }} in the session's volume, or it is empty, or not a
+      regular file, and nothing here creates or replaces one. Bring it from where it was collecting, by
       deploy/runbook.md. Do not create one with `itgraph login`: a new session has an empty entity cache,
       and every seed channel would be skipped.
     quiet: true

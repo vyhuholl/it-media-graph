@@ -98,19 +98,14 @@
   vars:
     __itgraph_shot:
       name: itgraph-check-revisions
-      spec:
-        restartPolicy: Never
-        activeDeadlineSeconds: 300
-        automountServiceAccountToken: false
-        securityContext: "{{ __itgraph_pod_security }}"
-        containers:
-          - name: itgraph
-            image: "{{ itgraph_image }}"
-            command: [alembic, history]
-            securityContext: "{{ __itgraph_container_security }}"
-            resources: "{{ __itgraph_job_resources }}"
-            volumeMounts: ["{{ __itgraph_tmp_mount }}"]
-        volumes: ["{{ __itgraph_tmp_volume }}"]
+      deadline: 300
+      containers:
+        - name: itgraph
+          image: "{{ itgraph_image }}"
+          command: [alembic, history]
+          resources: "{{ __itgraph_job_resources }}"
+          volumeMounts: ["{{ __itgraph_tmp_mount }}"]
+      volumes: ["{{ __itgraph_tmp_volume }}"]
 
 - name: Assert the image answered
   ansible.builtin.assert:

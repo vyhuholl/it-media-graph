@@ -12,17 +12,12 @@
     __itgraph_shot:
       name: itgraph-check-direct
       labels: "{{ __itgraph_may_reach_internet }}"
-      spec:
-        restartPolicy: Never
-        activeDeadlineSeconds: 120
-        automountServiceAccountToken: false
-        securityContext: "{{ __itgraph_pod_security }}"
-        containers:
-          - name: itgraph
-            image: "{{ itgraph_image }}"
-            command: [curl, -fsS, --max-time, "20", "https://api.ipify.org"]
-            securityContext: "{{ __itgraph_container_security }}"
-            resources: "{{ __itgraph_job_resources }}"
+      deadline: 120
+      containers:
+        - name: itgraph
+          image: "{{ itgraph_image }}"
+          command: [curl, -fsS, --max-time, "20", "https://api.ipify.org"]
+          resources: "{{ __itgraph_job_resources }}"
 
 - name: Keep the direct reading
   ansible.builtin.set_fact:
@@ -38,24 +33,19 @@
     __itgraph_shot:
       name: itgraph-check-proxied
       labels: "{{ __itgraph_may_reach_proxy }}"
-      spec:
-        restartPolicy: Never
-        activeDeadlineSeconds: 120
-        automountServiceAccountToken: false
-        securityContext: "{{ __itgraph_pod_security }}"
-        containers:
-          - name: itgraph
-            image: "{{ itgraph_image }}"
-            command:
-              - sh
-              - -c
-              - >-
-                ALL_PROXY="socks5://${PROXY_USERNAME}:${PROXY_PASSWORD}@${PROXY_HOST}:${PROXY_PORT}"
-                curl -fsS --max-time 20 https://api.ipify.org
-            envFrom:
-              - "{{ __itgraph_from_telegram }}"
-            securityContext: "{{ __itgraph_container_security }}"
-            resources: "{{ __itgraph_job_resources }}"
+      deadline: 120
+      containers:
+        - name: itgraph
+          image: "{{ itgraph_image }}"
+          command:
+            - sh
+            - -c
+            - >-
+              ALL_PROXY="socks5://${PROXY_USERNAME}:${PROXY_PASSWORD}@${PROXY_HOST}:${PROXY_PORT}"
+              curl -fsS --max-time 20 https://api.ipify.org
+          envFrom:
+            - "{{ __itgraph_from_telegram }}"
+          resources: "{{ __itgraph_job_resources }}"
 
 - name: Keep the proxied reading
   ansible.builtin.set_fact:

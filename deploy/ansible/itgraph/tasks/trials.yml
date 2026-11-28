@@ -14,22 +14,17 @@
     __itgraph_shot:
       name: itgraph-trial-baselines
       labels: "{{ __itgraph_may_reach_database }}"
-      spec:
-        restartPolicy: Never
-        activeDeadlineSeconds: 3600
-        automountServiceAccountToken: false
-        securityContext: "{{ __itgraph_pod_security }}"
-        containers:
-          - name: itgraph
-            image: "{{ itgraph_image }}"
-            args: [baselines]
-            envFrom:
-              - "{{ __itgraph_from_config }}"
-              - "{{ __itgraph_from_database }}"
-            securityContext: "{{ __itgraph_container_security }}"
-            resources: "{{ __itgraph_heavy_job_resources }}"
-            volumeMounts: ["{{ __itgraph_tmp_mount }}"]
-        volumes: ["{{ __itgraph_tmp_volume }}"]
+      deadline: 3600
+      containers:
+        - name: itgraph
+          image: "{{ itgraph_image }}"
+          args: [baselines]
+          envFrom:
+            - "{{ __itgraph_from_config }}"
+            - "{{ __itgraph_from_database }}"
+          resources: "{{ __itgraph_heavy_job_resources }}"
+          volumeMounts: ["{{ __itgraph_tmp_mount }}"]
+      volumes: ["{{ __itgraph_tmp_volume }}"]
 
 - name: Keep how the refresh ended
   ansible.builtin.set_fact:
@@ -63,22 +58,17 @@
     __itgraph_shot:
       name: itgraph-trial-yt-baselines
       labels: "{{ __itgraph_may_reach_database }}"
-      spec:
-        restartPolicy: Never
-        activeDeadlineSeconds: 3600
-        automountServiceAccountToken: false
-        securityContext: "{{ __itgraph_pod_security }}"
-        containers:
-          - name: itgraph
-            image: "{{ itgraph_image }}"
-            args: [yt, baselines]
-            envFrom:
-              - "{{ __itgraph_from_config }}"
-              - "{{ __itgraph_from_database }}"
-            securityContext: "{{ __itgraph_container_security }}"
-            resources: "{{ __itgraph_job_resources }}"
-            volumeMounts: ["{{ __itgraph_tmp_mount }}"]
-        volumes: ["{{ __itgraph_tmp_volume }}"]
+      deadline: 3600
+      containers:
+        - name: itgraph
+          image: "{{ itgraph_image }}"
+          args: [yt, baselines]
+          envFrom:
+            - "{{ __itgraph_from_config }}"
+            - "{{ __itgraph_from_database }}"
+          resources: "{{ __itgraph_job_resources }}"
+          volumeMounts: ["{{ __itgraph_tmp_mount }}"]
+      volumes: ["{{ __itgraph_tmp_volume }}"]
 
 - name: Keep how the YouTube refresh ended
   ansible.builtin.set_fact:
@@ -112,22 +102,17 @@
     __itgraph_shot:
       name: itgraph-trial-yt-weekly
       labels: "{{ __itgraph_may_reach_database }}"
-      spec:
-        restartPolicy: Never
-        activeDeadlineSeconds: 1800
-        automountServiceAccountToken: false
-        securityContext: "{{ __itgraph_pod_security }}"
-        containers:
-          - name: itgraph
-            image: "{{ itgraph_image }}"
-            args: [yt, weekly, --preview]
-            envFrom:
-              - "{{ __itgraph_from_config }}"
-              - "{{ __itgraph_from_database }}"
-            securityContext: "{{ __itgraph_container_security }}"
-            resources: "{{ __itgraph_job_resources }}"
-            volumeMounts: ["{{ __itgraph_tmp_mount }}"]
-        volumes: ["{{ __itgraph_tmp_volume }}"]
+      deadline: 1800
+      containers:
+        - name: itgraph
+          image: "{{ itgraph_image }}"
+          args: [yt, weekly, --preview]
+          envFrom:
+            - "{{ __itgraph_from_config }}"
+            - "{{ __itgraph_from_database }}"
+          resources: "{{ __itgraph_job_resources }}"
+          volumeMounts: ["{{ __itgraph_tmp_mount }}"]
+      volumes: ["{{ __itgraph_tmp_volume }}"]
 
 - name: Keep how the weekly list ended
   ansible.builtin.set_fact:
@@ -165,22 +150,17 @@
     __itgraph_shot:
       name: itgraph-trial-weekly
       labels: "{{ __itgraph_may_reach_database }}"
-      spec:
-        restartPolicy: Never
-        activeDeadlineSeconds: 1800
-        automountServiceAccountToken: false
-        securityContext: "{{ __itgraph_pod_security }}"
-        containers:
-          - name: itgraph
-            image: "{{ itgraph_image }}"
-            args: [weekly, --preview]
-            envFrom:
-              - "{{ __itgraph_from_config }}"
-              - "{{ __itgraph_from_database }}"
-            securityContext: "{{ __itgraph_container_security }}"
-            resources: "{{ __itgraph_job_resources }}"
-            volumeMounts: ["{{ __itgraph_tmp_mount }}"]
-        volumes: ["{{ __itgraph_tmp_volume }}"]
+      deadline: 1800
+      containers:
+        - name: itgraph
+          image: "{{ itgraph_image }}"
+          args: [weekly, --preview]
+          envFrom:
+            - "{{ __itgraph_from_config }}"
+            - "{{ __itgraph_from_database }}"
+          resources: "{{ __itgraph_job_resources }}"
+          volumeMounts: ["{{ __itgraph_tmp_mount }}"]
+      volumes: ["{{ __itgraph_tmp_volume }}"]
 
 - name: Keep how Telegram's weekly list ended
   ansible.builtin.set_fact:
@@ -209,26 +189,21 @@
     __itgraph_shot:
       name: itgraph-trial-backup
       labels: "{{ __itgraph_may_reach_database }}"
-      spec:
-        restartPolicy: Never
-        activeDeadlineSeconds: 3600
-        automountServiceAccountToken: false
-        securityContext: "{{ __itgraph_pod_security }}"
-        containers:
-          - name: itgraph
-            image: "{{ itgraph_image }}"
-            args: [backup, --full]
-            envFrom:
-              - "{{ __itgraph_from_config }}"
-              - "{{ __itgraph_from_database }}"
-            securityContext: "{{ __itgraph_container_security }}"
-            resources: "{{ __itgraph_job_resources }}"
-            volumeMounts:
-              - "{{ __itgraph_tmp_mount }}"
-              - "{{ __itgraph_backups_mount }}"
-        volumes:
-          - "{{ __itgraph_tmp_volume }}"
-          - "{{ __itgraph_backups_volume }}"
+      deadline: 3600
+      containers:
+        - name: itgraph
+          image: "{{ itgraph_image }}"
+          args: [backup, --full]
+          envFrom:
+            - "{{ __itgraph_from_config }}"
+            - "{{ __itgraph_from_database }}"
+          resources: "{{ __itgraph_job_resources }}"
+          volumeMounts:
+            - "{{ __itgraph_tmp_mount }}"
+            - "{{ __itgraph_backups_mount }}"
+      volumes:
+        - "{{ __itgraph_tmp_volume }}"
+        - "{{ __itgraph_backups_volume }}"
 
 - name: Assert the dump was made and read back
   ansible.builtin.assert:

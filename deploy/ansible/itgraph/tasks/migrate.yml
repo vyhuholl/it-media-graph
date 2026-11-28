@@ -10,27 +10,22 @@
     __itgraph_shot:
       name: itgraph-migrate
       labels: "{{ __itgraph_may_reach_database }}"
-      spec:
-        restartPolicy: Never
-        activeDeadlineSeconds: 3600
-        automountServiceAccountToken: false
-        securityContext: "{{ __itgraph_pod_security }}"
-        containers:
-          - name: itgraph
-            image: "{{ itgraph_image }}"
-            command: [alembic, upgrade, head]
-            env: "{{ [{'name': 'ITGRAPH_SKIP_BACKUP', 'value': '1'}] if __itgraph_migrate_without_dump | default(false) | bool else [] }}"
-            envFrom:
-              - "{{ __itgraph_from_config }}"
-              - "{{ __itgraph_from_database }}"
-            securityContext: "{{ __itgraph_container_security }}"
-            resources: "{{ __itgraph_heavy_job_resources }}"
-            volumeMounts:
-              - "{{ __itgraph_tmp_mount }}"
-              - "{{ __itgraph_backups_mount }}"
-        volumes:
-          - "{{ __itgraph_tmp_volume }}"
-          - "{{ __itgraph_backups_volume }}"
+      deadline: 3600
+      containers:
+        - name: itgraph
+          image: "{{ itgraph_image }}"
+          command: [alembic, upgrade, head]
+          env: "{{ [{'name': 'ITGRAPH_SKIP_BACKUP', 'value': '1'}] if __itgraph_migrate_without_dump | default(false) | bool else [] }}"
+          envFrom:
+            - "{{ __itgraph_from_config }}"
+            - "{{ __itgraph_from_database }}"
+          resources: "{{ __itgraph_heavy_job_resources }}"
+          volumeMounts:
+            - "{{ __itgraph_tmp_mount }}"
+            - "{{ __itgraph_backups_mount }}"
+      volumes:
+        - "{{ __itgraph_tmp_volume }}"
+        - "{{ __itgraph_backups_volume }}"
 
 - name: Assert the migration went through
   ansible.builtin.assert:

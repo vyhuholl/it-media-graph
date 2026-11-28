@@ -11,13 +11,14 @@
     __itgraph_shot:
       name: itgraph-check-collector
       labels: "{{ __itgraph_may_reach_database | combine(__itgraph_may_reach_proxy) }}"
-      spec: >-
-        {{ __itgraph_watch_spec | combine({
-             'restartPolicy': 'Never',
-             'activeDeadlineSeconds': 300,
-             'terminationGracePeriodSeconds': 10,
-             'containers': [__itgraph_watch_spec.containers[0] | combine({'args': ['watch', '--cycles', '1']})],
-           }) }}
+      # Own deadline and grace: the pod is expected to fail, and a poll
+      # needs its 90 s of grace to log its route before it goes.
+      deadline: 300
+      termination_grace: 10
+      # The watch container mounts the session's volume and /tmp; both
+      # volumes ride with it, read-only where the session is.
+      containers: "{{ [__itgraph_watch_spec.containers[0] | combine({'args': ['watch', '--cycles', '1']})] }}"
+      volumes: "{{ __itgraph_watch_spec.volumes }}"
 
 - name: Assert it got as far as connecting, and failed there
   ansible.builtin.assert:

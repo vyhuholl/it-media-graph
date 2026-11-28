@@ -1,7 +1,8 @@
 ---
 # Runs one pod to its end, reads its logs and deletes it, leaving the outcome in
-# __itgraph_shot_result. Given __itgraph_shot: a name, labels and a pod spec. The
-# spec is bounded by its own activeDeadlineSeconds, so the wait below always ends.
+# __itgraph_shot_result. Given __itgraph_shot: a name, a deadline, the containers
+# and any volumes; pod.yaml.j2 fills the envelope. The deadline bounds the wait
+# below, so it always ends.
 
 - name: "Clear what a killed run left - {{ __itgraph_shot.name }}"
   ansible.builtin.command:
@@ -19,7 +20,7 @@
     argv: "{{ __itgraph_in_namespace + ['get', 'pod', __itgraph_shot.name, '-o', 'jsonpath={.status.phase}'] }}"
   register: __itgraph_shot_phase
   until: __itgraph_shot_phase.stdout in ['Succeeded', 'Failed']
-  retries: "{{ (((__itgraph_shot.spec.activeDeadlineSeconds + 30) / [__itgraph_shot_poll | default(2), 1] | max) | int) + 1 }}"
+  retries: "{{ (((__itgraph_shot.deadline + 30) / [__itgraph_shot_poll | default(2), 1] | max) | int) + 1 }}"
   delay: "{{ __itgraph_shot_poll | default(2) }}"
   changed_when: false
 
