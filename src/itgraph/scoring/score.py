@@ -87,7 +87,7 @@ class Baseline:
     reference: float
     factor: float
     curve: Curve
-    spread: float
+    spread: float | None
     band_spreads: dict[str, float] = field(default_factory=dict)
     # A counted metric's dispersion, for its kind. ``None`` for the others,
     # and for a counted metric whose run measured none, which then scores
