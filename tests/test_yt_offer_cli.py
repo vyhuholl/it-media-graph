@@ -215,7 +215,7 @@ def test_a_preview_names_the_offers_by_id_and_writes_nothing(
     assert channel_id(TARGET) not in records
 
 
-def test_the_overflow_is_offered_the_next_day(database_url: str) -> None:
+def test_an_offered_channel_is_not_offered_again(database_url: str) -> None:
     asyncio.run(_arrange(database_url))
     runner.invoke(app, ["yt", "offer"])
 

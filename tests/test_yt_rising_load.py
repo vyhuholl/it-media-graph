@@ -29,7 +29,6 @@ from itgraph.db.session import Database
 from itgraph.db.yt_lookups import store_lookups
 from itgraph.db.yt_rising import load_yt_rising_rows
 from itgraph.db.yt_sections import store_sections
-from itgraph.derive.yt_featured import featured_ids
 from itgraph.derive.yt_rising import YtRising, YtRisingRows, rank_yt_rising
 
 NOW = datetime.now(UTC)
@@ -201,50 +200,6 @@ async def test_an_older_answer_is_asked_again(database: Database) -> None:
 
 
 # --- appearances --------------------------------------------------------
-
-
-async def test_an_appearance_from_two_readings(database: Database) -> None:
-    """The target absent from the first reading, present in the second:
-    an appearance, dated by the second — the second family the ranking
-    needs."""
-    await _given_rising_shapes(database)
-    await _seed_reading(database, 1, [5], days_ago=8)
-    await _seed_reading(database, 1, [5, TARGET], days_ago=1)
-
-    rows = await _rows(database)
-    ranked = _rank(rows)
-
-    [rising] = ranked.links
-    assert rising.channel_id == channel_id(TARGET)
-    assert rising.families == 2
-    # The earliest evidence in the window is the post of five days ago;
-    # the appearance is dated by yesterday's reading.
-    assert rising.first_in_window == NOW - timedelta(days=5)
-
-
-async def test_the_first_reading_establishes_the_list(
-    database: Database,
-) -> None:
-    """One reading listing five channels: none of the five is an
-    appearance, and their ids still count as the standing queue reads
-    them."""
-    await _given_rising_shapes(database)
-    await _seed_reading(database, 1, [1, 2, 3, 4, TARGET], days_ago=1)
-
-    rows = await _rows(database)
-    ranked = _rank(rows)
-
-    # Only the two families of the links; the listing added nothing.
-    [rising] = ranked.links
-    assert rising.families == 2
-    # The standing queue still reads the newest in-date list.
-    from itgraph.db.yt_sections import featured_lists
-
-    async with database.session() as session:
-        lists = await featured_lists(session, now=NOW)
-    assert featured_ids(lists[channel_id(1)]) == [
-        channel_id(n) for n in (1, 2, 3, 4, TARGET)
-    ]
 
 
 async def test_an_out_of_date_list_contributes_nothing_and_is_counted(

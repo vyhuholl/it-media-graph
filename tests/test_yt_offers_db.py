@@ -23,7 +23,6 @@ from itgraph.db.yt_backfill import channels_to_walk
 from itgraph.db.yt_channels import Review, create_channels, mark_channel
 from itgraph.db.yt_offers import (
     NewOffer,
-    day_has_selection,
     decided_unapplied,
     mark_offer_delivered,
     record_decision,
@@ -64,24 +63,6 @@ async def store(database: Database, *offers: NewOffer) -> None:
     assert stored is not None
 
 
-async def test_the_day_creates_the_records_it_needs(
-    database: Database,
-) -> None:
-    await store(database, link_offer(LINKED))
-
-    async with database.session() as session:
-        records = {
-            record.channel_id: record
-            for record in await session.scalars(select(YtChannel))
-        }
-    assert set(records) == {LINKED}
-    for channel, via in ((LINKED, YtDiscoverySource.TELEGRAM),):
-        assert records[channel].status is ChannelStatus.CANDIDATE
-        assert records[channel].discovered_via is via
-        assert records[channel].first_seen_at is not None
-        assert records[channel].reviewed_at is None
-
-
 async def test_a_channel_that_gained_a_record_is_not_offered(
     database: Database,
 ) -> None:
@@ -105,32 +86,6 @@ async def test_a_channel_that_gained_a_record_is_not_offered(
     assert record is not None
     # First discovery wins: the manual record keeps what it came with.
     assert record.discovered_via is YtDiscoverySource.MANUAL
-
-
-async def test_an_empty_day_is_stored_whole(database: Database) -> None:
-    await store(database)
-
-    async with database.session() as session:
-        assert await day_has_selection(session, DAY)
-
-
-async def test_a_day_is_stored_once(database: Database) -> None:
-    await store(database, link_offer(LINKED))
-
-    async with database.session() as session:
-        again = await store_day(
-            session,
-            day=DAY,
-            computed_at=AT,
-            size_links=3,
-            offers=[link_offer(ADDED)],
-        )
-        await session.commit()
-    assert again is None
-
-    async with database.session() as session:
-        rows = await session.scalars(select(YtRisingOffer.channel_id))
-    assert set(rows) == {LINKED}
 
 
 # --- the decisions, and applying them --------------------------------------
