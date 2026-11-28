@@ -307,8 +307,6 @@ __itgraph_cronjobs_always:
         args: [apply-reviews]
         env_from: ["{{ __itgraph_from_config }}", "{{ __itgraph_from_database }}"]
         resources: "{{ __itgraph_job_resources }}"
-    mounts: []
-    volumes: []
   - name: itgraph-baselines
     schedule: "{{ itgraph_baselines_schedule }}"
     starting_deadline: 82800
@@ -320,8 +318,6 @@ __itgraph_cronjobs_always:
         env_from: ["{{ __itgraph_from_config }}", "{{ __itgraph_from_database }}"]
         # The heaviest pass: the fit holds every channel's history at once.
         resources: "{{ __itgraph_heavy_job_resources }}"
-    mounts: []
-    volumes: []
   # YouTube's scoring needs no key and reaches the database alone, so it runs
   # in every environment: a test environment tries it on restored readings.
   - name: itgraph-yt-score
@@ -335,8 +331,6 @@ __itgraph_cronjobs_always:
         args: [yt, score]
         env_from: ["{{ __itgraph_from_config }}", "{{ __itgraph_from_database }}"]
         resources: "{{ __itgraph_job_resources }}"
-    mounts: []
-    volumes: []
   - name: itgraph-yt-baselines
     schedule: "{{ itgraph_yt_baselines_schedule }}"
     starting_deadline: 82800
@@ -347,8 +341,6 @@ __itgraph_cronjobs_always:
         args: [yt, baselines]
         env_from: ["{{ __itgraph_from_config }}", "{{ __itgraph_from_database }}"]
         resources: "{{ __itgraph_job_resources }}"
-    mounts: []
-    volumes: []
   - name: itgraph-yt-weekly
     schedule: "{{ itgraph_yt_weekly_schedule }}"
     # Six days: a host down over Monday still sends that week's list when it
@@ -361,8 +353,6 @@ __itgraph_cronjobs_always:
         args: [yt, weekly]
         env_from: ["{{ __itgraph_from_config }}", "{{ __itgraph_from_database }}"]
         resources: "{{ __itgraph_job_resources }}"
-    mounts: []
-    volumes: []
   # Telegram's weekly list reads collected data alone: no session, no key, so it
   # runs in every environment, into that environment's own chat.
   - name: itgraph-weekly
@@ -377,8 +367,6 @@ __itgraph_cronjobs_always:
         args: [weekly]
         env_from: ["{{ __itgraph_from_config }}", "{{ __itgraph_from_database }}"]
         resources: "{{ __itgraph_job_resources }}"
-    mounts: []
-    volumes: []
   # Telegram's rising channels, offered for review in the bot: read from
   # collected data alone, so it runs in every environment, into that
   # environment's own chat. Counts only in its output, never `--preview`.
@@ -394,8 +382,6 @@ __itgraph_cronjobs_always:
         args: [offer]
         env_from: ["{{ __itgraph_from_config }}", "{{ __itgraph_from_database }}"]
         resources: "{{ __itgraph_job_resources }}"
-    mounts: []
-    volumes: []
   # YouTube's rising channels, a day's selection for the bot to send:
   # ranked from collected data alone, so it runs in every environment,
   # into that environment's own chat. Where a key is configured the one
@@ -420,8 +406,6 @@ __itgraph_cronjobs_always:
           {{ [__itgraph_from_config, __itgraph_from_database]
              + ([__itgraph_from_youtube] if __itgraph_has_youtube | bool else []) }}
         resources: "{{ __itgraph_job_resources }}"
-    mounts: []
-    volumes: []
   # The text-embedding pass: needs only the database and the image,
   # which carries the model, so it runs in every environment — a test
   # environment embeds its restored texts like any other. The first
@@ -443,8 +427,6 @@ __itgraph_cronjobs_always:
         args: [embed]
         env_from: ["{{ __itgraph_from_config }}", "{{ __itgraph_from_database }}"]
         resources: "{{ __itgraph_embed_resources }}"
-    mounts: []
-    volumes: []
   - name: itgraph-backup
     schedule: "{{ itgraph_backup_schedule }}"
     starting_deadline: 10800
@@ -476,8 +458,6 @@ __itgraph_cronjobs_youtube:
         args: [yt, watch]
         env_from: "{{ __itgraph_youtube_env }}"
         resources: "{{ __itgraph_job_resources }}"
-    mounts: []
-    volumes: []
   - name: itgraph-yt-refresh
     schedule: "{{ itgraph_yt_refresh_schedule }}"
     starting_deadline: 82800
@@ -488,8 +468,6 @@ __itgraph_cronjobs_youtube:
         args: [yt, refresh]
         env_from: "{{ __itgraph_youtube_env }}"
         resources: "{{ __itgraph_job_resources }}"
-    mounts: []
-    volumes: []
   # Both lookup queues under the day's bounds, after the refresh has
   # read the featured lists. Counts only in its output.
   - name: itgraph-yt-lookup
@@ -504,8 +482,6 @@ __itgraph_cronjobs_youtube:
         args: [yt, rising-lookups]
         env_from: "{{ __itgraph_youtube_env }}"
         resources: "{{ __itgraph_job_resources }}"
-    mounts: []
-    volumes: []
 __itgraph_cronjobs_walk:
   - name: itgraph-yt-backfill
     schedule: "{{ itgraph_yt_backfill_schedule }}"
@@ -520,8 +496,6 @@ __itgraph_cronjobs_walk:
         args: [yt, backfill]
         env_from: "{{ __itgraph_youtube_env }}"
         resources: "{{ __itgraph_job_resources }}"
-    mounts: []
-    volumes: []
 __itgraph_cronjobs: >-
   {{ __itgraph_cronjobs_always
      + (__itgraph_cronjobs_youtube if __itgraph_has_youtube | bool else [])

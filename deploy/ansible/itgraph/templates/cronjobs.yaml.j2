@@ -35,7 +35,7 @@ spec:
               envFrom: {{ container.env_from | to_json }}
               securityContext: {{ __itgraph_container_security | to_json }}
               resources: {{ container.resources | to_json }}
-              volumeMounts: {{ ([__itgraph_tmp_mount] + job.mounts) | to_json }}
+              volumeMounts: {{ ([__itgraph_tmp_mount] + (job.mounts | default([]))) | to_json }}
 {% endfor %}
-          volumes: {{ ([__itgraph_tmp_volume] + job.volumes) | to_json }}
+          volumes: {{ ([__itgraph_tmp_volume] + (job.volumes | default([]))) | to_json }}
 {% endfor %}
