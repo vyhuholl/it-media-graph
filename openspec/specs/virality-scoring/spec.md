@@ -118,7 +118,7 @@ Samples are irregular by design: quiet hours, suspend and rate limits all cost r
 
 ### Requirement: Baselines Are Stored, Refreshed, And Carry Their Parameters
 
-The system SHALL store the channel baselines, the growth curves and the spread each was measured against, refresh them on a configured cadence, and record the parameters under which each was computed, including which kind of reference each channel was given.
+The system SHALL store the channel baselines, the growth curves and the spread each was measured against, refresh them on a configured cadence, and record the parameters under which each was computed, including which kind of reference each channel was given. A counted metric SHALL store no pooled spread: its ruler is its dispersion, and the count model reads no logarithm.
 
 #### Scenario: Scoring reads stored baselines
 

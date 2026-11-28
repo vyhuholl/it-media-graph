@@ -195,7 +195,7 @@ class YtBaselines:
     ]
     kinds: dict[str, YtChannelKind]
     factors: dict[tuple[YtChannelKind, YtVideoFormat, YtMetric], float]
-    spreads: dict[tuple[YtChannelKind, YtVideoFormat, YtMetric], float]
+    spreads: dict[tuple[YtChannelKind, YtVideoFormat, YtMetric], float | None]
     curves: dict[tuple[YtChannelKind, YtVideoFormat, YtMetric], Curve]
     band_spreads: dict[
         tuple[YtChannelKind, YtVideoFormat, YtMetric], dict[str, float]
@@ -230,12 +230,14 @@ class YtBaselines:
         )
         spread = self.spreads.get(key)
         curve = self.curves.get(key)
-        if factor is None or spread is None or curve is None:
+        if factor is None or curve is None:
             return None
         return Baseline(
             reference=median,
             factor=factor,
             curve=curve,
+            # A counted metric's ruler is its dispersion; its spread
+            # slot holds none, and the scorer never reads it.
             spread=spread,
             band_spreads=self.band_spreads.get(key, {}),
             dispersion=self.dispersions.get(key),
@@ -262,7 +264,7 @@ class MetricFit:
     """One kind, format and metric's fit, as stored."""
 
     factor: float
-    spread: float
+    spread: float | None
     samples: int
     curve: Curve
     band_spreads: Mapping[str, float]
@@ -427,7 +429,9 @@ async def load_yt_baselines(
         )
     }
     factors: dict[tuple[YtChannelKind, YtVideoFormat, YtMetric], float] = {}
-    spreads: dict[tuple[YtChannelKind, YtVideoFormat, YtMetric], float] = {}
+    spreads: dict[
+        tuple[YtChannelKind, YtVideoFormat, YtMetric], float | None
+    ] = {}
     dispersions: dict[
         tuple[YtChannelKind, YtVideoFormat, YtMetric], float
     ] = {}

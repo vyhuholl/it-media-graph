@@ -108,7 +108,7 @@ class Baselines:
     medians: dict[tuple[int, Metric], float]
     kinds: dict[int, ChannelKind]
     factors: dict[tuple[ChannelKind, Metric], float]
-    spreads: dict[tuple[ChannelKind, Metric], float]
+    spreads: dict[tuple[ChannelKind, Metric], float | None]
     curves: dict[tuple[ChannelKind, Metric], Curve]
     band_spreads: dict[tuple[ChannelKind, Metric], dict[str, float]]
     channels_in_scope: int
@@ -153,12 +153,14 @@ class Baselines:
         factor = 1.0 if recent else self.factors.get((kind, metric))
         spread = self.spreads.get((kind, metric))
         curve = self.curves.get((kind, metric))
-        if median is None or factor is None or spread is None or curve is None:
+        if median is None or factor is None or curve is None:
             return None
         return Baseline(
             reference=median,
             factor=factor,
             curve=curve,
+            # A counted metric's ruler is its dispersion; its spread
+            # slot holds none, and the scorer never reads it.
             spread=spread,
             band_spreads=self.band_spreads.get((kind, metric), {}),
             dispersion=self.dispersions.get((kind, metric)),
@@ -547,7 +549,7 @@ async def store_curves(
     *,
     curve: Curve,
     factor: float,
-    spread: float,
+    spread: float | None,
     samples: int,
     band_spreads: dict[str, float] | None = None,
     borrowed: bool = False,
@@ -675,7 +677,7 @@ async def load_baselines(
         references[pair] = median_row.reference
 
     factors: dict[tuple[ChannelKind, Metric], float] = {}
-    spreads: dict[tuple[ChannelKind, Metric], float] = {}
+    spreads: dict[tuple[ChannelKind, Metric], float | None] = {}
     dispersions: dict[tuple[ChannelKind, Metric], float] = {}
     for ruler in await session.scalars(
         select(MetricBaseline).where(MetricBaseline.run_id == run.id)

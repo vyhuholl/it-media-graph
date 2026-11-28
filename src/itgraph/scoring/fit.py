@@ -152,7 +152,7 @@ class Fit:
 
     curve: Curve
     factor: float
-    spread: float
+    spread: float | None
     band_spreads: dict[str, float]
     samples: int
     dispersion: float | None = None
@@ -243,26 +243,30 @@ def fit[C, P](
         band: [value for values in posts.values() for value in values]
         for band, posts in by_post.items()
     }
-    pooled = fit_spread(
-        [value for values in pooled_by_band.values() for value in values],
-        min_samples=floors.band_samples,
-    )
-    if pooled is None:
-        # Without a spread there is no z, and one borrowed from another
-        # metric would apply that metric's shape to this one.
-        return "no measurable spread"
-
-    dispersion: float | None = None
     if counted:
-        found = _dispersion(
+        # The log spread is the ruler of the other metrics; a count is
+        # scored by its dispersion alone, and asking a zero-heavy
+        # residual pool for a spread it has not got would refuse the fit
+        # for a ruler it will never read.
+        pooled = None
+        dispersion = _dispersion(
             entries,
             curve=curve,
             reference=reference,
             min_posts=floors.band_spread_posts,
         )
-        if isinstance(found, str):
-            return found
-        dispersion = found
+        if isinstance(dispersion, str):
+            return dispersion
+    else:
+        pooled = fit_spread(
+            [value for values in pooled_by_band.values() for value in values],
+            min_samples=floors.band_samples,
+        )
+        if pooled is None:
+            # Without a spread there is no z, and one borrowed from
+            # another metric would apply that metric's shape to this one.
+            return "no measurable spread"
+        dispersion = None
 
     return Fit(
         curve=curve,

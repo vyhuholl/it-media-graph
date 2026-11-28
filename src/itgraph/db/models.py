@@ -1651,8 +1651,10 @@ class MetricBaseline(Base):
     It is now the **fallback**, not the ruler: the dispersion is measured
     per age band on ``CurvePoint``, because it is not constant across a
     post's life — 1.18 at fifteen minutes against 0.98 at eight hours.
-    This figure is what a band too thin to measure its own falls back to,
-    which is why it is still fitted and still stored.
+    This figure is what a band too thin to measure its own falls back to.
+    A counted metric stores none here: its ruler is the ``dispersion``,
+    and a log spread it would never read was fitted for it until it
+    stopped.
 
     ``dispersion`` is comments' ruler instead: a count zero in half its
     readings has no logarithm worth a spread, so comments are scored as a
@@ -1682,7 +1684,8 @@ class MetricBaseline(Base):
     )
 
     factor: Mapped[float] = mapped_column(Float)
-    spread: Mapped[float] = mapped_column(Float)
+    # A counted metric stores none: its ruler is the dispersion beside.
+    spread: Mapped[float | None] = mapped_column(Float)
     samples: Mapped[int] = mapped_column(Integer)
     dispersion: Mapped[float | None] = mapped_column(Float)
 
@@ -2811,7 +2814,8 @@ class YtMetricBaseline(Base):
     )
 
     factor: Mapped[float] = mapped_column(Float)
-    spread: Mapped[float] = mapped_column(Float)
+    # A counted metric stores none: its ruler is the dispersion beside.
+    spread: Mapped[float | None] = mapped_column(Float)
     samples: Mapped[int] = mapped_column(Integer)
     dispersion: Mapped[float | None] = mapped_column(Float)
     borrowed: Mapped[bool] = mapped_column(
