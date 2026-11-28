@@ -1031,14 +1031,25 @@ class Settings(BaseSettings):
             )
         return self
 
-    @field_validator("telegram_api_id", "telegram_api_hash", mode="before")
+    # A blank line means unset, everywhere: `.env.example` and the role's
+    # templates write optional settings with nothing after the `=`. Taken
+    # literally each blank fails in its own way — an id that is not an
+    # integer, a key that 400s after a request was booked, a container a
+    # host without Docker has none of — and one validator answers for
+    # them all, before any per-field validation.
+    @field_validator(
+        "telegram_api_id",
+        "telegram_api_hash",
+        "youtube_api_key",
+        "postgres_container",
+        "alert_chat_id",
+        "telegram_alert_topic",
+        "youtube_alert_topic_en",
+        "youtube_alert_topic_ru",
+        mode="before",
+    )
     @classmethod
-    def _a_blank_credential_is_no_credential(cls, value: object) -> object:
-        """Read ``TELEGRAM_API_ID=`` as unset, as `.env.example` writes it.
-
-        Before validation, because a blank id is not an integer and would
-        otherwise fail as one, on a machine that runs nothing needing it.
-        """
+    def _a_blank_value_is_unset(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():
             return None
         return value
@@ -1206,21 +1217,6 @@ class Settings(BaseSettings):
             )
         return value
 
-    @field_validator(
-        "alert_chat_id",
-        "telegram_alert_topic",
-        "youtube_alert_topic_en",
-        "youtube_alert_topic_ru",
-        mode="before",
-    )
-    @classmethod
-    def _a_blank_id_is_no_id(cls, value: object) -> object:
-        """Read ``ALERT_CHAT_ID=`` as unset, as `.env.example` writes it,
-        rather than as an id that fails to parse."""
-        if isinstance(value, str) and not value.strip():
-            return None
-        return value
-
     @model_validator(mode="after")
     def _alert_chat_comes_with_its_topics(self) -> Self:
         """Refuse the chat without all its topics, or a topic alone.
@@ -1291,40 +1287,6 @@ class Settings(BaseSettings):
                 "no history"
             )
         return self
-
-    @field_validator("youtube_api_key", mode="after")
-    @classmethod
-    def _an_empty_key_is_no_key(
-        cls, value: SecretStr | None
-    ) -> SecretStr | None:
-        """Read ``YOUTUBE_API_KEY=`` as unset rather than as a key.
-
-        The deploy template and `.env.example` both write the line with
-        nothing after it on a host without a key. Taken literally that is
-        a key, and the first anyone would hear of it is a 400 from Google
-        after a request had been booked — instead of the sentence naming
-        the setting, before anything was spent.
-        """
-        if value is not None and not value.get_secret_value().strip():
-            return None
-        return value
-
-    @field_validator("postgres_container", mode="after")
-    @classmethod
-    def _an_empty_container_is_no_container(
-        cls, value: str | None
-    ) -> str | None:
-        """Read ``POSTGRES_CONTAINER=`` as unset rather than as a name.
-
-        The deploy template writes the line with nothing after it on the
-        collection host, where the tools come from the image instead.
-        Taken literally that is a container name, and the first anyone
-        would hear of it is a backup failing on `docker exec` into a
-        container that does not exist on a host that runs no Docker.
-        """
-        if value is not None and not value.strip():
-            return None
-        return value
 
     @model_validator(mode="after")
     def _youtube_schedule_is_reachable(self) -> Self:
