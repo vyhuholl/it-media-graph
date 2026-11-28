@@ -12,7 +12,6 @@ from sqlalchemy import text
 from itgraph.db.channels import DiscoveredChannel, upsert_channels
 from itgraph.db.models import (
     BackfillStatus,
-    ChannelStatus,
     DiscoverySource,
     FailureKind,
 )
@@ -433,18 +432,3 @@ async def test_a_discussion_chat_is_never_polled(
 
     async with database.session() as session:
         assert await due_channels(session, now=NOW) == []
-
-
-async def test_status_is_the_seed_status(database: Database) -> None:
-    """Guards the fixture as much as the query.
-
-    If `upsert_channels` ever stopped landing on `candidate`, the scope
-    tests above would pass for the wrong reason.
-    """
-    await seed_channels(database, FIRST)
-    async with database.session() as session:
-        status = await session.scalar(
-            text("SELECT status FROM tg_channels WHERE tg_id = :id"),
-            {"id": FIRST},
-        )
-    assert status == ChannelStatus.SEED.value

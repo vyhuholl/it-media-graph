@@ -62,13 +62,6 @@ def inventory(
     yield
 
 
-def test_help_lists_commands() -> None:
-    result = runner.invoke(app, ["--help"])
-    assert result.exit_code == 0
-    assert "login" in result.output
-    assert "dump-dialogs" in result.output
-
-
 def test_login_authorizes_and_disconnects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

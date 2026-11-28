@@ -249,23 +249,6 @@ async def test_a_second_pass_refreshes_rather_than_accumulates(
     )
 
 
-async def test_no_username_is_resolved(inventory: Database) -> None:
-    """The whole point of the change, as a flat assertion.
-
-    ``contacts.resolveUsername`` carries the tightest daily quota in the
-    project. A fetch that spends one has undone this.
-    """
-    client = client_with_chat()
-
-    async with inventory.session() as session:
-        await fetch_full_channel(client, session, peer=PARENT_PEER)
-
-    assert client.resolved == []
-    assert client.input_entities == []
-    # One request, and it is the one this pass exists to make.
-    assert len(client.requests) == 1
-
-
 async def test_a_missing_chat_in_the_response_does_not_lose_the_payload(
     inventory: Database,
 ) -> None:

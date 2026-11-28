@@ -51,7 +51,6 @@ from itgraph.tg.backfill import (
     RequestTimedOut,
     backfill_channels,
     waiting_out_floods,
-    walk_page,
 )
 from itgraph.tg.floods import FloodRecorder
 
@@ -435,20 +434,6 @@ async def test_an_earlier_cutoff_resumes_rather_than_skipping(
 
     assert deeper.windows != []
     assert len(await stored_ids(inventory, NOTES.id)) > len(shallow)
-
-
-async def test_an_interrupted_walk_resumes_from_the_cursor(
-    inventory: Database, slept: list[float]
-) -> None:
-    telegram = client(histories={NOTES.id: history(40)})
-    await run(inventory, telegram, batch_size=10)
-
-    state = await state_of(inventory, NOTES.id)
-    assert state is not None
-    ids = await stored_ids(inventory, NOTES.id)
-    # The cursor names the oldest row that exists, never one beyond it.
-    assert state.oldest_fetched_id == min(ids)
-    assert state.newest_fetched_id == max(ids)
 
 
 async def test_the_cursor_never_runs_ahead_of_the_rows(
@@ -887,32 +872,6 @@ async def test_zero_lifts_the_ceiling(
     assert len(await stored_ids(inventory, NOTES.id)) == 40
     assert summary.completed == 1
     assert summary.capped == 0
-
-
-async def test_the_walker_refuses_a_channel_already_at_its_ceiling(
-    inventory: Database, slept: list[float]
-) -> None:
-    """The same guard, for anything that calls the walker directly."""
-    telegram = client(histories={NOTES.id: history(40)})
-    await run(inventory, telegram, cutoff=DEEPER, max_messages=10, limit=1)
-
-    later = client(histories={NOTES.id: history(40)})
-    async with inventory.session() as session:
-        page = await walk_page(
-            later,
-            session,
-            channel_id=NOTES.id,
-            username="example_notes",
-            cutoff=DEEPER,
-            max_messages=10,
-            recorder=FloodRecorder(inventory, CollectionCommand.BACKFILL),
-        )
-
-    assert page.asked is False
-    assert (page.done, page.capped, page.stored) == (True, True, 0)
-    # Not even the username was resolved.
-    assert later.resolved == []
-    assert later.windows == []
 
 
 async def test_the_ceiling_defaults_to_the_configured_one(

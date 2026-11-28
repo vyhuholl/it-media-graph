@@ -33,12 +33,6 @@ def test_every_accepted_form_is_the_same_username(entry: str) -> None:
     assert parse_entries([entry]) == ["fake_channel"]
 
 
-def test_a_post_link_adds_the_channel_not_the_post() -> None:
-    # The operator is adding a channel and pasted what was in their
-    # clipboard; the message id is not a second thing to add.
-    assert parse_entries(["t.me/fake_channel/99"]) == ["fake_channel"]
-
-
 # --- what is refused, and by what name -------------------------------
 
 

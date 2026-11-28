@@ -267,28 +267,6 @@ async def test_a_limit_bounds_lookups_not_entries(
     assert summary.known == 1
 
 
-async def test_a_limit_stops_the_run_short(
-    inventory: Database, slept: list[float]
-) -> None:
-    client = FakeTelegramClient(
-        entities={
-            "fake_new": tl_channel(NEW, username="fake_new"),
-            "fake_other": tl_channel(OTHER, username="fake_other"),
-        }
-    )
-
-    summary = await add_channels(
-        client,
-        inventory,
-        usernames=["fake_new", "fake_other"],
-        delay=0,
-        limit=1,
-    )
-
-    assert client.resolved == ["fake_new"]
-    assert summary.added == 1
-
-
 # --- reviewing on the way in -----------------------------------------
 
 

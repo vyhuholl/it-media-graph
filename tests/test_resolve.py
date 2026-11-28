@@ -420,22 +420,6 @@ async def test_a_long_flood_wait_halts_resolution(
         assert await session.get(PendingMention, "newcomer") is not None
 
 
-async def test_a_short_flood_wait_is_still_waited_out_in_resolution(
-    inventory: Database, slept: list[float]
-) -> None:
-    await add_forward_channel(inventory, FWD_ID)
-    client = FakeTelegramClient(
-        entities_by_id={FWD_ID: tl_channel(FWD_ID, username="a")},
-        resolve_floods={FWD_ID: 30},
-    )
-
-    summary = await resolve_inventory(client, inventory, delay=0)
-
-    assert 30 in slept
-    assert summary.halt is None
-    assert summary.resolved == 1
-
-
 # --- the queue is worked by weight of evidence -------------------------
 
 

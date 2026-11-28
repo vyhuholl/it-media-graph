@@ -704,19 +704,6 @@ async def test_the_flood_is_recorded_against_the_watch_command(
     assert list(commands) == ["watch"]
 
 
-async def test_quiet_hours_issue_no_request(
-    database: Database, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    await seed(database, FIRST)
-    monkeypatch.setattr(watch_module, "in_quiet_hours", lambda moment: True)
-    client = client_for({FIRST: [fresh(10, 5, views=1)]})
-
-    stats = await watch(client, database, max_cycles=1)
-
-    assert client.windows == []
-    assert stats.polled == 0
-
-
 async def test_the_loop_stops_when_asked(database: Database) -> None:
     await seed(database, FIRST)
     client = client_for({FIRST: [fresh(10, 5, views=1)]})

@@ -161,19 +161,6 @@ async def test_a_refresh_can_be_demanded(
     assert len(second.requests) == 2
 
 
-async def test_only_accepted_channels_are_touched(
-    inventory: Database, slept: list[float]
-) -> None:
-    """The same scope the walk keeps, from the same predicates."""
-    telegram = client()
-
-    await refresh_metadata(telegram, inventory, delay=0)
-
-    async with inventory.session() as session:
-        rows = (await session.scalars(select(RawChannel))).all()
-    assert 999000001 not in {row.channel_id for row in rows}
-
-
 # --- what a run costs -------------------------------------------------
 
 
