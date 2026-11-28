@@ -845,7 +845,6 @@ until_true() { # <tries of a second> <what failed> <command...>
 		sleep 1
 	done
 }
-read_rows() { psql_in "$namespace" "$1"; }
 
 digest_sent() { [ "$(read_rows "SELECT count(*) FROM yt_alerts WHERE video_id LIKE 'e2eDigest%' AND delivery = 'digest' AND route = 'en'")" = 12 ]; }
 until_true 120 'the digest of twelve held alerts did not go out' digest_sent
