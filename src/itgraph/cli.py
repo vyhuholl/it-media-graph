@@ -227,7 +227,9 @@ def add(
     ] = None,
     limit: Annotated[
         int | None,
-        typer.Option("--limit", help="Make at most this many requests."),
+        typer.Option(
+            "--limit", min=1, help="Make at most this many requests."
+        ),
     ] = None,
     delay: Annotated[
         float | None,
@@ -276,8 +278,6 @@ def add(
         )
     if kind is not None and not seed:
         raise typer.BadParameter("--kind needs --seed")
-    if limit is not None and limit < 1:
-        raise typer.BadParameter("--limit must be at least 1")
 
     try:
         names = (
@@ -418,13 +418,13 @@ def mark(
 @app.command()
 def backfill(
     since: Annotated[
-        datetime | None,
+        datetime,
         typer.Option(
             "--since",
             formats=["%Y-%m-%d"],
             help="Fetch history no older than this date (YYYY-MM-DD).",
         ),
-    ] = None,
+    ],
     limit: Annotated[
         int | None,
         typer.Option("--limit", help="Process at most this many channels."),
@@ -441,6 +441,8 @@ def backfill(
         int | None,
         typer.Option(
             "--max-messages",
+            # A negative would read as "no ceiling": the opposite of a ceiling.
+            min=0,
             help=(
                 "Never collect more than this many messages from one "
                 "channel, ever (0 for no ceiling)."
@@ -461,14 +463,6 @@ def backfill(
     from itgraph.tg.backfill import backfill_channels
     from itgraph.tg.client import connected
 
-    if since is None:
-        raise typer.BadParameter(
-            "--since is required, e.g. --since 2026-01-01"
-        )
-    if max_messages is not None and max_messages < 0:
-        # Negative would otherwise read as "no ceiling", which is the
-        # opposite of what an operator typing a ceiling means.
-        raise typer.BadParameter("--max-messages cannot be negative")
     # Typer hands back a naive datetime; the column is timezone-aware and
     # comparing the two raises rather than silently guessing an offset.
     cutoff = since.replace(tzinfo=UTC)
@@ -625,8 +619,6 @@ def watch_status() -> None:
     be run while the loop is running would be reporting on the one state
     nobody can observe.
     """
-    from datetime import timedelta
-
     from itgraph.config import settings
     from itgraph.db.metrics import count_snapshots
     from itgraph.db.poll import queue_lag
@@ -692,9 +684,8 @@ def alerts() -> None:
     healthy state is silence, so "nothing travelled" and "nothing was
     derived" have to be distinguishable.
 
-    Expect about one alert a day. That is the measured rate at the only
-    threshold that is not noise, and it is why the delivery machinery
-    exists before the scoring that will fill it.
+    Expect about one alert a day: the measured rate at the only threshold
+    that is not noise.
     """
     from itgraph.alerts.run import run_cascades
     from itgraph.db.session import Database
@@ -1122,7 +1113,7 @@ def resolve(
             metavar="[TG_ID]",
             help=(
                 "Resolve only this channel, by the id the inventory "
-                "stores — the one `itgraph list` prints, without a "
+                "stores — the one `itgraph channels` prints, without a "
                 "`-100` prefix."
             ),
         ),
@@ -1146,6 +1137,7 @@ def resolve(
         int | None,
         typer.Option(
             "--min-sources",
+            min=0,
             help=(
                 "Only resolve usernames mentioned by at least this many "
                 "different channels."
@@ -1155,17 +1147,16 @@ def resolve(
 ) -> None:
     """Fill in username and title for channels discovered by reference.
 
-    The only command here that talks to Telegram, and it obeys the same
-    pacing and FloodWait rules as `backfill`. It resolves channels found
-    by forward (by id) and usernames left pending by a mention. Run
-    `derive` again afterwards to write the mention edges the newly
-    resolved channels unblock.
+    It obeys the same pacing and FloodWait rules as `backfill`. It
+    resolves channels found by forward (by id) and usernames left pending
+    by a mention. Run `derive` again afterwards to write the mention edges
+    the newly resolved channels unblock.
 
-    The username queue is worked most-mentioned first. It is also the only
-    place `contacts.resolveUsername` is spent — a couple of hundred a day,
-    no batching — so `--min-sources 2` is how a day's budget goes to the
-    references more than one channel thought worth making, rather than to
-    whatever arrived first.
+    The username queue is worked most-mentioned first.
+    `contacts.resolveUsername` — a couple of hundred a day, no batching —
+    is spent here and by `add`, nowhere else, so `--min-sources 2` is how
+    a day's budget goes to the references more than one channel thought
+    worth making, rather than to whatever arrived first.
 
     Given a TG_ID, the run is that one channel: one request, and the
     username queue is not worked at all. The named channel still has to
@@ -1178,8 +1169,6 @@ def resolve(
     from itgraph.tg.client import connected
     from itgraph.tg.resolve import resolve_inventory
 
-    if min_sources is not None and min_sources < 0:
-        raise typer.BadParameter("--min-sources cannot be negative")
     if tg_id is not None and limit is not None:
         raise typer.BadParameter("--limit means nothing beside one TG_ID")
     if tg_id is not None and min_sources is not None:
@@ -1543,7 +1532,7 @@ def affiliates(
     ] = None,
     limit: Annotated[
         int | None,
-        typer.Option("--limit", help="Show at most this many pairs."),
+        typer.Option("--limit", min=1, help="Show at most this many pairs."),
     ] = None,
     show_decided: Annotated[
         bool,
@@ -1603,8 +1592,6 @@ def affiliates(
         mutual=weight_mutual,
     )
     kinds = list(edge_kind) if edge_kind else list(EdgeKind)
-    if limit is not None and limit < 1:
-        raise typer.BadParameter("--limit must be at least 1")
 
     async def run() -> None:
         database = Database()
@@ -1879,8 +1866,7 @@ def channels(
 # --- YouTube ------------------------------------------------------------
 #
 # A sub-app of its own, so `itgraph --help` keeps listing Telegram's
-# commands and `itgraph yt --help` lists YouTube's. Only `add`, `refresh`
-# and `watch` make requests; everything else reads the database alone.
+# commands and `itgraph yt --help` lists YouTube's.
 
 yt_app = typer.Typer(
     no_args_is_help=True,
@@ -2387,7 +2373,6 @@ def yt_backfill(
             "playlists; name them"
         )
 
-    from itgraph.db.models import ChannelStatus
     from itgraph.db.session import Database
     from itgraph.db.yt_backfill import BackfillBusyError
     from itgraph.db.yt_channels import find_channel
@@ -2512,8 +2497,8 @@ def yt_mentions(
     """What the seeds' videos link to and mention, and which seeds do.
 
     Read from the stored titles and descriptions as they stand now, and
-    nothing is written: known channels, then targets change 5 will look
-    up, most seeds first; then what was counted and not followed. Makes
+    nothing is written: known channels, then the targets the lookup pass will
+    ask YouTube for, most seeds first; then what was counted and not followed.
     no request and needs no key.
 
     Prints handles read from YouTube, so it is for a person at a
@@ -2540,7 +2525,9 @@ def yt_mentions(
 def yt_tg_lookup(
     limit: Annotated[
         int | None,
-        typer.Option("--limit", help="Make at most this many requests."),
+        typer.Option(
+            "--limit", min=1, help="Make at most this many requests."
+        ),
     ] = None,
 ) -> None:
     """Ask YouTube whose the videos and handles the Telegram seeds link are.
@@ -2561,9 +2548,6 @@ def yt_tg_lookup(
     from itgraph.db.yt_quota import check_not_exhausted
     from itgraph.yt.client import youtube
     from itgraph.yt.tg_lookup import run_lookups
-
-    if limit is not None and limit < 1:
-        raise typer.BadParameter("--limit must be at least 1")
 
     async def run() -> None:
         database = Database()
@@ -2596,7 +2580,9 @@ def _say_looked_up(summary: LookupSummary) -> None:
 def yt_mention_lookup(
     limit: Annotated[
         int | None,
-        typer.Option("--limit", help="Make at most this many requests."),
+        typer.Option(
+            "--limit", min=1, help="Make at most this many requests."
+        ),
     ] = None,
 ) -> None:
     """Ask YouTube whose the handles and videos the seeds' videos link are.
@@ -2618,9 +2604,6 @@ def yt_mention_lookup(
     from itgraph.db.yt_quota import check_not_exhausted
     from itgraph.yt.client import youtube
     from itgraph.yt.mention_lookup import run_mention_lookups
-
-    if limit is not None and limit < 1:
-        raise typer.BadParameter("--limit must be at least 1")
 
     async def run() -> None:
         database = Database()
@@ -2709,8 +2692,6 @@ def yt_rising(
     review round, from the API. Makes no request, writes nothing, needs
     no API key.
     """
-    from datetime import UTC, datetime
-
     from itgraph.config import settings
     from itgraph.db.session import Database
     from itgraph.db.yt_rising import load_yt_rising_rows
@@ -3091,7 +3072,9 @@ def yt_search(
     ] = False,
     limit: Annotated[
         int | None,
-        typer.Option("--limit", help="Make at most this many requests."),
+        typer.Option(
+            "--limit", min=1, help="Make at most this many requests."
+        ),
     ] = None,
 ) -> None:
     """Search YouTube for channels to review, with your own queries.
@@ -3121,8 +3104,6 @@ def yt_search(
         raise typer.BadParameter(
             "give queries or --from-file, not both and not neither"
         )
-    if limit is not None and limit < 1:
-        raise typer.BadParameter("--limit must be at least 1")
     asked = read_queries(
         _read_input(from_file).splitlines()
         if from_file is not None
@@ -3245,7 +3226,9 @@ def yt_add(
     ] = None,
     limit: Annotated[
         int | None,
-        typer.Option("--limit", help="Make at most this many requests."),
+        typer.Option(
+            "--limit", min=1, help="Make at most this many requests."
+        ),
     ] = None,
     failures: Annotated[
         str | None,
@@ -3284,8 +3267,6 @@ def yt_add(
         raise typer.BadParameter(
             "give channels or --from-file, not both and not neither"
         )
-    if limit is not None and limit < 1:
-        raise typer.BadParameter("--limit must be at least 1")
 
     try:
         parsed = (
@@ -3761,7 +3742,7 @@ def yt_affiliates(
     ] = YT_DEFAULT_WEIGHTS.token,
     limit: Annotated[
         int | None,
-        typer.Option("--limit", help="Show at most this many pairs."),
+        typer.Option("--limit", min=1, help="Show at most this many pairs."),
     ] = None,
     show_decided: Annotated[
         bool,
@@ -3816,8 +3797,6 @@ def yt_affiliates(
         group=weight_group,
         token=weight_token,
     )
-    if limit is not None and limit < 1:
-        raise typer.BadParameter("--limit must be at least 1")
 
     async def run() -> None:
         database = Database()
