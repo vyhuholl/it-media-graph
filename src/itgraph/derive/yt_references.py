@@ -293,15 +293,14 @@ class Pending:
 
 @dataclass(slots=True)
 class Evidence:
-    """Which seeds, and which of their videos, reference one target.
+    """Which seeds reference one target, and how.
 
-    ``seeds`` is every seed naming it, however; ``linking`` the seeds
-    whose videos do, and ``featuring`` those whose featured lists do —
-    kept apart because a review queue may count one and not the other.
+    ``seeds`` is every seed naming it; ``linking`` those whose videos do,
+    ``featuring`` those whose featured lists do — kept apart because a
+    review queue may count one and not the other.
     """
 
     seeds: set[str] = field(default_factory=set)
-    videos: set[str] = field(default_factory=set)
     linking: set[str] = field(default_factory=set)
     featuring: set[str] = field(default_factory=set)
 
@@ -569,7 +568,6 @@ def _resolve_one(source: Source, known: Known, into: References) -> None:
         evidence = into.pending.setdefault(Pending(kind, value), Evidence())
         evidence.seeds.add(source.channel_id)
         evidence.linking.add(source.channel_id)
-        evidence.videos.add(source.video_id)
 
     def by_handle(handle: str) -> str | None:
         """The one channel carrying the handle; records an ambiguity."""
@@ -626,13 +624,11 @@ def ranked[T](
     *,
     key: Callable[[T], str],
     min_seeds: int = 1,
-    limit: int | None = None,
 ) -> list[tuple[T, frozenset[str]]]:
     """Targets with their seeds, most distinct seeds first, then by key.
 
     The count of distinct seeds is the only number worked out per
-    target: no weight, no score, nothing over the graph. ``limit`` of
-    ``None`` or zero lifts the bound.
+    target: no weight, no score, nothing over the graph.
     """
     rows = [
         (target, seeds)
@@ -640,7 +636,7 @@ def ranked[T](
         if len(seeds) >= min_seeds
     ]
     rows.sort(key=lambda row: (-len(row[1]), key(row[0])))
-    return rows[:limit] if limit else rows
+    return rows
 
 
 def _seeds_column(seeds: frozenset[str]) -> str:

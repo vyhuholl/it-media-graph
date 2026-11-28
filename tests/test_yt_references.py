@@ -394,7 +394,7 @@ def test_one_seed_linking_repeatedly_is_one_source() -> None:
     )
     evidence = references.pending[Pending(PendingKind.VIDEO, unknown)]
     assert evidence.seeds == {SEED_ONE}
-    assert len(evidence.videos) == 5
+    assert evidence.linking == {SEED_ONE}
 
 
 def test_a_legacy_name_is_pending() -> None:
@@ -562,8 +562,6 @@ def test_bounded_by_evidence_and_by_rows() -> None:
         "fake-three",
         "fake-two",
     ]
-    assert len(ranked(targets, key=str, limit=1)) == 1
-    assert len(ranked(targets, key=str, limit=0)) == 3
 
 
 def test_a_row_carries_the_target_and_its_seeds_and_nothing_else() -> None:
@@ -599,7 +597,6 @@ def test_a_featured_channel_outside_the_inventory_is_pending() -> None:
     assert evidence.seeds == {SEED_ONE}
     assert evidence.featuring == {SEED_ONE}
     assert evidence.linking == set()
-    assert evidence.videos == set()
 
 
 def test_featured_and_linked_are_two_references() -> None:

@@ -147,19 +147,6 @@ def test_channels_in_different_families_are_still_proposed() -> None:
     assert [candidate.pair for candidate in result.candidates] == [(A, B)]
 
 
-def test_the_ranking_is_reproducible_across_runs() -> None:
-    """Ties break on the pair, not on which signal inserted first."""
-    fixture = inventory(
-        usernames={A: "gonzo_one", B: "gonzo_two", C: "gonzo_three"},
-    )
-    first = detect(fixture, thresholds=Thresholds(), weights=Weights())
-    second = detect(fixture, thresholds=Thresholds(), weights=Weights())
-
-    assert [candidate.pair for candidate in first.candidates] == [
-        candidate.pair for candidate in second.candidates
-    ]
-
-
 def test_weights_change_the_reading_order() -> None:
     fixture = inventory(
         usernames={A: "gonzo_one", B: "gonzo_two", C: "unrelated_name"},

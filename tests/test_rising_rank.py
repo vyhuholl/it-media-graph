@@ -164,7 +164,7 @@ def test_a_pending_username_rises_by_its_sources_dates() -> None:
     )
 
     assert [item.username for item in ranking.awaiting] == ["fake_name"]
-    assert ranking.awaiting[0].is_name
+    assert ranking.awaiting[0].tg_id is None
     assert ranking.awaiting[0].families == 2
     # First mentioned by one of them before the window.
     assert ranking.awaiting[0].families_before == 1

@@ -140,10 +140,6 @@ class Rising:
     families_before: int
     first_in_window: datetime | None
 
-    @property
-    def is_name(self) -> bool:
-        return self.tg_id is None
-
 
 @dataclass(slots=True)
 class Ranking:

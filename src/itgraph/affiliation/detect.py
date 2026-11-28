@@ -25,7 +25,6 @@ from itgraph.affiliation.signals import (
     description_references,
     mutual_density,
     named_handle_tokens,
-    ordered,
     outgoing_concentration,
     shared_username_tokens,
 )
@@ -37,7 +36,6 @@ __all__ = [
     "InvalidParameterError",
     "Inventory",
     "detect",
-    "normalize_pair",
     "validate_parameters",
 ]
 
@@ -280,8 +278,3 @@ def _worth_proposing(pair: Pair, inventory: Inventory) -> bool:
     family_first = inventory.family_of.get(first, first)
     family_second = inventory.family_of.get(second, second)
     return family_first != family_second
-
-
-def normalize_pair(first: int, second: int) -> Pair:
-    """The stored order of a pair — re-exported for callers outside."""
-    return ordered(first, second)

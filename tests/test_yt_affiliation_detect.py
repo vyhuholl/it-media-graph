@@ -13,7 +13,6 @@ from itgraph.yt.affiliation.detect import (
     InvalidParameterError,
     Inventory,
     detect,
-    normalize_pair,
     validate_parameters,
 )
 from itgraph.yt.affiliation.signals import (
@@ -212,8 +211,3 @@ def test_a_negative_weight_is_refused() -> None:
 
 def test_the_defaults_validate() -> None:
     validate_parameters(DEFAULT_THRESHOLDS, DEFAULT_WEIGHTS)
-
-
-def test_pairs_are_normalized_to_their_stored_order() -> None:
-    assert normalize_pair(B, A) == (A, B)
-    assert normalize_pair(A, B) == (A, B)

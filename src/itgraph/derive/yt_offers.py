@@ -64,7 +64,6 @@ from itgraph.yt.errors import MissingKeyError, YtError
 
 __all__ = [
     "ApplySummary",
-    "Chosen",
     "OfferSummary",
     "apply_reviews",
     "choose_offers",
@@ -85,42 +84,25 @@ logger = logging.getLogger(__name__)
 BoughtPayloads = Mapping[str, Mapping[str, object]]
 
 
-@dataclass(frozen=True, slots=True)
-class Chosen:
-    """One channel the day takes, and the evidence the ranking counted."""
-
-    channel_id: str
-    families: int | None = None
-    families_before: int | None = None
-    first_in_window: datetime | None = None
-
-
 def choose_offers(
     links: Sequence[RisingChannel],
     offered: AbstractSet[str],
     *,
     size_links: int,
-) -> list[Chosen]:
+) -> list[RisingChannel]:
     """The day's offers: the ranking's head.
 
     ``links`` is the ranking's list, already in rank order. It skips
     channels offered before. What it does not take waits for the next
     day's selection, which ranks again.
     """
-    chosen: list[Chosen] = []
+    chosen: list[RisingChannel] = []
     for item in links:
         if len(chosen) >= size_links:
             break
         if item.channel_id in offered:
             continue
-        chosen.append(
-            Chosen(
-                channel_id=item.channel_id,
-                families=item.families,
-                families_before=item.families_before,
-                first_in_window=item.first_in_window,
-            )
-        )
+        chosen.append(item)
     return chosen
 
 
@@ -151,7 +133,7 @@ def strongest_sources(
     start = moment - timedelta(days=window_days)
 
     def families_of(
-        evidence: Sequence[LinkReference], source: YtDiscoverySource
+        evidence: Sequence[LinkReference],
     ) -> dict[str, set[FamilyKey]]:
         counted: dict[str, set[FamilyKey]] = {}
         for reference in evidence:
@@ -161,12 +143,9 @@ def strongest_sources(
         return counted
 
     streams = (
-        families_of(rows.links, YtDiscoverySource.TELEGRAM),
-        families_of(rows.references, YtDiscoverySource.MENTION),
-        families_of(
-            appearances(rows.featured, moment, answers_fresh_days),
-            YtDiscoverySource.FEATURED,
-        ),
+        families_of(rows.links),
+        families_of(rows.references),
+        families_of(appearances(rows.featured, moment, answers_fresh_days)),
     )
     strongest: dict[str, YtDiscoverySource] = {}
     for channel in streams[0].keys() | streams[1].keys() | streams[2].keys():
@@ -202,7 +181,7 @@ class OfferSummary:
     stored: bool = False
     # The day had its selection already, and nothing was written.
     already: bool = False
-    offers: list[Chosen] = field(default_factory=list)
+    offers: list[RisingChannel] = field(default_factory=list)
 
     def line(self) -> str:
         if self.already:
@@ -225,7 +204,7 @@ class OfferSummary:
 
 
 def _stored_offers(
-    chosen: Sequence[Chosen],
+    chosen: Sequence[RisingChannel],
     sources: Mapping[str, YtDiscoverySource],
 ) -> list[NewOffer]:
     return [
@@ -242,7 +221,7 @@ def _stored_offers(
 
 
 async def _buy_payloads(
-    database: Database, chosen: Sequence[Chosen]
+    database: Database, chosen: Sequence[RisingChannel]
 ) -> BoughtPayloads:
     """The offered channels' payloads, bought as the day is computed.
 

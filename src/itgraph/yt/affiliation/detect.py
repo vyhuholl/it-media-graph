@@ -24,7 +24,6 @@ from itgraph.yt.affiliation.signals import (
     Weights,
     YtRefDirection,
     corroborated_token_groups,
-    ordered,
     shared_title_tokens,
 )
 
@@ -36,7 +35,6 @@ __all__ = [
     "InvalidParameterError",
     "Inventory",
     "detect",
-    "normalize_pair",
     "validate_parameters",
 ]
 
@@ -225,8 +223,3 @@ def _worth_proposing(pair: Pair, inventory: Inventory) -> bool:
     family_first = inventory.family_of.get(first, first)
     family_second = inventory.family_of.get(second, second)
     return family_first != family_second
-
-
-def normalize_pair(first: str, second: str) -> Pair:
-    """The stored order of a pair — re-exported for callers outside."""
-    return ordered(first, second)

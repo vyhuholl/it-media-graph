@@ -8,9 +8,7 @@ database is therefore the backfill, an interrupted run is resumed by
 the next, and a model change re-embeds the corpus with no special mode.
 
 The YouTube join and its hash are stated here in SQL, so due rows are
-found without shipping every payload to Python; ``embed/text.py``
-states the same join in Python and the tests run both over the same
-fixtures, so the two cannot drift apart quietly.
+found without shipping every payload to Python.
 """
 
 from dataclasses import dataclass

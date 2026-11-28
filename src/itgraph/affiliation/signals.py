@@ -336,8 +336,7 @@ def shared_username_tokens(
     ``gonzo`` at identical rarity, and ``_tokens`` returns a *set*, whose
     iteration order for strings moves with the interpreter's hash seed.
     Without a total order here the same input reports a different token
-    from run to run, which the spec's reproducibility requirement
-    forbids and which is invisible until it is not.
+    from run to run, which is invisible until it is not.
     """
     by_token: dict[str, list[int]] = defaultdict(list)
     for channel_id, username in usernames.items():

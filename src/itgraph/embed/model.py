@@ -32,7 +32,6 @@ from tokenizers import Tokenizer
 # exactly what the key exists to prevent.
 MODEL_KEY = "multilingual-e5-small-o4"
 
-DIMENSION = 384
 MAX_TOKENS = 512
 # The design's neighbourly pod: four ONNX threads inside a 4-CPU limit.
 THREADS = 4
@@ -43,10 +42,6 @@ TOKENIZER_FILE = "tokenizer.json"
 
 QUERY_PREFIX = "query: "
 PASSAGE_PREFIX = "passage: "
-
-# The intfloat export is BERT-shaped in its inputs: XLM-R underneath,
-# but `token_type_ids` all the same, zeros for single-segment input.
-INPUT_NAMES = ("input_ids", "attention_mask", "token_type_ids")
 
 
 class EncodingLike(Protocol):
