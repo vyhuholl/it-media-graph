@@ -209,8 +209,8 @@ def _client_environment() -> dict[str, str] | None:
     return {**os.environ, "PGPASSWORD": url.password or ""}
 
 
-def existing(directory: Path, kind: BackupKind) -> list[Path]:
-    """Dumps of this kind, newest first.
+def existing(directory: Path, kind: BackupKind) -> list[tuple[datetime, Path]]:
+    """Dumps of this kind with the timestamp each name carries, newest first.
 
     A file whose name carries no readable timestamp is ignored rather
     than allowed to raise: this directory belongs to the operator, and
@@ -233,7 +233,7 @@ def existing(directory: Path, kind: BackupKind) -> list[Path]:
             logger.warning("ignoring %s: no timestamp in the name", path.name)
             continue
         dated.append((moment, path))
-    return [path for _, path in sorted(dated, reverse=True)]
+    return sorted(dated, reverse=True)
 
 
 def is_due(
@@ -254,10 +254,7 @@ def is_due(
     newest = existing(root / kind.subdirectory, kind)
     if not newest:
         return True
-    taken_at = _timestamp_of(newest[0])
-    if taken_at is None:  # pragma: no cover - `existing` filtered these
-        return True
-    return (now or datetime.now(UTC)) - taken_at >= kind.interval
+    return (now or datetime.now(UTC)) - newest[0][0] >= kind.interval
 
 
 def due_kinds(root: Path, *, now: datetime | None = None) -> list[BackupKind]:
@@ -501,15 +498,11 @@ def prune(
     surplus = existing(root / kind.subdirectory, kind)[kind.keep :]
     if kind.keep_for is not None:
         cutoff = (now or datetime.now(UTC)) - kind.keep_for
-        surplus = [
-            path
-            for path in surplus
-            if (taken := _timestamp_of(path)) is not None and taken < cutoff
-        ]
-    for path in surplus:
+        surplus = [(taken, path) for taken, path in surplus if taken < cutoff]
+    for _, path in surplus:
         logger.info("pruning %s", path.name)
         path.unlink(missing_ok=True)
-    return surplus
+    return [path for _, path in surplus]
 
 
 def run_backup(

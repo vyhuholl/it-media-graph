@@ -115,14 +115,4 @@ async def seeds_without_list(
     session: AsyncSession, *, now: datetime | None = None
 ) -> int:
     """How many seeds not marked gone have no in-date reading."""
-    newest = _newest_reading()
-    rows = await session.scalars(
-        select(YtChannel.channel_id)
-        .outerjoin(
-            newest,
-            (newest.c.channel_id == YtChannel.channel_id)
-            & (newest.c.fetched_at >= _cutoff(now)),
-        )
-        .where(_seeds(), newest.c.channel_id.is_(None))
-    )
-    return len(list(rows))
+    return len(await sections_due(session, older_than=_cutoff(now)))

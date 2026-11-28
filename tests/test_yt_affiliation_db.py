@@ -25,7 +25,6 @@ from itgraph.db.models import (
 )
 from itgraph.db.session import Database
 from itgraph.db.yt_affiliation import (
-    count_candidates_by_decision,
     list_candidates,
     load_inventory,
     record_run,
@@ -342,11 +341,9 @@ async def test_a_decided_pair_leaves_the_review_list_but_stays_readable(
     async with database.session() as session:
         pending = await list_candidates(session)
         everything = await list_candidates(session, include_decided=True)
-        counts = await count_candidates_by_decision(session)
 
     assert [row.channel_b for row in pending] == [C]
     assert len(everything) == 2
-    assert counts[AffiliationDecision.REJECTED] == 1
 
 
 async def test_reject_all_clears_the_list_and_only_the_list(

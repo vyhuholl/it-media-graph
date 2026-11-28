@@ -200,7 +200,7 @@ async def test_an_entry_s_evidence_is_read_at_sending(
     assert (evidence.counters.views, evidence.counters.likes) == (1500, None)
     # The reading the score came from.
     assert evidence.scored.views == 900
-    assert evidence.scored_comments == 12
+    assert evidence.scored.comments == 12
 
 
 async def test_a_second_run_at_once_is_told_the_week_is_stored(

@@ -37,14 +37,11 @@ class Database:
 
     @asynccontextmanager
     async def session(self) -> AsyncIterator[AsyncSession]:
-        """Session scope: commit on success, roll back on exception."""
+        """Commit on success. An exception leaves the session to close,
+        and closing rolls back whatever is pending."""
         async with self._session_factory() as session:
-            try:
-                yield session
-                await session.commit()
-            except Exception:
-                await session.rollback()
-                raise
+            yield session
+            await session.commit()
 
     async def dispose(self) -> None:
         await self._engine.dispose()

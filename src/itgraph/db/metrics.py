@@ -25,7 +25,6 @@ from itgraph.derive.metrics import Counters
 
 __all__ = [
     "count_snapshots",
-    "latest_observation",
     "latest_observations",
     "store_metrics",
 ]
@@ -93,18 +92,6 @@ async def count_snapshots(
     if since is not None:
         statement = statement.where(MessageMetric.observed_at >= since)
     return await session.scalar(statement) or 0
-
-
-async def latest_observation(
-    session: AsyncSession, *, channel_id: int, msg_id: int
-) -> datetime | None:
-    """When one message was last read, or ``None`` if it never was."""
-    statement = select(func.max(MessageMetric.observed_at)).where(
-        MessageMetric.channel_id == channel_id,
-        MessageMetric.msg_id == msg_id,
-    )
-    observed: datetime | None = await session.scalar(statement)
-    return observed
 
 
 async def latest_observations(

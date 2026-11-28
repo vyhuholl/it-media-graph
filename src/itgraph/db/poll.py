@@ -31,7 +31,6 @@ from itgraph.db.models import (
 __all__ = [
     "DueChannel",
     "QueueLag",
-    "count_overdue",
     "due_channels",
     "live_post_dates",
     "measure_posts_per_day",
@@ -263,19 +262,6 @@ async def postpone_all(session: AsyncSession, *, until: datetime) -> int:
     return len(moved.all())
 
 
-async def count_overdue(session: AsyncSession, *, now: datetime) -> int:
-    """How many in-scope channels are past their due moment."""
-    statement = (
-        select(func.count())
-        .select_from(Channel)
-        .outerjoin(BackfillState, BackfillState.channel_id == Channel.tg_id)
-        .outerjoin(PollState, PollState.channel_id == Channel.tg_id)
-        .where(*in_scope())
-        .where(or_(PollState.due_at.is_(None), PollState.due_at <= now))
-    )
-    return await session.scalar(statement) or 0
-
-
 async def queue_lag(session: AsyncSession, *, now: datetime) -> QueueLag:
     """The loop's state, as the status command reports it.
 
@@ -285,7 +271,14 @@ async def queue_lag(session: AsyncSession, *, now: datetime) -> QueueLag:
     reporting the two as one number would make a fresh install look
     catastrophically behind.
     """
-    overdue = await count_overdue(session, now=now)
+    overdue = await session.scalar(
+        select(func.count())
+        .select_from(Channel)
+        .outerjoin(BackfillState, BackfillState.channel_id == Channel.tg_id)
+        .outerjoin(PollState, PollState.channel_id == Channel.tg_id)
+        .where(*in_scope())
+        .where(or_(PollState.due_at.is_(None), PollState.due_at <= now))
+    )
     oldest = await session.scalar(
         select(func.min(PollState.due_at))
         .select_from(Channel)
@@ -296,5 +289,5 @@ async def queue_lag(session: AsyncSession, *, now: datetime) -> QueueLag:
     )
     tracked = await session.scalar(select(func.count()).select_from(PollState))
     return QueueLag(
-        overdue=overdue, oldest_due_at=oldest, tracked=tracked or 0
+        overdue=overdue or 0, oldest_due_at=oldest, tracked=tracked or 0
     )

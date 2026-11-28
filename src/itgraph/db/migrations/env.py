@@ -26,12 +26,8 @@ from itgraph.db.models import Base
 
 log = logging.getLogger("alembic.env")
 
-# this is the Alembic Config object, which provides
-# access to the values within the .ini file in use.
 config = context.config
 
-# Interpret the config file for Python logging.
-# This line sets up loggers basically.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
@@ -46,17 +42,7 @@ target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
-    """Run migrations in 'offline' mode.
-
-    This configures the context with just a URL
-    and not an Engine, though an Engine is acceptable
-    here as well.  By skipping the Engine creation
-    we don't even need a DBAPI to be available.
-
-    Calls to context.execute() here emit the given string to the
-    script output.
-
-    """
+    """Print the migrations as SQL, connecting to nothing."""
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
         url=url,
@@ -82,10 +68,7 @@ def do_run_migrations(connection: Connection) -> None:
 
 
 async def run_async_migrations() -> None:
-    """In this scenario we need to create an Engine
-    and associate a connection with the context.
-
-    """
+    """Migrate over one connection of an engine built for the URL."""
 
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
@@ -109,21 +92,24 @@ def direction() -> str:
     """``"upgrade"``, ``"downgrade"``, or something else entirely.
 
     The direction is the function ``alembic.command`` hands to the
-    environment, reachable only through the proxy's private handle on the
-    live ``EnvironmentContext`` — Alembic publishes no accessor for it.
-    That is a deliberate trade: this reads the actual direction rather
-    than pattern-matching a command line, and ``tests/test_guard.py``
-    drives a real ``alembic downgrade`` through it, so a future Alembic
-    moving this attribute fails the suite instead of leaving the barrier
-    quietly open.
+    environment, reachable only through the proxy Alembic installs as a
+    module global for the live ``EnvironmentContext`` — it publishes no
+    accessor for it. That is a deliberate trade: this reads the actual
+    direction rather than pattern-matching a command line, and
+    ``tests/test_guard.py`` drives a real ``alembic downgrade`` through
+    it, so a future Alembic moving this global fails the command, and
+    then the suite, instead of leaving the barrier quietly open.
 
     Commands that are neither — ``check``, ``revision``, ``stamp`` — name
     their function something else and fall through both branches below.
     """
-    proxy = getattr(context, "_proxy", None)
-    if proxy is None:  # pragma: no cover - no environment to act on
-        return ""
-    return str(getattr(proxy.context_opts.get("fn"), "__name__", ""))
+    fn = context.__dict__["_proxy"].context_opts.get("fn")
+    if fn is None:
+        # No alembic command runs this file without one. Refused rather
+        # than read as "neither direction", which would migrate with
+        # neither the guard nor the dump.
+        raise RuntimeError("alembic gave no direction: refusing to migrate")
+    return str(fn.__name__)
 
 
 def guard_downgrade(url: str) -> None:

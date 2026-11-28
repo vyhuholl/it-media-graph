@@ -17,7 +17,6 @@ from itgraph.db.models import (
     FailureKind,
 )
 from itgraph.db.poll import (
-    count_overdue,
     due_channels,
     live_post_dates,
     measure_posts_per_day,
@@ -357,7 +356,6 @@ async def test_the_queue_reports_its_lag(database: Database) -> None:
 
     async with database.session() as session:
         lag = await queue_lag(session, now=NOW)
-        assert await count_overdue(session, now=NOW) == 1
 
     assert lag.overdue == 1
     assert lag.oldest_due_at == NOW - timedelta(hours=2)

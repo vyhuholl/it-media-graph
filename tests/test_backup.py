@@ -19,6 +19,7 @@ from itgraph.db import backup as backup_module
 from itgraph.db.backup import (
     STAMP_FORMAT,
     BackupError,
+    BackupKind,
     due_kinds,
     existing,
     full_kind,
@@ -49,13 +50,18 @@ def dump_at(root: Path, kind_name: str, subdir: str, when: datetime) -> Path:
     return path
 
 
+def paths(directory: Path, kind: BackupKind) -> list[Path]:
+    """What `existing` found, as the paths alone."""
+    return [path for _, path in existing(directory, kind)]
+
+
 def test_a_stray_file_does_not_stop_the_backup(tmp_path: Path) -> None:
     """The backup directory belongs to the operator, not to this module."""
     good = dump_at(tmp_path, "inventory", "daily", NOW - timedelta(hours=2))
     stray = tmp_path / "daily" / "inventory-notes.dump"
     stray.write_bytes(b"whatever this is")
 
-    assert existing(tmp_path / "daily", inventory_kind()) == [good]
+    assert paths(tmp_path / "daily", inventory_kind()) == [good]
     assert not is_due(tmp_path, inventory_kind(), now=NOW)
     assert stray.exists()
 
@@ -437,7 +443,7 @@ def test_the_pointer_is_not_a_dump(
     take_backup(full_kind(), tmp_path, now=NOW)
 
     with caplog.at_level("WARNING"):
-        found = existing(tmp_path / "weekly", full_kind())
+        found = paths(tmp_path / "weekly", full_kind())
 
     assert len(found) == 1
     assert not found[0].is_symlink()
@@ -460,9 +466,7 @@ def test_pruning_leaves_the_pointer_alone(
     link = latest_link(tmp_path / "weekly", full_kind())
     assert link.is_symlink()
     assert link.resolve() == newest.path.resolve()
-    assert len(existing(tmp_path / "weekly", full_kind())) == (
-        full_kind().keep
-    )
+    assert len(paths(tmp_path / "weekly", full_kind())) == (full_kind().keep)
 
 
 def test_a_failed_dump_does_not_move_the_pointer(
@@ -525,7 +529,7 @@ def test_a_premigration_dump_is_read_with_its_stamp(
     )
 
     with caplog.at_level("WARNING"):
-        found = existing(tmp_path / "premigration", premigration_kind())
+        found = paths(tmp_path / "premigration", premigration_kind())
 
     assert found == [dump]
     assert caplog.text == ""
@@ -574,7 +578,7 @@ def test_a_day_of_migrations_leaves_the_full_dumps_alone(
 
     assert names_in(tmp_path / "weekly") == before
     assert latest_link(tmp_path / "weekly", full_kind()).resolve() == pointer
-    assert len(existing(tmp_path / "premigration", premigration_kind())) == 3
+    assert len(paths(tmp_path / "premigration", premigration_kind())) == 3
 
 
 def test_pruning_the_full_tier_leaves_premigration_dumps_alone(
@@ -653,7 +657,7 @@ def test_a_sixth_migration_removes_the_oldest_premigration_dump_alone(
 
     (taken,) = run_backup(tmp_path, kinds=[premigration_kind()], now=NOW)
 
-    survivors = existing(tmp_path / "premigration", premigration_kind())
+    survivors = paths(tmp_path / "premigration", premigration_kind())
     assert survivors == [taken.path, *older[:-1]]
     assert names_in(tmp_path / "daily") == daily
     assert names_in(tmp_path / "weekly") == weekly
@@ -721,7 +725,7 @@ def test_the_premigration_dump_is_read_back_before_it_counts(
         take_backup(premigration_kind(), tmp_path, now=NOW)
 
     directory = tmp_path / "premigration"
-    assert existing(directory, premigration_kind()) == []
+    assert paths(directory, premigration_kind()) == []
     assert not latest_link(directory, premigration_kind()).exists()
 
 

@@ -35,7 +35,6 @@ from itgraph.db.models import (
 
 __all__ = [
     "CandidateRow",
-    "count_candidates_by_decision",
     "family_keys",
     "family_of",
     "list_candidates",
@@ -378,15 +377,3 @@ async def list_candidates(
             await session.execute(query)
         ).all()
     ]
-
-
-async def count_candidates_by_decision(
-    session: AsyncSession,
-) -> dict[AffiliationDecision, int]:
-    """How many pairs sit in each decision state."""
-    rows = await session.execute(
-        select(AffiliationCandidate.decision, func.count()).group_by(
-            AffiliationCandidate.decision
-        )
-    )
-    return {decision: count for decision, count in rows.all()}

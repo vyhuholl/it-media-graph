@@ -420,8 +420,6 @@ class YtEvidence:
     started_at: datetime | None
     counters: Counters
     counted_at: datetime | None
-    # A comment spike's count, from the reading it was scored on.
-    scored_comments: int | None
     # Every counter of the reading it was scored on, absent ones absent.
     scored: Counters = field(default_factory=Counters)
     # Worked out from the payload when the caller asks, never stored.
@@ -517,7 +515,6 @@ async def video_evidence(
             else Counters()
         ),
         counted_at=newest[0] if newest is not None else None,
-        scored_comments=scored.comments,
         scored=scored,
         format=(
             format_of(payload, short_max_seconds=short_max_seconds)

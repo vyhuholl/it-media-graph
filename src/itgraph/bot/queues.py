@@ -395,7 +395,7 @@ class YoutubeQueue(Queue[yt.YtPendingAlert]):
             now=now,
             zone=destination.zone,
             observed=(
-                evidence.scored_comments
+                evidence.scored.comments
                 if alert.kind is YtAlertKind.COMMENT_SPIKE
                 else None
             ),
@@ -429,7 +429,7 @@ class YoutubeQueue(Queue[yt.YtPendingAlert]):
                             kind=alert.kind,
                             z=alert.value,
                             observed=(
-                                evidence.scored_comments
+                                evidence.scored.comments
                                 if alert.kind is YtAlertKind.COMMENT_SPIKE
                                 else None
                             ),

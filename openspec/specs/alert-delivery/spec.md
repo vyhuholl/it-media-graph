@@ -96,20 +96,15 @@ The system SHALL mark an alert delivered only once it has been sent. An alert wh
 - **WHEN** the bot's state is asked for
 - **THEN** the failing alert is reported
 
-### Requirement: Delivery Does Not Depend On A Notification
+### Requirement: Delivery Rests On The Poll
 
-The system SHALL deliver every undelivered alert whether or not a notification about it was received. A notification MAY reduce delivery latency and MUST NOT be the only path by which an alert is delivered.
+The system SHALL deliver every undelivered alert by polling for it, on its interval. Nothing in delivery SHALL wait on a message from the pass that raised the alert.
 
 #### Scenario: An alert raised while the bot was down is still delivered
 
 - **GIVEN** an alert raised while the bot was not running
 - **WHEN** the bot starts
 - **THEN** the alert is delivered
-
-#### Scenario: The outstanding set is the same for both paths
-
-- **WHEN** the bot is woken by a notification, or wakes on its own interval
-- **THEN** it acts on the same set of undelivered alerts
 
 ### Requirement: Nothing Is Silently Withheld
 

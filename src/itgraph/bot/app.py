@@ -8,9 +8,7 @@ which is why its database role can write nothing but the delivery state
 of the two alert queues.
 
 **The poll is the correctness mechanism.** Every alert is delivered
-because the poll comes round; a notification, were one listened for,
-would only shorten the wait. ``NOTIFY`` is not durable: a bot that was
-down when one fired has no way to learn about it afterwards.
+because the poll comes round, whatever happened while the bot was down.
 
 The delivery ordering is claim → commit → send → mark, and it is spelled
 out in ``db/alerts.py``. The residual failure is a duplicate message, not
@@ -1239,8 +1237,7 @@ async def run_bot(
 ) -> BotStats:
     """Deliver alerts until stopped.
 
-    The poll interval is the only thing keeping this correct; a
-    notification, were one listened for, would only shorten the wait.
+    The poll interval is the only thing keeping this correct.
     """
     stats = BotStats()
     stop = stop or asyncio.Event()

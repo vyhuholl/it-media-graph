@@ -15,7 +15,6 @@ from sqlalchemy.exc import IntegrityError
 from itgraph.db.channels import DiscoveredChannel, upsert_channels
 from itgraph.db.metrics import (
     count_snapshots,
-    latest_observation,
     latest_observations,
     store_metrics,
 )
@@ -248,37 +247,6 @@ async def test_snapshots_can_be_counted_since_a_moment(
         assert await count_snapshots(session) == 2
         assert (
             await count_snapshots(session, since=NOW + timedelta(hours=1)) == 1
-        )
-
-
-async def test_the_last_reading_of_a_message_is_findable(
-    database: Database,
-) -> None:
-    await seed(database, 10)
-    later = NOW + timedelta(hours=1)
-
-    async with database.session() as session:
-        await store_metrics(
-            session,
-            channel_id=CHANNEL,
-            observed_at=NOW,
-            counters={10: Counters(views=1)},
-        )
-        await store_metrics(
-            session,
-            channel_id=CHANNEL,
-            observed_at=later,
-            counters={10: Counters(views=2)},
-        )
-
-    async with database.session() as session:
-        assert (
-            await latest_observation(session, channel_id=CHANNEL, msg_id=10)
-            == later
-        )
-        assert (
-            await latest_observation(session, channel_id=CHANNEL, msg_id=99)
-            is None
         )
 
 

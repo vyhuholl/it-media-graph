@@ -21,9 +21,6 @@ from sqlalchemy.engine import Connection
 
 from itgraph.db.models import Base
 
-__all__ = ["CHANNEL_FAMILIES_VIEW", "YT_CHANNEL_FAMILIES_VIEW"]
-
-
 # Which channels share an author, as the connected components of the
 # confirmed pairs. One row per channel that is in a family of more than
 # one; a channel absent from here is its own family of one, so the family
@@ -103,13 +100,7 @@ def _create_view(_target: Any, connection: Connection, **_kw: Any) -> None:
     connection.execute(text(YT_CHANNEL_FAMILIES_VIEW))
 
 
-def _drop_view(_target: Any, connection: Connection, **_kw: Any) -> None:
-    connection.execute(text("DROP VIEW IF EXISTS tg_channel_families"))
-    connection.execute(text("DROP VIEW IF EXISTS yt_channel_families"))
-
-
 # Plain functions rather than `DDL(...)`: SQLAlchemy's `DDL` is untyped,
 # and silencing that would be a `# type: ignore` bought for nothing —
 # these say the same thing and check.
 event.listen(Base.metadata, "after_create", _create_view)
-event.listen(Base.metadata, "before_drop", _drop_view)

@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 
 
 async def _telegram_evidence(
-    session: AsyncSession, known: Known, moment: datetime
+    session: AsyncSession, known: Known
 ) -> tuple[list[LinkReference], set[Name], set[Name]]:
     """Every Telegram seed's own links that name a channel, dated by
     the post, and the names that could not be named."""
@@ -188,9 +188,7 @@ async def load_yt_rising_rows(
     # nothing to the other.
     known = await known_answers(session, moment)
 
-    links, tg_awaiting, tg_not_found = await _telegram_evidence(
-        session, known, moment
-    )
+    links, tg_awaiting, tg_not_found = await _telegram_evidence(session, known)
     references, mention_awaiting, mention_not_found = await _video_evidence(
         session, known
     )

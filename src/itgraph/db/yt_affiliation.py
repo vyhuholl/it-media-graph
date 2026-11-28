@@ -37,7 +37,6 @@ from itgraph.yt.affiliation.signals import Thresholds, Weights
 
 __all__ = [
     "CandidateRow",
-    "count_candidates_by_decision",
     "family_keys",
     "family_of",
     "list_candidates",
@@ -345,15 +344,3 @@ async def list_candidates(
             handle_b,
         ) in (await session.execute(query)).all()
     ]
-
-
-async def count_candidates_by_decision(
-    session: AsyncSession,
-) -> dict[AffiliationDecision, int]:
-    """How many pairs sit in each decision state."""
-    rows = await session.execute(
-        select(YtAffiliationCandidate.decision, func.count()).group_by(
-            YtAffiliationCandidate.decision
-        )
-    )
-    return {decision: count for decision, count in rows.all()}

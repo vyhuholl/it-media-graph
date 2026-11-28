@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -31,7 +31,6 @@ from itgraph.scoring.fold import Head, Placed
 from itgraph.scoring.score import Spike
 
 __all__ = [
-    "CHANNEL",
     "AlertEvidence",
     "OutstandingAlerts",
     "PendingAlert",
@@ -43,7 +42,6 @@ __all__ = [
     "failing_alerts",
     "folded_posts",
     "hold_alerts",
-    "listen",
     "mark_delivered",
     "mark_failed",
     "open_heads",
@@ -56,11 +54,6 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
-
-# The notification channel. A constant rather than a setting: both sides
-# are in this repository, and a configurable name is one more thing that
-# can be configured differently in two places.
-CHANNEL = "itgraph_alerts"
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,11 +119,6 @@ async def raise_cascades(
     re-run over unchanged edges writes nothing and a pass on a short
     schedule is safe. The constraint is also the escalation rule: a post
     already raised at band 2 conflicts there and not at band 3.
-
-    The notification goes out in the same transaction as the insert.
-    Postgres delivers ``NOTIFY`` at commit, so a listener can never be
-    told about a row it cannot yet read — the ordering is the database's
-    guarantee rather than something this has to arrange.
     """
     if not cascades:
         return 0
@@ -152,11 +140,7 @@ async def raise_cascades(
             constraint="uq_tg_alerts_post_band"
         ).returning(Alert.id)
     )
-    written = len(result.all())
-
-    if written:
-        await session.execute(select(func.pg_notify(CHANNEL, str(written))))
-    return written
+    return len(result.all())
 
 
 def _spike_kind(spike: Spike[int, int]) -> AlertKind:
@@ -299,10 +283,6 @@ async def raise_spikes(
         folds.append({**row(entry.spike), "folded_into": head_id})
     folded = await write(folds)
 
-    # Only heads are anything for the bot to do; a fold is settled on
-    # its poll whether or not it was told.
-    if heads:
-        await session.execute(select(func.pg_notify(CHANNEL, str(len(heads)))))
     return len(heads) + len(folded), len(folded)
 
 
@@ -585,26 +565,16 @@ async def failing_alerts(session: AsyncSession, *, attempts: int) -> int:
     )
 
 
-async def listen(session: AsyncSession) -> None:
-    """Subscribe to the notification channel on this connection.
-
-    Latency only. Every alert is delivered by the poll whether or not a
-    notification ever arrives — ``NOTIFY`` is not durable, and a bot that
-    was down when one fired has no way to learn about it afterwards.
-    """
-    await session.execute(text(f"LISTEN {CHANNEL}"))
-
-
 def digest_is_due(
     now: datetime, *, hour: int, last: datetime | None, zone: str
 ) -> bool:
     """Whether the summary should go out now.
 
     True once per day, at or after the configured hour, and not again
-    until the next one. ``last`` is when a digest was last sent; a bot
-    that has never sent one gets its first at the next occurrence of the
-    hour rather than immediately on startup, so restarting is not a way
-    to make it repeat itself.
+    until the next one. ``last`` is when a digest was last sent, which
+    the bot keeps in memory: one not sent today goes out as soon as the
+    hour has come. Restarting repeats nothing, because a digest consumes
+    what it delivers.
 
     The hour and the day are the given zone's, the operator's, as quiet
     hours are: the bot is handed UTC, and read against it 09:00 was
@@ -618,9 +588,7 @@ def digest_is_due(
     if last is None:
         return True
     last_local = last.astimezone(ZoneInfo(zone))
-    return (now - last) >= timedelta(
-        hours=24
-    ) or last_local.date() < local.date()
+    return last_local.date() < local.date()
 
 
 @dataclass(frozen=True, slots=True)

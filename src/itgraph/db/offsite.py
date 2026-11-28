@@ -43,7 +43,6 @@ import httpx
 from itgraph.config import settings
 from itgraph.db.backup import (
     BackupKind,
-    _timestamp_of,
     existing,
     scheduled_kinds,
 )
@@ -428,12 +427,7 @@ def copy_new_dumps(
         copied: list[Path] = []
         failures: list[str] = []
         for kind in kinds:
-            for path in existing(root / kind.subdirectory, kind):
-                taken = _timestamp_of(path)
-                if (
-                    taken is None
-                ):  # pragma: no cover - `existing` filtered these
-                    continue
+            for taken, path in existing(root / kind.subdirectory, kind):
                 if when - taken >= CATCH_UP_WINDOW:
                     continue
                 name = remote_name(kind, path)

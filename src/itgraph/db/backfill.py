@@ -162,10 +162,8 @@ async def channels_needing_metadata(
 ) -> Sequence[Channel]:
     """In-scope channels whose extended information is absent or stale.
 
-    ``metadata_age`` answers this one channel at a time, which is the
-    right shape for a walk deciding about the channel in front of it and
-    the wrong shape for a pass that has to know its whole queue before it
-    spends the first request.
+    The whole queue in one query: a pass has to know its whole queue
+    before it spends the first request.
 
     ``refresh`` drops the freshness condition and returns everything in
     scope — the operator saying they know the stored payloads are wrong.
