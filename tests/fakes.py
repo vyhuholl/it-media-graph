@@ -343,7 +343,7 @@ class FakeHistoryMessage:
                 "_": "MessageReplies",
                 "replies": self.comments,
                 "comments": True,
-                "channel_id": 1520237172,
+                "channel_id": 666000000001,
             }
         return payload
 
@@ -643,4 +643,9 @@ class FakeTelegramClient:
             self._flooded_requests.add(channel_id)
             raise FloodWaitError(request=self.flood_request, capture=seconds)
 
+        # A channel the inventory holds but this pass must not touch:
+        # a KeyError here would turn a scope regression into a test
+        # error, where it belongs.
+        if channel_id not in self.full_channels:
+            raise LookupError(f"{channel_id} is out of the fake's scope")
         return self.full_channels[channel_id]

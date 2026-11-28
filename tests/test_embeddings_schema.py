@@ -122,7 +122,7 @@ async def test_an_embedding_without_its_video_is_refused(
         async with database.session() as session:
             session.add(
                 YtVideoEmbedding(
-                    video_id="dQw4w9WgXcQ",
+                    video_id="fakevideo99",
                     model_key="m",
                     content_hash="abc123",
                     vec=b"\x00\x01",

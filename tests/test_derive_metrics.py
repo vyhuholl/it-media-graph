@@ -174,7 +174,7 @@ def test_comments_come_from_the_reply_counter() -> None:
                 "_": "MessageReplies",
                 "replies": 42,
                 "comments": True,
-                "channel_id": 1520237172,
+                "channel_id": 666000000001,
             }
         )
     )
