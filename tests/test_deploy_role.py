@@ -1060,7 +1060,6 @@ def test_nothing_ignored_is_in_the_image() -> None:
         ".python-version",
         "README.md",
         "alembic.ini",
-        "src",
         "src/**",
     }
     assert all(rule.startswith("!") for rule in rules[1:])

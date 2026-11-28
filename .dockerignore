@@ -8,5 +8,4 @@
 !.python-version
 !README.md
 !alembic.ini
-!src
 !src/**
