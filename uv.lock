@@ -920,7 +920,7 @@ wheels = [
 
 [[package]]
 name = "it-media-graph"
-version = "0.17.2"
+version = "0.18.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiogram" },
