@@ -686,8 +686,9 @@ def alerts() -> None:
     healthy state is silence, so "nothing travelled" and "nothing was
     derived" have to be distinguishable.
 
-    Expect about one alert a day: the measured rate at the only threshold
-    that is not noise.
+    Expect about one alert a day: measured by early August 2026, over
+    sixty days of dense collection, and not measured again since — at
+    the only threshold that is not noise.
     """
     from itgraph.alerts.run import run_cascades
     from itgraph.db.session import Database
