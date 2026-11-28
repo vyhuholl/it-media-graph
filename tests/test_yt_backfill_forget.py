@@ -1,9 +1,9 @@
 """A walk is kept only while the history it describes is.
 
-Out of scope, gone, or — with the walk disabled — thirty days after it
-ended, a channel's walk is forgotten, and the channel is walked anew
-when it is next due. Tested through each door a channel leaves by: the
-single `mark`, the review file, and a refresh that finds it gone.
+Out of scope or gone, a channel's walk is forgotten, and the channel is
+walked anew when it is next due. Tested through each door a channel
+leaves by: the single `mark`, the review file, and a refresh that finds
+it gone.
 """
 
 from datetime import UTC, datetime, timedelta

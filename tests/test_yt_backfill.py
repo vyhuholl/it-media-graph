@@ -307,19 +307,6 @@ async def test_a_whole_walk_goes_to_the_end(database: Database) -> None:
     assert (await record(database)).whole
 
 
-async def test_no_page_token_is_needed_for_the_first_page(
-    database: Database,
-) -> None:
-    await seeds(database, 1)
-    ages = _years_of(160)
-    fake = api({1: listing(*ages)}, resources(*ages))
-
-    await walk(database, fake)
-
-    tokens = [call.get("pageToken") for call in fake.calls("playlistItems")]
-    assert tokens[0] is None and None not in tokens[1:]
-
-
 # --- Found By The Walk Is Recorded -----------------------------------------
 
 

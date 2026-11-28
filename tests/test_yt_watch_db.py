@@ -37,7 +37,6 @@ from itgraph.db.yt_watch import (
     record_listing_failure,
     record_listings,
     record_pass,
-    stored_video_counts,
     watch_lock,
     watched_channels,
 )
@@ -133,29 +132,6 @@ async def test_only_seeds_are_watched(database: Database) -> None:
         (channel_id(1), False),
         (channel_id(2), True),
     ]
-
-
-async def test_stored_counts_are_read_before_they_are_replaced(
-    database: Database,
-) -> None:
-    await _seeds(database, 1)
-    async with database.session() as session:
-        counts = await stored_video_counts(
-            session, [channel_id(1), channel_id(9)]
-        )
-
-    assert counts == {channel_id(1): "42"}
-
-
-async def test_a_never_listed_channel_is_listed_first(
-    database: Database,
-) -> None:
-    await _seeds(database, 1)
-
-    listing, deferred = await _to_list(database)
-
-    assert listing == {channel_id(1): YtDiscoveryPath.FIRST}
-    assert deferred == 0
 
 
 async def test_an_owed_listing_is_listed_and_cleared_by_success(

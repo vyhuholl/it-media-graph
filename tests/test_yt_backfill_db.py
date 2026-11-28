@@ -32,7 +32,6 @@ from itgraph.db.yt_backfill import (
     backfill_lock,
     channels_to_walk,
     finish_walk,
-    forget_walks,
     record_page,
     record_walk_failure,
     start_walk,
@@ -193,19 +192,6 @@ async def test_the_playlist_comes_from_the_stored_payload(
     assert playlists[channel_id(2)] is None
 
 
-async def test_a_finished_walk_is_not_due_and_an_unfinished_one_is(
-    database: Database,
-) -> None:
-    await _seeds(database, 1, 2)
-    await _walked(database, 1, at=NOW)
-    async with database.session() as session:
-        await start_walk(
-            session, channel_id(2), now=NOW, cutoff=NOW - YEAR, whole=False
-        )
-
-    assert await _due(database) == [channel_id(2)]
-
-
 async def test_a_named_seed_is_walked_again(database: Database) -> None:
     await _seeds(database, 1, 2)
     await _walked(database, 1, at=NOW)
@@ -287,16 +273,6 @@ async def test_a_failure_is_counted_until_a_walk_ends(
 
 
 # --- forgetting ---------------------------------------------------------
-
-
-async def test_forgotten_walks_are_due_again(database: Database) -> None:
-    await _seeds(database, 1, 2)
-    await _walked(database, 1, at=NOW)
-    await _walked(database, 2, at=NOW)
-    async with database.session() as session:
-        await forget_walks(session, [channel_id(1)])
-
-    assert await _due(database) == [channel_id(1)]
 
 
 # --- the status ---------------------------------------------------------

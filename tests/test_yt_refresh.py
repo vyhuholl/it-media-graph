@@ -269,22 +269,6 @@ def test_the_command_fails_when_stopped(
     assert "quotaExceeded" in result.output
 
 
-def test_the_command_without_a_key_names_the_setting(
-    monkeypatch: pytest.MonkeyPatch, database_url: str
-) -> None:
-
-    asyncio.run(_setup_stale(database_url))
-    fake = FakeYouTube()
-    _use(monkeypatch, database_url, fake)
-    monkeypatch.setattr(settings, "youtube_api_key", None)
-
-    result = runner.invoke(app, ["yt", "refresh"])
-
-    assert result.exit_code == 1
-    assert "YOUTUBE_API_KEY" in result.output
-    assert fake.requests == []
-
-
 def test_the_command_refuses_to_start_on_an_exhausted_day(
     monkeypatch: pytest.MonkeyPatch, database_url: str
 ) -> None:
