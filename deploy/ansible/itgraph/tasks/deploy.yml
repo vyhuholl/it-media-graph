@@ -106,21 +106,18 @@
       vars:
         __itgraph_what: foundation
         __itgraph_stream: "{{ __itgraph_streams.foundation }}"
-        __itgraph_secret: false
 
     - name: Apply the Secrets
       ansible.builtin.include_tasks: apply.yml
       vars:
         __itgraph_what: secrets
         __itgraph_stream: "{{ __itgraph_streams.secrets }}"
-        __itgraph_secret: true
 
     - name: Apply the proxy
       ansible.builtin.include_tasks: apply.yml
       vars:
         __itgraph_what: proxy
         __itgraph_stream: "{{ __itgraph_streams.proxy }}"
-        __itgraph_secret: true
 
     - name: Follow the proxy
       ansible.builtin.include_tasks: rollout.yml
@@ -135,7 +132,6 @@
       vars:
         __itgraph_what: postgres
         __itgraph_stream: "{{ __itgraph_streams.postgres }}"
-        __itgraph_secret: false
 
     - name: Wait for the database to answer
       ansible.builtin.command:
@@ -175,7 +171,6 @@
       vars:
         __itgraph_what: bot
         __itgraph_stream: "{{ __itgraph_streams.bot }}"
-        __itgraph_secret: false
 
     - name: Follow the bot
       ansible.builtin.include_tasks: rollout.yml
@@ -187,7 +182,6 @@
       vars:
         __itgraph_what: metrics
         __itgraph_stream: "{{ __itgraph_streams.metrics }}"
-        __itgraph_secret: false
 
     - name: Follow the exporter
       ansible.builtin.include_tasks: rollout.yml
@@ -203,7 +197,6 @@
       vars:
         __itgraph_what: watch
         __itgraph_stream: "{{ __itgraph_streams.watch }}"
-        __itgraph_secret: false
 
     - name: Follow the collector
       ansible.builtin.include_tasks: rollout.yml
@@ -226,7 +219,6 @@
       vars:
         __itgraph_what: cronjobs
         __itgraph_stream: "{{ __itgraph_streams.cronjobs }}"
-        __itgraph_secret: false
 
     # By name, one by one, never a claim.
     - name: Delete what has left the templates

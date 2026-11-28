@@ -12,6 +12,5 @@
   vars:
     __itgraph_what: "{{ item }}"
     __itgraph_stream: "{{ __itgraph_streams[item] }}"
-    __itgraph_secret: "{{ item == 'secrets' or item == 'proxy' }}"
   loop: [foundation, secrets, proxy, postgres, bot, metrics, watch, cronjobs]
   when: __itgraph_namespace_found.stdout | length > 0

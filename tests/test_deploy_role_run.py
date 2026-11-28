@@ -188,13 +188,10 @@ def test_the_readers_password_may_be_empty(
     assert not run.failed, run.output
 
 
-def apply_extra(
-    stdin: str = "kind: Thing\n", secret: bool = False
-) -> dict[str, Any]:
+def apply_extra(stdin: str = "kind: Thing\n") -> dict[str, Any]:
     return {
         "__itgraph_what": "a stream",
         "__itgraph_stream": stdin,
-        "__itgraph_secret": secret,
     }
 
 
@@ -245,6 +242,33 @@ def test_a_check_only_diffs(tmp_path: Path) -> None:
     assert not run.failed, run.output
     assert run.changing() == []
     assert len(run.called("diff")) == 9
+
+
+def test_a_secrets_diff_is_never_shown(tmp_path: Path) -> None:
+    # --diff shows what a run would change; a Secret's change is the Secret.
+    run = run_role(
+        tmp_path,
+        "main",
+        rules=[
+            rule("^diff ", "MARKER-LINE\n", rc=1),
+            rule("get namespace itgraph", "namespace/itgraph"),
+        ],
+        arguments=["--check", "--diff"],
+    )
+
+    assert not run.failed, run.output
+    shown = {
+        section.split("]")[0]: section
+        for section in run.output.split("TASK [")
+        if section.startswith("itgraph : Show the diff of ")
+    }
+    assert "MARKER-LINE" in shown["itgraph : Show the diff of foundation"], (
+        shown
+    )
+    for secret in ("secrets", "proxy"):
+        assert (
+            "MARKER-LINE" not in shown[f"itgraph : Show the diff of {secret}"]
+        )
 
 
 def test_a_check_on_a_new_namespace_says_what_it_leaves_out(

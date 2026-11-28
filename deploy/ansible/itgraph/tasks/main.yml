@@ -14,7 +14,6 @@
   vars:
     __itgraph_what: the namespace
     __itgraph_stream: "{{ __itgraph_streams.namespace }}"
-    __itgraph_secret: false
 
 - name: Look for the namespace
   ansible.builtin.command:

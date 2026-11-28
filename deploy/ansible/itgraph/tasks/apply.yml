@@ -3,6 +3,14 @@
 # not applied, and restarts nothing. In check mode only the diff runs, and --diff
 # shows it, the Secrets' aside. Everything reaches kubectl on stdin, so no value is
 # ever an argument, and pipelining keeps it out of a file on the host.
+#
+# The caller names the stream (`__itgraph_what`) and gives it; whether the diff is
+# logged is derived here from the name, so a stream that holds a Secret cannot be
+# handed with logging left on.
+
+- name: "Derive how to log it - {{ __itgraph_what }}"
+  ansible.builtin.set_fact:
+    __itgraph_secret: "{{ __itgraph_what in ['secrets', 'proxy'] }}"
 
 - name: "Diff {{ __itgraph_what }}"
   ansible.builtin.command:
