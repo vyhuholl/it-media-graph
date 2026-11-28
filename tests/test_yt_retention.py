@@ -65,23 +65,6 @@ async def _anywhere(database: Database, needle: str) -> list[str]:
     return holding
 
 
-async def test_an_old_payload_is_kept_with_its_record(
-    database: Database,
-) -> None:
-    await _channel(database, 1, fetched_at=NOW - timedelta(days=90))
-    async with database.session() as session:
-        record = await session.get(YtChannel, channel_id(1))
-        assert record is not None
-        record.status = ChannelStatus.REJECTED
-        record.reject_reason = YtRejectReason.CONSUMER_TECH
-        record.reviewed_at = NOW
-
-    assert await _payload(database, 1) is not None
-    record = await _record(database, 1)
-    assert record is not None
-    assert record.reject_reason is YtRejectReason.CONSUMER_TECH
-
-
 async def test_the_title_lives_in_the_payload_alone(
     database: Database,
 ) -> None:

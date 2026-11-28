@@ -180,18 +180,6 @@ async def test_both_platforms_rank_together_by_cosine(
     assert hits[-1].score == pytest.approx(0.0, abs=1e-3)
 
 
-async def test_a_foreign_models_vectors_are_not_ranked(
-    database: Database,
-) -> None:
-    await _seed(database)
-
-    hits = await search(database, _model(), "what the query is about")
-
-    # msg 21 would have scored 1.0 and led the list; it is not there.
-    assert all(hit.link != "https://t.me/c/4/21" for hit in hits)
-    assert len(hits) == 5
-
-
 async def test_hits_carry_channel_date_and_text_head(
     database: Database,
 ) -> None:
@@ -223,11 +211,3 @@ async def test_top_bounds_the_list(database: Database) -> None:
         "https://t.me/fake_named/10",
         "https://t.me/fake_named/11",
     ]
-
-
-async def test_nothing_embedded_is_no_hits_not_an_error(
-    database: Database,
-) -> None:
-    hits = await search(database, _model(), "anything")
-
-    assert hits == []

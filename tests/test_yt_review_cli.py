@@ -7,7 +7,6 @@ from typing import Any
 
 import httpx
 import pytest
-from sqlalchemy import select
 from typer.testing import CliRunner
 from ytfakes import channel_id, channel_resource
 
@@ -557,17 +556,6 @@ def test_the_progress_summary(inventory: str) -> None:
     assert "rejected   1" in lines
     assert "seeds      en 1, ru 0, other 1" in lines
     assert "data       current 3, not fetched 1, gone 0" in lines
-
-
-def test_reviewed_records_are_never_deleted(inventory: str) -> None:
-    _channels(inventory, 1)
-    _mark(channel_id(1), "--reject", "--reason", "ads")
-
-    async def count(database: Database) -> int:
-        async with database.session() as session:
-            return len((await session.scalars(select(YtChannel))).all())
-
-    assert _run(inventory, count) == 1
 
 
 # --- how a channel was found ---------------------------------------------

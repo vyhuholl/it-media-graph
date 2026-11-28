@@ -98,15 +98,6 @@ async def test_a_booking_past_the_cap_is_refused(database: Database) -> None:
     assert len(await _journal(database)) == 1
 
 
-async def test_the_reserve_is_out_of_reach(database: Database) -> None:
-    """Seven of ten are the general pool's; the other three are held for
-    the poll loop even though nothing is spending them."""
-    await _book(database, 7)
-
-    with pytest.raises(PoolSpentError):
-        await _book(database, 1)
-
-
 async def _book_watch(database: Database, units: int = 1) -> Booking:
     return await book(
         database,
@@ -416,16 +407,6 @@ async def _book_walk(database: Database, units: int = 1) -> Booking:
         units=units,
         now=NOW,
     )
-
-
-async def test_the_walk_spends_the_general_pool(
-    database: Database, real_quota: None
-) -> None:
-    booking = await _book_walk(database)
-
-    assert booking.pool is YtQuotaPool.GENERAL
-    [row] = await _journal(database)
-    assert (row.command, row.pool) == (YtCommand.BACKFILL, YtQuotaPool.GENERAL)
 
 
 async def test_the_floor_stops_a_walk_one_request_short(

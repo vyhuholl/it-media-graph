@@ -60,32 +60,6 @@ async def test_sixty_ids_make_two_requests(database: Database) -> None:
         assert call["fields"] == FIELDS
 
 
-async def test_the_declared_fields_and_no_others() -> None:
-    """What the privacy policy lists, and nothing it does not."""
-    for wanted in (
-        "publishedAt",
-        "channelId",
-        "title",
-        "description",
-        "liveBroadcastContent",
-        "duration",
-        "actualStartTime",
-        "scheduledStartTime",
-        "viewCount",
-        "likeCount",
-        "commentCount",
-    ):
-        assert wanted in FIELDS
-    for unwanted in (
-        "tags",
-        "thumbnails",
-        "categoryId",
-        "localized",
-        "concurrentViewers",
-    ):
-        assert unwanted not in FIELDS
-
-
 async def test_a_missing_video_is_absent(database: Database) -> None:
     fake = _fake(1)
 

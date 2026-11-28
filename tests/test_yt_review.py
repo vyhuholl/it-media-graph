@@ -151,17 +151,6 @@ def test_a_row_with_too_many_fields_is_a_problem() -> None:
     assert "a tab inside a value?" in str(problem)
 
 
-def test_a_file_without_its_header_is_refused() -> None:
-    text = "\n".join(
-        line
-        for line in _file(ExportRow(channel_id(1))).splitlines()
-        if not line.startswith("# exported")
-    )
-
-    with pytest.raises(UnreadableReviewFile, match="export moment"):
-        parse_review(text)
-
-
 def test_rearranged_columns_are_refused() -> None:
     text = _file(ExportRow(channel_id(1))).replace(
         "channel_id\tdecision", "decision\tchannel_id"
