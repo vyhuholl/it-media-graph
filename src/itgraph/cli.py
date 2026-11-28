@@ -386,6 +386,8 @@ def mark(
         )
     if reject and reason is None:
         raise typer.BadParameter("--reject needs --reason")
+    if reason is not None and not reject:
+        raise typer.BadParameter("--reason only goes with --reject")
 
     if seed:
         # `personal` is the explicit default: an empty kind has to keep

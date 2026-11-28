@@ -218,13 +218,25 @@ def test_mark_needs_exactly_one_outcome(inventory: None) -> None:
     assert both.exit_code != 0
 
 
-def test_mark_refuses_a_reasonless_rejection(inventory: None) -> None:
+@pytest.mark.parametrize(
+    ("args", "named"),
+    [
+        (["--reject"], "--reason"),
+        (["--maybe", "--reason", "crypto"], "--reject"),
+    ],
+)
+def test_mark_refuses_a_reason_beside_the_wrong_decision(
+    inventory: None, args: list[str], named: str
+) -> None:
+    """Both halves of the rule the database holds: a rejection needs a
+    reason, and only a rejection may have one. Refused by the command,
+    where it is a line of advice and not a traceback."""
     runner.invoke(app, ["dump-dialogs"])
 
-    result = runner.invoke(app, ["mark", str(KNOWN), "--reject"])
+    result = runner.invoke(app, ["mark", str(KNOWN), *args])
 
-    assert result.exit_code != 0
-    assert "--reason" in result.output
+    assert result.exit_code == 2
+    assert named in result.output
 
 
 def test_mark_an_unknown_channel_exits_non_zero(inventory: None) -> None:
