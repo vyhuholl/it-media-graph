@@ -107,10 +107,10 @@
   ansible.builtin.assert:
     that: >-
       itgraph_b2_key_id | length > 0 and itgraph_b2_application_key | length > 0
-      and itgraph_b2_bucket_name | length > 0 and itgraph_backup_age_recipient | length > 0
+      and itgraph_backup_age_recipient | length > 0
     fail_msg: >-
-      itgraph_backup_offsite is b2, and it needs itgraph_b2_key_id, itgraph_b2_application_key,
-      itgraph_b2_bucket_name and itgraph_backup_age_recipient, all four.
+      itgraph_backup_offsite is b2, and it needs itgraph_b2_key_id, itgraph_b2_application_key
+      and itgraph_backup_age_recipient, all three.
     quiet: true
   when: itgraph_backup_offsite == 'b2'
   no_log: false

@@ -915,10 +915,10 @@ class Settings(BaseSettings):
     # --- off-site copies ----------------------------------------------
     #
     # None of these set — the operator's machine — means no off-site
-    # pass at all. All four set — the collection host — means every
+    # pass at all. All three set — the collection host — means every
     # verified inventory and full dump is encrypted with `age` to
     # `backup_age_recipient` and copied to the Backblaze B2 bucket the
-    # other three name, on a key that can add and list but never delete
+    # key itself names, on a key that can add and list but never delete
     # or read back. The dump a migration takes first stays on the host.
     #
     # The application key is a `SecretStr` on the api hash's footing:
@@ -926,7 +926,6 @@ class Settings(BaseSettings):
 
     b2_key_id: str | None = None
     b2_application_key: SecretStr | None = None
-    b2_bucket_name: str | None = None
     # An `age` public key (starts `age1`): safe to commit, unlike the
     # identity it pairs with, which lives only in the operator's
     # password manager and nowhere on the collection host.
@@ -1017,7 +1016,6 @@ class Settings(BaseSettings):
         parts = (
             ("b2_key_id", self.b2_key_id),
             ("b2_application_key", self.b2_application_key),
-            ("b2_bucket_name", self.b2_bucket_name),
             ("backup_age_recipient", self.backup_age_recipient),
         )
         present = [name for name, value in parts if value is not None]
@@ -1027,9 +1025,9 @@ class Settings(BaseSettings):
         if missing:
             raise ValueError(
                 f"{', '.join(missing)} not set with {', '.join(present)}: "
-                "the off-site pass needs b2_key_id, b2_application_key, "
-                "b2_bucket_name and backup_age_recipient all set — or all "
-                "unset, meaning no off-site pass"
+                "the off-site pass needs b2_key_id, b2_application_key and "
+                "backup_age_recipient all set — or all unset, meaning no "
+                "off-site pass"
             )
         return self
 

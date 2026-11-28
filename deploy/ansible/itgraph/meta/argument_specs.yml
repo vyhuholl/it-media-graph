@@ -126,9 +126,6 @@ argument_specs:
         type: str
         no_log: true
         description: The off-site store's key, with b2.
-      itgraph_b2_bucket_name:
-        type: str
-        description: The off-site bucket, with b2.
       itgraph_backup_age_recipient:
         type: str
         description: The public recipient off-site copies are encrypted to, with b2.

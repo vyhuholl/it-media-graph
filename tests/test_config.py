@@ -560,7 +560,6 @@ def test_an_empty_container_is_no_container(env: pytest.MonkeyPatch) -> None:
 B2_ENV = {
     "B2_KEY_ID": "test-b2-key-id",
     "B2_APPLICATION_KEY": "test-b2-app-key",
-    "B2_BUCKET_NAME": "test-b2-bucket",
     "BACKUP_AGE_RECIPIENT": "test-age-recipient",
 }
 
@@ -589,7 +588,6 @@ def test_no_offsite_configuration_is_the_default(
     settings = build()
     assert settings.b2_key_id is None
     assert settings.b2_application_key is None
-    assert settings.b2_bucket_name is None
     assert settings.backup_age_recipient is None
 
 
@@ -602,7 +600,6 @@ def test_a_complete_offsite_configuration_is_accepted(
     settings = build()
 
     assert settings.b2_key_id == "test-b2-key-id"
-    assert settings.b2_bucket_name == "test-b2-bucket"
     assert settings.backup_age_recipient == "test-age-recipient"
     assert settings.b2_application_key is not None
     assert settings.b2_application_key.get_secret_value() == "test-b2-app-key"

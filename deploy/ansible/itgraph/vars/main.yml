@@ -122,7 +122,6 @@ __itgraph_offsite_secret:
   itgraph-offsite:
     B2_KEY_ID: "{{ itgraph_b2_key_id }}"
     B2_APPLICATION_KEY: "{{ itgraph_b2_application_key }}"
-    B2_BUCKET_NAME: "{{ itgraph_b2_bucket_name }}"
     BACKUP_AGE_RECIPIENT: "{{ itgraph_backup_age_recipient }}"
 __itgraph_youtube_secret:
   itgraph-youtube:

@@ -39,12 +39,11 @@ APPLICATION_KEY = "test-b2-app-key"
 
 @pytest.fixture
 def configured(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The collection host: all four off-site settings in place."""
+    """The collection host: all three off-site settings in place."""
     monkeypatch.setattr(settings, "b2_key_id", "test-b2-key-id")
     monkeypatch.setattr(
         settings, "b2_application_key", SecretStr(APPLICATION_KEY)
     )
-    monkeypatch.setattr(settings, "b2_bucket_name", "test-b2-bucket")
     monkeypatch.setattr(settings, "backup_age_recipient", "test-age-recipient")
 
 

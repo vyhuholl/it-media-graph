@@ -107,14 +107,13 @@ class _Session:
 def is_configured() -> bool:
     """Whether the off-site pass is configured at all.
 
-    None of the four settings is the operator's machine, where no pass
-    runs; the config validator keeps the four all set or all unset, so
+    None of the three settings is the operator's machine, where no pass
+    runs; the config validator keeps the three all set or all unset, so
     this answer cannot be "half".
     """
     return (
         settings.b2_key_id is not None
         and settings.b2_application_key is not None
-        and settings.b2_bucket_name is not None
         and settings.backup_age_recipient is not None
     )
 
@@ -124,29 +123,18 @@ def remote_name(kind: BackupKind, path: Path) -> str:
     return f"{kind.name}/{path.name}.age"
 
 
-def _configuration() -> tuple[str, str, str, str]:
-    """The four off-site values, or the one error that explains the lack."""
+def _configuration() -> tuple[str, str, str]:
+    """The three off-site values, or the one error that explains the lack."""
     key_id = settings.b2_key_id
     application_key = settings.b2_application_key
-    bucket_name = settings.b2_bucket_name
     recipient = settings.backup_age_recipient
-    if (
-        key_id is None
-        or application_key is None
-        or bucket_name is None
-        or recipient is None
-    ):
+    if key_id is None or application_key is None or recipient is None:
         raise OffsiteError(
             "the off-site pass is not configured: b2_key_id, "
-            "b2_application_key, b2_bucket_name and backup_age_recipient "
-            "are all required, or all unset for no pass at all"
+            "b2_application_key and backup_age_recipient are all required, "
+            "or all unset for no pass at all"
         )
-    return (
-        key_id,
-        application_key.get_secret_value(),
-        bucket_name,
-        recipient,
-    )
+    return (key_id, application_key.get_secret_value(), recipient)
 
 
 def _error_detail(response: httpx.Response) -> str:
@@ -415,7 +403,7 @@ def copy_new_dumps(
     """
     root = root or settings.backup_dir
     when = now or datetime.now(UTC)
-    key_id, application_key, _bucket_name, recipient = _configuration()
+    key_id, application_key, recipient = _configuration()
     kinds = scheduled_kinds()
 
     with httpx.Client(timeout=TIMEOUT, transport=transport) as client:

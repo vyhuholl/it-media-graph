@@ -89,8 +89,8 @@ def pod_answers(
             "closes every connection",
         ),
         ({"itgraph_proxy_outbound": {"protocol": "freedom"}}, "`freedom`"),
-        ({"itgraph_b2_application_key": ""}, "all four"),
-        ({"itgraph_backup_age_recipient": ""}, "all four"),
+        ({"itgraph_b2_application_key": ""}, "all three"),
+        ({"itgraph_backup_age_recipient": ""}, "all three"),
         (
             {"itgraph_youtube_alert_topic_ru": 0},
             "itgraph_youtube_alert_topic_ru go together",
@@ -134,7 +134,6 @@ def test_a_real_outbound_is_refused_where_collection_is_off(
             "itgraph_backup_offsite": "b2",
             "itgraph_b2_key_id": "fake-key-id",
             "itgraph_b2_application_key": "fake-application-key",
-            "itgraph_b2_bucket_name": "fake-bucket",
             "itgraph_backup_age_recipient": "fake-age-recipient",
         },
     ],

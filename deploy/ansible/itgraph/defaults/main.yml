@@ -18,7 +18,6 @@ itgraph_youtube_alert_topic_ru: 0
 # The off-site store's settings, with itgraph_backup_offsite: b2.
 itgraph_b2_key_id: ""
 itgraph_b2_application_key: ""
-itgraph_b2_bucket_name: ""
 itgraph_backup_age_recipient: ""
 
 itgraph_db_name: itgraph
