@@ -6,7 +6,7 @@ it must not disturb the transaction of the walk it interrupts — the
 second one is how a run would lose history it had already fetched.
 """
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -22,7 +22,6 @@ from itgraph.db.channels import (
     mark_channel,
     upsert_channels,
 )
-from itgraph.db.floods import flood_summary, recent_floods
 from itgraph.db.models import (
     ChannelKind,
     ChannelStatus,
@@ -36,7 +35,7 @@ from itgraph.tg import backfill as backfill_module
 from itgraph.tg import floods as floods_module
 from itgraph.tg import pacing as pacing_module
 from itgraph.tg.backfill import backfill_channels
-from itgraph.tg.floods import UNKNOWN_METHOD, FloodRecorder, method_name
+from itgraph.tg.floods import UNKNOWN_METHOD, method_name
 
 NOTES = FakeChannel(1000000001, "example_notes", "Example Notes")
 CUTOFF = datetime(2026, 5, 1, tzinfo=UTC)
@@ -287,61 +286,6 @@ async def test_recording_does_not_disturb_the_walk_in_progress(
 
 
 # --- reading it back ---------------------------------------------------
-
-
-async def test_the_summary_counts_and_ranks_by_method(
-    database: Database,
-) -> None:
-    recorder = FloodRecorder(database, CollectionCommand.RESOLVE)
-    for seconds in (10, 30):
-        await recorder.record(
-            request=resolve_request(), seconds=seconds, halted=False
-        )
-    await recorder.record(
-        request=GetFullChannelRequest(
-            channel=InputChannel(channel_id=1, access_hash=2)
-        ),
-        seconds=99,
-        halted=True,
-    )
-
-    async with database.session() as session:
-        tallies = await flood_summary(session)
-
-    assert [t.method for t in tallies] == [
-        "ResolveUsernameRequest",
-        "GetFullChannelRequest",
-    ]
-    assert tallies[0].times == 2
-    assert tallies[0].longest == 30
-    assert tallies[1].times == 1
-
-
-async def test_a_window_excludes_older_events(database: Database) -> None:
-    recorder = FloodRecorder(database, CollectionCommand.BACKFILL)
-    await recorder.record(request=resolve_request(), seconds=5, halted=False)
-
-    async with database.session() as session:
-        tomorrow = datetime.now(UTC) + timedelta(days=1)
-        assert await recent_floods(session, since=tomorrow) == []
-        assert await flood_summary(session, since=tomorrow) == []
-        assert len(await recent_floods(session)) == 1
-
-
-async def test_the_two_commands_are_told_apart(database: Database) -> None:
-    """Both spend the same methods; the command is what separates them."""
-    for command in (CollectionCommand.BACKFILL, CollectionCommand.RESOLVE):
-        await FloodRecorder(database, command).record(
-            request=resolve_request(), seconds=7, halted=False
-        )
-
-    async with database.session() as session:
-        events = await recent_floods(session)
-
-    assert {event.command for event in events} == {
-        CollectionCommand.BACKFILL,
-        CollectionCommand.RESOLVE,
-    }
 
 
 async def test_resolution_records_its_own_rate_limits(

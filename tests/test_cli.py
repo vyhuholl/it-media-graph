@@ -16,7 +16,6 @@ from fakes import (
 )
 from typer.testing import CliRunner
 
-from itgraph import __version__
 from itgraph.cli import app
 from itgraph.db import backup as backup_module
 from itgraph.db import offsite as offsite_module
@@ -68,12 +67,6 @@ def test_help_lists_commands() -> None:
     assert result.exit_code == 0
     assert "login" in result.output
     assert "dump-dialogs" in result.output
-
-
-def test_version() -> None:
-    result = runner.invoke(app, ["version"])
-    assert result.exit_code == 0
-    assert __version__ in result.output
 
 
 def test_login_authorizes_and_disconnects(
@@ -2136,7 +2129,7 @@ def test_unhandled_update_noise_is_quiet_by_default(
 
     logging.getLogger("aiogram.event").setLevel(logging.NOTSET)
 
-    result = runner.invoke(app, ["version"])
+    result = runner.invoke(app, ["channels", "--help"])
 
     assert result.exit_code == 0
     assert logging.getLogger("aiogram.event").level == logging.WARNING
@@ -2155,7 +2148,7 @@ def test_verbose_brings_the_unhandled_update_log_back(
 
     logging.getLogger("aiogram.event").setLevel(logging.WARNING)
 
-    result = runner.invoke(app, ["--verbose", "version"])
+    result = runner.invoke(app, ["--verbose", "channels", "--help"])
 
     assert result.exit_code == 0
     assert logging.getLogger("aiogram.event").level != logging.WARNING
@@ -2266,6 +2259,34 @@ def test_backup_copies_off_site(
     assert "full-20261022T120000Z.dump" in result.output
     # The local dumps and their pruning are done before anything leaves.
     assert order == ["local", "off-site"]
+
+
+def test_backup_inventory_dumps_that_tier_now(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The hand-reviewed tables at once, whatever the schedule says is due."""
+    kinds_seen: list[object] = []
+
+    def local(kinds: object = None) -> list[backup_module.Backup]:
+        kinds_seen.append(kinds)
+        return [
+            backup_module.Backup(
+                path=Path("/backups/daily/inventory-20261128T120000Z.dump"),
+                kind="inventory",
+                size=1234,
+                entries=17,
+            )
+        ]
+
+    monkeypatch.setattr(backup_module, "run_backup", local)
+    monkeypatch.setattr(offsite_module, "is_configured", lambda: False)
+
+    result = runner.invoke(app, ["backup", "--inventory"])
+
+    assert result.exit_code == 0, result.output
+    (kind,) = kinds_seen[0]
+    assert kind.name == "inventory"
+    assert "inventory-20261128T120000Z.dump" in result.output
 
 
 def test_backup_fails_naming_every_dump_not_copied(

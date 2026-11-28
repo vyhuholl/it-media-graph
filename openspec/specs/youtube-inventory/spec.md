@@ -193,7 +193,7 @@ The system SHALL report an entry the API cannot resolve, create no record for it
 
 ### Requirement: Review File Export
 
-The system SHALL provide `itgraph yt review-export`, writing a tab-separated review file of the channels awaiting review to standard output or a path. Each row SHALL hold the channel id, the editable review columns filled with the current values, and read-only columns from the channel's API data and its provenance. A header SHALL state the export moment and the accepted values.
+The system SHALL provide `itgraph yt review-export`, writing a tab-separated review file of the channels awaiting review to standard output. Each row SHALL hold the channel id, the editable review columns filled with the current values, and read-only columns from the channel's API data and its provenance. A header SHALL state the export moment and the accepted values.
 
 #### Scenario: Unreviewed channels are exported by default
 

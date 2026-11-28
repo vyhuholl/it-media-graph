@@ -237,7 +237,6 @@ async def run_cascades(
     database: Database,
     *,
     bands: tuple[int, ...] | None = None,
-    window: timedelta | None = None,
     now: datetime | None = None,
 ) -> CascadeSummary:
     """Find posts that crossed a band, record them, and report.
@@ -250,7 +249,7 @@ async def run_cascades(
     backfill guard to remember.
     """
     moment = now or datetime.now(UTC)
-    span = window or timedelta(hours=settings.alert_cascade_window_hours)
+    span = timedelta(hours=settings.alert_cascade_window_hours)
     tiers = bands or settings.alert_cascade_bands
     since = moment - span
 

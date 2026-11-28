@@ -209,6 +209,24 @@ def test_affiliates_reports_coverage(
     assert "descriptions: 5 of 5 channels have one" in result.output
 
 
+def test_affiliates_group_weight_reaches_the_score(
+    monkeypatch: pytest.MonkeyPatch, database_url: str, offline: None
+) -> None:
+    """Settable per run, as the spec asks: the group's weight doubles what
+    every pair scores for it, the ones it alone proposes included."""
+    use_test_database(monkeypatch, database_url)
+    seed_affiliation_fixture(database_url)
+
+    default = runner.invoke(app, ["yt", "affiliates"])
+    heavier = runner.invoke(app, ["yt", "affiliates", "--weight-group", "2.0"])
+
+    assert heavier.exit_code == 0, heavier.output
+    assert " 1.000  " in default.output
+    assert " 2.500  " not in default.output
+    assert " 2.000  " in heavier.output
+    assert " 2.500  " in heavier.output
+
+
 def test_affiliates_says_when_a_signal_could_not_run(
     monkeypatch: pytest.MonkeyPatch, database_url: str, offline: None
 ) -> None:
