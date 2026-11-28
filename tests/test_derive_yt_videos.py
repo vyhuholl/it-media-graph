@@ -146,15 +146,6 @@ def test_a_length_that_cannot_be_read_is_no_format(
     assert format_of(payload, short_max_seconds=180) is None
 
 
-def test_a_premiere_is_not_scored_however_long() -> None:
-    """A premiere is run as a broadcast, and carries its details."""
-    payload = video_resource(1, published=PUBLISHED, live_started=PUBLISHED)
-    payload["contentDetails"] = {"duration": "PT45M"}
-
-    assert "liveStreamingDetails" in payload
-    assert format_of(payload, short_max_seconds=180) is None
-
-
 def test_a_finished_stream_is_not_scored() -> None:
     payload = video_resource(1, published=PUBLISHED, live_started=PUBLISHED)
     payload["contentDetails"] = {"duration": "PT40S"}

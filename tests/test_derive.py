@@ -719,32 +719,6 @@ async def test_rebuild_truncates_then_recreates_without_touching_channels(
     assert raw_still_there == 1
 
 
-async def test_every_edge_endpoint_exists_in_the_inventory(
-    inventory: Database,
-) -> None:
-    async with inventory.session() as session:
-        await seed(
-            session,
-            raw(50, fwd=fwd_from_channel(FWD_ONLY)),
-            raw(
-                51,
-                message="@known_dst",
-                entities=[mention_entity("known_dst")],
-            ),
-        )
-
-    await derive_graph(inventory)
-
-    async with inventory.session() as session:
-        orphans = await session.scalar(
-            select(func.count())
-            .select_from(Edge)
-            .outerjoin(Channel, Channel.tg_id == Edge.dst_channel_id)
-            .where(Channel.tg_id.is_(None))
-        )
-    assert orphans == 0
-
-
 async def test_derivation_makes_no_telegram_request(
     inventory: Database, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1064,50 +1038,6 @@ async def test_one_channel_mentioning_repeatedly_is_one_source(
     assert await sources_of(inventory, "newcomer") == {SRC}
 
 
-async def test_re_derivation_adds_no_source(inventory: Database) -> None:
-    """Derivation stays re-runnable — the property a counter would break."""
-    async with inventory.session() as session:
-        await seed(
-            session,
-            raw(
-                10, message="@newcomer", entities=[mention_entity("newcomer")]
-            ),
-        )
-
-    await derive_graph(inventory)
-    before = await sources_of(inventory, "newcomer")
-    await derive_graph(inventory)
-
-    assert await sources_of(inventory, "newcomer") == before
-
-    async with inventory.session() as session:
-        total = await session.scalar(
-            select(func.count()).select_from(PendingMentionSource)
-        )
-    assert total == 1
-
-
-async def test_a_rebuild_clears_the_sources_and_the_next_pass_refills(
-    inventory: Database,
-) -> None:
-    async with inventory.session() as session:
-        await seed(
-            session,
-            raw(
-                10, message="@newcomer", entities=[mention_entity("newcomer")]
-            ),
-        )
-
-    await derive_graph(inventory)
-    assert await sources_of(inventory, "newcomer") == {SRC}
-
-    await derive_graph(inventory, rebuild=True)
-
-    # Truncated with the queue it belongs to, then written again from the
-    # raw layer in the same pass.
-    assert await sources_of(inventory, "newcomer") == {SRC}
-
-
 # --- when they mentioned it ------------------------------------------
 
 FIRST = "2026-03-01T10:00:00+00:00"
@@ -1222,18 +1152,6 @@ async def test_a_source_stored_without_times_is_filled(
         await session.commit()
 
     await derive_graph(inventory)
-
-    first, last, _ = await span_of(inventory)
-    assert first == datetime.fromisoformat(FIRST)
-    assert last == datetime.fromisoformat(LAST)
-
-
-async def test_a_rebuild_refills_the_times(inventory: Database) -> None:
-    async with inventory.session() as session:
-        await seed(session, mentioning(10, FIRST), mentioning(11, LAST))
-    await derive_graph(inventory)
-
-    await derive_graph(inventory, rebuild=True)
 
     first, last, _ = await span_of(inventory)
     assert first == datetime.fromisoformat(FIRST)

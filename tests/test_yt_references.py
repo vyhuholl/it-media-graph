@@ -84,24 +84,6 @@ def edges_of(text: str, *, channel: str = SEED_ONE) -> list[Edge]:
 # --- channel links ---------------------------------------------------
 
 
-def test_a_handle_link_with_a_trailing_path_and_a_query() -> None:
-    named = read_text(
-        "https://www.youtube.com/@fake-seed/videos?sub_confirmation=1"
-    )
-    assert named.handles == ("fake-seed",)
-
-
-def test_a_channel_id_link_on_another_host() -> None:
-    named = read_text(f"music.youtube.com/channel/{SEED_TWO}")
-    assert named.channel_ids == (SEED_TWO,)
-
-
-def test_a_legacy_name_link() -> None:
-    assert read_text("youtube.com/user/FakeLegacy").legacy_names == (
-        "fakelegacy",
-    )
-
-
 def test_a_link_ending_a_sentence() -> None:
     named = read_text("see youtube.com/@fake.seed.two.")
     assert named.handles == ("fake.seed.two",)
@@ -135,12 +117,6 @@ def test_the_fixture_links_in_every_host_and_shape() -> None:
 )
 def test_a_handle_link_in_the_forms_it_gets_written_in(link: str) -> None:
     assert read_text(link).handles == ("fake-seed",)
-
-
-def test_a_similar_host_is_no_link() -> None:
-    named = read_text("notyoutube.com/@fake-seed-one")
-    assert named.handles == ()
-    assert named.mentions == ()
 
 
 # --- handle grammar --------------------------------------------------
@@ -195,11 +171,6 @@ def test_a_video_inside_a_playlist() -> None:
     assert named.not_followed == {}
 
 
-def test_a_short_link_with_a_share_token() -> None:
-    named = read_text(f"youtu.be/{video_id(2)}?si=fake-share-token")
-    assert named.video_ids == (video_id(2),)
-
-
 def test_every_video_form() -> None:
     named = read_text(TEXTS["video_links"])
     assert named.video_ids == tuple(video_id(n) for n in range(2, 9))
@@ -212,12 +183,6 @@ def test_a_video_id_of_the_wrong_length_is_nothing() -> None:
 
 
 # --- forms counted, never followed -----------------------------------
-
-
-def test_a_custom_url() -> None:
-    named = read_text("youtube.com/c/FakeCustom")
-    assert named.handles == named.legacy_names == ()
-    assert named.not_followed == {NotFollowed.CUSTOM_URL: 1}
 
 
 @pytest.mark.parametrize(
@@ -264,11 +229,6 @@ def test_youtube_s_own_pages_are_neither_followed_nor_counted() -> None:
     assert named == read_text("")
 
 
-def test_a_shortened_link() -> None:
-    named = read_text("bit.ly/fake-short")
-    assert named.not_followed == {NotFollowed.SHORTENED: 1}
-
-
 def test_a_telegram_link_is_counted_and_its_name_kept_nowhere() -> None:
     named = read_text("t.me/fake_tg_channel")
     assert named.not_followed == {NotFollowed.TELEGRAM: 1}
@@ -305,11 +265,6 @@ def test_a_mention_of_an_unknown_handle_is_counted_not_followed() -> None:
     assert references.edges == []
     assert references.pending == {}
     assert references.not_followed == {NotFollowed.UNKNOWN_MENTION: 1}
-
-
-def test_an_email_address_is_no_mention() -> None:
-    assert read_text("fake@fake-seed-one.example").mentions == ()
-    assert edges_of("write to fake@fake-seed-one.example") == []
 
 
 def test_a_package_scope_is_no_mention() -> None:

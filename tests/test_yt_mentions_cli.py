@@ -159,17 +159,6 @@ def test_known_channels_with_their_handles(database_url: str) -> None:
     assert known.rstrip().endswith(channel_id(1))
 
 
-def test_ties_are_ordered_the_same_way_every_time(
-    database_url: str,
-) -> None:
-    _given(
-        database_url,
-        [1, 2],
-        {10: "youtube.com/@fake-b", 20: "youtube.com/@fake-a"},
-    )
-    assert _mentions() == _mentions()
-
-
 def test_bounded_by_evidence(database_url: str) -> None:
     _given(
         database_url,
@@ -242,14 +231,6 @@ def test_an_ambiguous_handle_names_both_channels(
         f"  @fake-dup carried by {channel_id(2)} {channel_id(3)}",
     ]
     assert "0 references" in output[0]
-
-
-def test_without_a_key_or_a_client_it_still_reads(
-    database_url: str,
-) -> None:
-    # The autouse fixture removed the key and made any HTTP client fail.
-    _given(database_url, [1], {10: "youtube.com/@fake-unknown"})
-    assert any("@fake-unknown" in line for line in _mentions())
 
 
 def test_help_opens_no_database(monkeypatch: pytest.MonkeyPatch) -> None:

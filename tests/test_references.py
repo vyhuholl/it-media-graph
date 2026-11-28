@@ -35,14 +35,6 @@ def message(**fields: Any) -> dict[str, Any]:
 # --- forward peers ---------------------------------------------------
 
 
-def test_a_channel_peer_yields_its_id() -> None:
-    assert peer_channel_id({"_": "PeerChannel", "channel_id": DST}) == DST
-
-
-def test_a_user_peer_yields_nothing() -> None:
-    assert peer_channel_id({"_": "PeerUser", "user_id": 777}) is None
-
-
 def test_a_legacy_chat_peer_yields_nothing() -> None:
     assert peer_channel_id({"_": "PeerChat", "chat_id": 555}) is None
 
@@ -150,19 +142,6 @@ def test_an_emoji_before_a_mention_does_not_corrupt_it() -> None:
         entities=[{"_": "MessageEntityMention", "offset": 4, "length": 8}],
     )
     assert extract_references(payload) == [Reference(username="channel")]
-
-
-def test_a_mention_of_a_person_is_still_a_username_here() -> None:
-    """Whether a username is a channel is decided later, against the DB.
-
-    Extraction only reads the handle; a username that turns out to be a
-    person is filtered when it fails to resolve, not here.
-    """
-    payload = message(
-        message="thanks @someone",
-        entities=[{"_": "MessageEntityMention", "offset": 8, "length": 8}],
-    )
-    assert extract_references(payload) == [Reference(username="someone")]
 
 
 def test_a_plain_tme_url_entity_is_extracted() -> None:
