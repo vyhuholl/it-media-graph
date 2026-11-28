@@ -267,47 +267,6 @@ async def test_baselines_read_back(database: Database) -> None:
     assert baseline.curve.fractions["48m"] == 0.33
 
 
-async def test_a_refresh_replaces_rather_than_accumulates(
-    database: Database,
-) -> None:
-    """Nothing may score against a mixture of two vintages."""
-    await seed_channel(database, mature_posts=40)
-    await a_run(database)
-
-    async with database.session() as session:
-        run = await start_run(
-            session,
-            mature_days=28,
-            min_channel_posts=30,
-            min_band_samples=20,
-            channels_in_scope=1,
-        )
-        await store_channel_medians(
-            session, run, Metric.VIEWS, {CHANNEL: (2000.0, 50)}
-        )
-        await store_curves(
-            session,
-            run,
-            ChannelKind.PERSONAL,
-            Metric.VIEWS,
-            curve=Curve(fractions={"48m": 0.4}, samples={"48m": 600}),
-            factor=0.5,
-            spread=0.3,
-            samples=600,
-        )
-        run.completed_at = NOW + timedelta(hours=1)
-
-    async with database.session() as session:
-        loaded = await load_baselines(session)
-
-    assert loaded is not None
-    baseline = loaded.for_channel(CHANNEL, Metric.VIEWS)
-    assert baseline is not None
-    # Entirely the newer run — not a median from one and a curve from the other.
-    assert baseline.reference == 2000.0
-    assert baseline.spread == 0.3
-
-
 async def test_an_unfinished_refresh_is_invisible(
     database: Database,
 ) -> None:

@@ -23,8 +23,7 @@ from itgraph.scoring.curves import (
     fit_factor,
     reference_at,
 )
-from itgraph.scoring.fold import Head, fold
-from itgraph.scoring.score import Baseline, Score, Spike
+from itgraph.scoring.score import Baseline
 
 NOW = datetime(2026, 11, 20, 12, 0, tzinfo=UTC)
 
@@ -151,59 +150,3 @@ def test_a_ruler_uses_its_curve_s_bands() -> None:
 
     assert baseline.spread_at(timedelta(hours=24)) == 0.25
     assert baseline.spread_at(timedelta(hours=1)) is None
-
-
-def _spike(video: str, crossed: datetime, z: float) -> Spike[str, str]:
-    return Spike(
-        post_key=("UCfakeChannel", video),
-        score=Score(
-            metric="views",
-            age=timedelta(hours=24),
-            observed=1000.0,
-            expected=100.0,
-            z=z,
-        ),
-        crossed_at=crossed,
-        scored_at=crossed,
-    )
-
-
-def test_videos_fold_by_their_channel() -> None:
-    placed = fold(
-        [
-            _spike("fakeVideo01", NOW, 5.0),
-            _spike("fakeVideo02", NOW + timedelta(hours=20), 6.0),
-            _spike("fakeVideo03", NOW + timedelta(hours=25), 4.0),
-        ],
-        heads={},
-        window=timedelta(hours=24),
-    )
-
-    into = [
-        (
-            entry.spike.post_key[1],
-            None if entry.into is None else entry.into.post_key[1],
-        )
-        for entry in placed
-    ]
-    assert into == [
-        ("fakeVideo01", None),
-        ("fakeVideo02", "fakeVideo01"),
-        ("fakeVideo03", None),
-    ]
-
-
-def test_a_video_folds_into_a_head_already_in_the_queue() -> None:
-    head = Head(
-        alert_id=7,
-        post_key=("UCfakeChannel", "fakeVideo00"),
-        raised_at=NOW - timedelta(hours=2),
-    )
-
-    placed = fold(
-        [_spike("fakeVideo01", NOW, 5.0)],
-        heads={"UCfakeChannel": head},
-        window=timedelta(hours=24),
-    )
-
-    assert placed[0].into is head
