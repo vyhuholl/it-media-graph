@@ -3,7 +3,7 @@
 Three tables:
 
 - ``yt_search_queries`` — the words the operator typed, with its type
-  and when it was first and last asked. The operator's own, and in the
+  and when it was first asked. The operator's own, and in the
   daily inventory dump.
 - ``yt_search_runs`` — one search of one query: when, bounded how, how
   many pages.
@@ -12,8 +12,7 @@ Three tables:
 A run is "in date" while it is younger than
 ``youtube_answers_fresh_days``: a query is not asked again while a run
 of it is in date, and only runs in date feed the search queue. Whether
-a query may be asked again is read from the runs, never from
-``last_asked_at``.
+a query may be asked again is read from the runs.
 """
 
 from collections.abc import Sequence
@@ -96,15 +95,21 @@ async def start_run(
     Written only once the first page has come back, so a request that
     failed leaves no run to make the query look answered.
     """
-    statement = insert(YtSearchQuery).values(
-        query=query, type=kind, first_asked_at=asked_at, last_asked_at=asked_at
-    )
     query_id = await session.scalar(
-        statement.on_conflict_do_update(
-            index_elements=[YtSearchQuery.query, YtSearchQuery.type],
-            set_={"last_asked_at": statement.excluded.last_asked_at},
-        ).returning(YtSearchQuery.id)
+        insert(YtSearchQuery)
+        .values(query=query, type=kind, first_asked_at=asked_at)
+        .on_conflict_do_nothing(
+            index_elements=[YtSearchQuery.query, YtSearchQuery.type]
+        )
+        .returning(YtSearchQuery.id)
     )
+    if query_id is None:
+        # Asked before: RETURNING names no row for a conflict.
+        query_id = await session.scalar(
+            select(YtSearchQuery.id).where(
+                YtSearchQuery.query == query, YtSearchQuery.type == kind
+            )
+        )
     run_id = await session.scalar(
         insert(YtSearchRun)
         .values(

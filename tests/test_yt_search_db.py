@@ -82,7 +82,7 @@ async def test_a_query_asked_twice_is_one_query(database: Database) -> None:
 
     async with database.session() as session:
         [query] = await session.scalars(select(YtSearchQuery))
-    assert (query.first_asked_at, query.last_asked_at) == (september, NOW)
+    assert query.first_asked_at == september
 
 
 async def test_another_type_is_another_query(database: Database) -> None:

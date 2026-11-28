@@ -2396,13 +2396,13 @@ class YtAffiliationCandidate(Base):
 class YtSearchQuery(Base):
     """A search query the operator has asked, and when.
 
-    The operator's own data — the words typed and two moments, nothing
-    YouTube returned — so it is kept for as long as the database lives
-    and goes into the daily inventory dump: which queries were tried is
-    what steers the next round. Whether a query may be asked again is
-    *not* read from here but from the runs in date, which a restore
-    empties; ``last_asked_at`` would otherwise skip a query whose answer
-    the restore threw away.
+    The operator's own data — the words typed and when they were first
+    asked, nothing YouTube returned — so it is kept for as long as the
+    database lives and goes into the daily inventory dump: which queries
+    were tried is what steers the next round. Whether a query may be
+    asked again is *not* read from here but from the runs in date, which
+    a restore empties: a moment kept on the query would skip a query
+    whose answer the restore threw away.
     """
 
     __tablename__ = "yt_search_queries"
@@ -2415,7 +2415,6 @@ class YtSearchQuery(Base):
         _pg_enum(YtSearchType, "yt_search_type")
     )
     first_asked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    last_asked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
     def __repr__(self) -> str:
         # No `query`: logs name searches by id.

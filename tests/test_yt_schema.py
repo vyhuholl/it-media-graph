@@ -324,7 +324,6 @@ async def _run(database: Database) -> int:
             query="fake query",
             type=YtSearchType.VIDEO,
             first_asked_at=NOW,
-            last_asked_at=NOW,
         )
         session.add(query)
         await session.flush()
@@ -380,7 +379,6 @@ async def test_a_query_is_one_row_per_type(database: Database) -> None:
                     query="fake query",
                     type=kind,
                     first_asked_at=NOW,
-                    last_asked_at=NOW,
                 )
             )
     with pytest.raises(IntegrityError, match="uq_yt_search_queries"):
@@ -390,7 +388,6 @@ async def test_a_query_is_one_row_per_type(database: Database) -> None:
                     query="fake query",
                     type=YtSearchType.VIDEO,
                     first_asked_at=NOW,
-                    last_asked_at=NOW,
                 )
             )
 
