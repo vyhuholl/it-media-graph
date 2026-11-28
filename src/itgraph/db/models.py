@@ -164,13 +164,13 @@ class RejectReason(enum.StrEnum):
 class DiscoverySource(enum.StrEnum):
     """How a channel entered the inventory.
 
-    Values no import path can produce yet are declared now, so later
-    changes add rows rather than alter the type.
+    Only what an import path produces. A value nothing writes is a
+    promise made in a type, and a reader cannot tell it from a source
+    that quietly stopped working.
     """
 
     OWN_SUBSCRIPTIONS = "own_subscriptions"
     FORWARD = "forward"
-    RECOMMENDATION = "recommendation"
     MENTION = "mention"
     MANUAL = "manual"
     LINKED_CHAT = "linked_chat"
@@ -777,13 +777,6 @@ class Channel(Base):
     # all. Deriving it also removes the drift a stored summary of the
     # pairs invited, and with it the one invariant this project had to
     # enforce in application code because a CHECK could not see it.
-
-    # Denormalized from the newest message a backfill saw. A convenience
-    # for "is this channel still alive", not a source of truth: the
-    # authority is the payload in `tg_raw_messages`.
-    last_post_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True)
-    )
 
     # Resolution state. A channel discovered by forward carries only its
     # id; `itgraph resolve` fills in username and title from Telegram and

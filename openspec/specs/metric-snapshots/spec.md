@@ -59,7 +59,6 @@ The system SHALL obtain new messages and refreshed counters from the same histor
 - **GIVEN** a channel whose newest collected message is known
 - **WHEN** a poll observes messages newer than it
 - **THEN** the newest collected message recorded for that channel advances to the newest one stored
-- **AND** the channel's newest post date is updated
 
 #### Scenario: A poll that finds nothing new still refreshes
 

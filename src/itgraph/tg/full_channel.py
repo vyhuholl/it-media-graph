@@ -30,7 +30,6 @@ stay re-runnable — not here.
 """
 
 import logging
-from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,24 +40,9 @@ from itgraph.db.channels import DiscoveredChannel, link_discussion_chat
 from itgraph.db.raw import store_channel_payload
 from itgraph.tg.payload import encode_payload
 
-__all__ = ["ChannelMetadata", "fetch_full_channel"]
+__all__ = ["fetch_full_channel"]
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True, slots=True)
-class ChannelMetadata:
-    """What one metadata fetch established.
-
-    Identity travels with it because the response carried it anyway — the
-    caller would otherwise have to ask who it just fetched, and the only
-    way to ask is the request this whole change exists to stop making.
-    """
-
-    tg_id: int
-    username: str | None
-    title: str | None
-    linked_chat_id: int | None
 
 
 def _chat_from(result: Any, chat_id: int) -> Any | None:
@@ -98,8 +82,11 @@ def _discussion_chat(
 
 async def fetch_full_channel(
     client: TelegramClient, session: AsyncSession, *, peer: Any
-) -> ChannelMetadata:
+) -> int | None:
     """Fetch, store and interpret nothing but the linked chat.
+
+    Returns the linked discussion chat's id, or ``None`` when the channel
+    has none.
 
     Takes a peer rather than a username, and the difference is the whole
     reason this function was touched. ``GetFullChannelRequest.resolve``
@@ -126,7 +113,6 @@ async def fetch_full_channel(
 
     channel = _chat_from(result, tg_id)
     username: str | None = getattr(channel, "username", None)
-    title: str | None = getattr(channel, "title", None)
 
     linked_chat_id: int | None = getattr(
         result.full_chat, "linked_chat_id", None
@@ -142,9 +128,4 @@ async def fetch_full_channel(
         else:
             await link_discussion_chat(session, parent_tg_id=tg_id, chat=chat)
 
-    return ChannelMetadata(
-        tg_id=tg_id,
-        username=username,
-        title=title,
-        linked_chat_id=linked_chat_id,
-    )
+    return linked_chat_id

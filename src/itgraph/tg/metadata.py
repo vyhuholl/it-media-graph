@@ -124,7 +124,7 @@ async def refresh_metadata(
 
             await pace(pause)
             try:
-                metadata = await waiting_out_floods(
+                linked_chat_id = await waiting_out_floods(
                     # Bound now, not on call: a lambda would close over
                     # the loop variable and read whatever `peer` holds
                     # when the retry fires.
@@ -149,7 +149,7 @@ async def refresh_metadata(
 
             await session.commit()
             summary.fetched += 1
-            if metadata.linked_chat_id is not None:
+            if linked_chat_id is not None:
                 summary.linked += 1
 
     logger.info("metadata done: %s", summary.line())

@@ -137,9 +137,11 @@ async def test_a_linked_chat_enters_the_inventory(
     client = client_with_chat()
 
     async with inventory.session() as session:
-        result = await fetch_full_channel(client, session, peer=PARENT_PEER)
+        linked_chat_id = await fetch_full_channel(
+            client, session, peer=PARENT_PEER
+        )
 
-    assert result.linked_chat_id == CHAT.id
+    assert linked_chat_id == CHAT.id
 
     async with inventory.session() as session:
         chat = await session.get(Channel, CHAT.id)
@@ -204,9 +206,11 @@ async def test_a_channel_without_a_discussion_chat(
     )
 
     async with inventory.session() as session:
-        result = await fetch_full_channel(client, session, peer=LONELY_PEER)
+        linked_chat_id = await fetch_full_channel(
+            client, session, peer=LONELY_PEER
+        )
 
-    assert result.linked_chat_id is None
+    assert linked_chat_id is None
 
     async with inventory.session() as session:
         linked = (
@@ -245,27 +249,6 @@ async def test_a_second_pass_refreshes_rather_than_accumulates(
     )
 
 
-async def test_identity_comes_from_the_response(
-    inventory: Database,
-) -> None:
-    """Who this channel is, without a second request to ask.
-
-    The response carries the ``Channel`` beside the ``ChannelFull``, so
-    the id, title and username are already in hand. Reading them there
-    rather than from a resolved entity is what lets the fetch take a peer
-    at all — and taking a peer is what keeps it off
-    ``contacts.resolveUsername``.
-    """
-    client = client_with_chat()
-
-    async with inventory.session() as session:
-        result = await fetch_full_channel(client, session, peer=PARENT_PEER)
-
-    assert result.tg_id == PARENT.id
-    assert result.username == "example_notes"
-    assert result.title == "Example Notes"
-
-
 async def test_no_username_is_resolved(inventory: Database) -> None:
     """The whole point of the change, as a flat assertion.
 
@@ -296,9 +279,11 @@ async def test_a_missing_chat_in_the_response_does_not_lose_the_payload(
     )
 
     async with inventory.session() as session:
-        result = await fetch_full_channel(client, session, peer=PARENT_PEER)
+        linked_chat_id = await fetch_full_channel(
+            client, session, peer=PARENT_PEER
+        )
 
-    assert result.linked_chat_id == CHAT.id
+    assert linked_chat_id == CHAT.id
 
     async with inventory.session() as session:
         stored = await session.get(RawChannel, PARENT.id)

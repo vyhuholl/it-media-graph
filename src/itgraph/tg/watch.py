@@ -56,7 +56,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 from telethon import TelegramClient
 from telethon.errors import RPCError
@@ -72,7 +71,7 @@ from itgraph.db.backfill import (
     seeds_awaiting_walk,
 )
 from itgraph.db.metrics import latest_observations, store_metrics
-from itgraph.db.models import Channel, CollectionCommand, FailureKind
+from itgraph.db.models import CollectionCommand, FailureKind
 from itgraph.db.poll import (
     DueChannel,
     due_channels,
@@ -309,13 +308,12 @@ async def poll_channel(
     readings: dict[int, Counters] = {}
     past: dict[int, tuple[datetime, Counters]] = {}
     newest_id: int | None = None
-    newest_date: datetime | None = None
 
     for message in window:
         payload = encode_payload(message)
         payloads[message.id] = payload
         if newest_id is None or message.id > newest_id:
-            newest_id, newest_date = message.id, message.date
+            newest_id = message.id
         counters = counters_of(payload)
         if counters is None:
             continue
@@ -344,12 +342,6 @@ async def poll_channel(
 
     if newest_id is not None:
         await advance_newest(session, channel.tg_id, newest_id)
-    if stored and newest_date is not None:
-        await session.execute(
-            update(Channel)
-            .where(Channel.tg_id == channel.tg_id)
-            .values(last_post_at=newest_date)
-        )
 
     return PollOutcome(
         stored=stored,

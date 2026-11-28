@@ -486,20 +486,6 @@ async def test_the_cursor_never_runs_ahead_of_the_rows(
     assert state.oldest_fetched_id in ids
 
 
-async def test_the_newest_post_date_is_recorded(
-    inventory: Database, slept: list[float]
-) -> None:
-    telegram = client(histories={NOTES.id: history(5)})
-
-    await run(inventory, telegram)
-
-    async with inventory.session() as session:
-        channel = await session.get(Channel, NOTES.id)
-
-    assert channel is not None
-    assert channel.last_post_at == datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
-
-
 # --- pacing and rate limits ------------------------------------------
 
 

@@ -35,7 +35,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError, RPCError
@@ -55,7 +54,7 @@ from itgraph.db.backfill import (
     start_channel,
     was_completed_to,
 )
-from itgraph.db.models import Channel, CollectionCommand, FailureKind
+from itgraph.db.models import CollectionCommand, FailureKind
 from itgraph.db.raw import count_messages, store_messages
 from itgraph.db.session import Database
 from itgraph.tg.floods import FloodRecorder
@@ -495,12 +494,6 @@ async def walk_page(
             oldest_fetched_id=keep[-1].id,
             newest_fetched_id=newest.id if newest else None,
         )
-        if newest is not None:
-            await session.execute(
-                update(Channel)
-                .where(Channel.tg_id == channel_id)
-                .values(last_post_at=newest.date)
-            )
         # Rows and cursor together, or a killed process loses a window
         # of history that no later page will ask for.
         await session.commit()

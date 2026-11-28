@@ -791,21 +791,6 @@ async def test_the_review_state_is_untouched(database: Database) -> None:
     assert reviewed is None
 
 
-async def test_the_newest_post_date_is_recorded(database: Database) -> None:
-    await seed(database, FIRST)
-    post = fresh(10, 5, views=1)
-    client = client_for({FIRST: [post]})
-
-    await watch(client, database, max_cycles=1)
-
-    async with database.session() as session:
-        last = await session.scalar(
-            text("SELECT last_post_at FROM tg_channels WHERE tg_id = :id"),
-            {"id": FIRST},
-        )
-    assert last == post.date
-
-
 async def test_a_capped_channel_is_still_polled_forward(
     database: Database,
 ) -> None:

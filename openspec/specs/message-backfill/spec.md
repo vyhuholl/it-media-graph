@@ -259,8 +259,8 @@ The system SHALL fetch extended information for an in-scope channel when what it
 #### Scenario: Channel identity comes from the response
 
 - **WHEN** extended information is fetched for a channel
-- **THEN** the channel's id, title and username are read from the response itself
-- **AND** no separate lookup is made to obtain them
+- **THEN** the channel's id is taken from the response itself
+- **AND** no separate request is made to obtain it
 
 #### Scenario: Linked chat is resolved
 
@@ -276,11 +276,6 @@ The system SHALL fetch extended information for an in-scope channel when what it
 - **WHEN** its parent channel's extended information is fetched
 - **THEN** the existing row is updated with `linked_to`
 - **AND** its discovery source and first-seen timestamp are unchanged
-
-#### Scenario: Newest post date is recorded
-
-- **WHEN** a channel's history is fetched
-- **THEN** the publication date of its newest message is stored on the channel
 
 #### Scenario: A channel's payload is stored without people
 
