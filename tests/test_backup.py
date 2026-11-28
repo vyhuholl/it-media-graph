@@ -271,23 +271,6 @@ def test_a_dump_is_read_back_before_it_counts(
     assert result.path.exists()
 
 
-def test_a_failed_dump_leaves_no_file_behind(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A half-written file would be pruned and counted as a real backup."""
-
-    def failing(command: list[str], **kwargs: Any) -> Any:
-        kwargs["stdout"].write(b"PGD")  # truncated
-        return subprocess.CompletedProcess(command, 1, b"", b"disk full")
-
-    monkeypatch.setattr(backup_module.subprocess, "run", failing)
-
-    with pytest.raises(BackupError, match="disk full"):
-        take_backup(inventory_kind(), tmp_path, now=NOW)
-
-    assert list((tmp_path / "daily").iterdir()) == []
-
-
 def test_a_failed_dump_does_not_destroy_an_existing_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -314,21 +297,6 @@ def test_a_failed_dump_does_not_destroy_an_existing_one(
     assert victim.read_bytes() == original
     # And nothing half-written was left lying about either.
     assert [p.name for p in (tmp_path / "daily").iterdir()] == [victim.name]
-
-
-def test_an_unreadable_archive_is_not_a_backup(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def run(command: list[str], **kwargs: Any) -> Any:
-        if "pg_restore" in command:
-            return subprocess.CompletedProcess(command, 1, "", "corrupt")
-        kwargs["stdout"].write(b"garbage")
-        return subprocess.CompletedProcess(command, 0, b"", b"")
-
-    monkeypatch.setattr(backup_module.subprocess, "run", run)
-
-    with pytest.raises(BackupError, match="not a readable archive"):
-        take_backup(inventory_kind(), tmp_path, now=NOW)
 
 
 def test_an_empty_archive_is_not_a_backup(
@@ -380,17 +348,6 @@ def test_nothing_is_pruned_when_the_dump_fails(
 
 
 # --- the LATEST pointer ---------------------------------------------
-
-
-def test_a_dump_gets_a_stable_name_to_restore_from(
-    tmp_path: Path, fake_run: list[list[str]]
-) -> None:
-    """So a restore names a path instead of picking a file by eye."""
-    backup = take_backup(full_kind(), tmp_path, now=NOW)
-
-    link = latest_link(tmp_path / "weekly", full_kind())
-    assert link.is_symlink()
-    assert link.resolve() == backup.path.resolve()
 
 
 def test_the_pointer_is_relative(

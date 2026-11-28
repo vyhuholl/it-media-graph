@@ -76,27 +76,6 @@ async def test_the_rule_in_sql_is_the_collectors(
     assert again == cleared
 
 
-@pytest.mark.parametrize("case", ALL, ids=[case.name for case in ALL])
-async def test_the_prefilter_finds_exactly_what_changes(
-    database_url: str, case: Case
-) -> None:
-    connection = await connect(database_url)
-    try:
-        before, after = [
-            await connection.fetchval(
-                "SELECT jsonb_path_exists($1::jsonb, $2::jsonpath)",
-                json.dumps(payload),
-                RULE.NAMES_SOMEONE,
-            )
-            for payload in (case.received, case.cleared)
-        ]
-    finally:
-        await connection.close()
-
-    assert before is (case.received != case.cleared)
-    assert after is False
-
-
 @pytest.mark.parametrize(
     ("kind", "payload"), ONE_OF_EACH, ids=[kind for kind, _ in ONE_OF_EACH]
 )

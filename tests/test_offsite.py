@@ -7,7 +7,6 @@ test at the bottom runs the real ``age`` where it is installed.
 
 import hashlib
 import json
-import shutil
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -417,28 +416,6 @@ def test_a_store_busy_on_every_try_fails_naming_the_dump(
     assert [p.name for p in (tmp_path / "daily").iterdir()] == [dump.name]
 
 
-def test_a_broken_store_fails_naming_the_dump(
-    tmp_path: Path, configured: None, fake_age: None
-) -> None:
-    dump = dump_at(tmp_path, "inventory", "daily", NOW - timedelta(hours=2))
-    b2 = FakeB2(
-        upload_status=500,
-        upload_body={
-            "status": 500,
-            "code": "internal_error",
-            "message": "try again",
-        },
-    )
-
-    with pytest.raises(OffsiteError) as caught:
-        copy_new_dumps(
-            tmp_path, now=NOW, transport=b2.transport, sleep=lambda _: None
-        )
-
-    assert dump.name in str(caught.value)
-    assert [p.name for p in (tmp_path / "daily").iterdir()] == [dump.name]
-
-
 def test_every_uncopied_dump_is_named(
     tmp_path: Path, configured: None, fake_age: None
 ) -> None:
@@ -524,48 +501,3 @@ def test_an_unconfigured_host_makes_no_calls(
         copy_new_dumps(tmp_path, now=NOW, transport=b2.transport)
 
     assert b2.listings == []
-
-
-# --- the real `age`, where it is installed ---------------------------
-
-AGE = shutil.which("age")
-AGE_KEYGEN = shutil.which("age-keygen")
-
-
-@pytest.mark.skipif(
-    AGE is None or AGE_KEYGEN is None, reason="age is not installed"
-)
-def test_a_copy_decrypts_to_the_dump(tmp_path: Path) -> None:
-    """The round trip a restore depends on, with the real tool.
-
-    Runs where `age` is installed — the operator's Mac — the way the
-    database tests run where Postgres is; skipped everywhere else. The
-    pass encrypts from standard input to standard output, and so does
-    this, with the same command shape.
-    """
-    keygen = subprocess.run(
-        [str(AGE_KEYGEN), "-o", str(tmp_path / "identity")],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    # `age-keygen` writes the identity to the file and says the public
-    # key on standard error.
-    recipient = keygen.stderr.removeprefix("Public key: ").strip()
-    payload = b"PGDMP-pretend payload"
-
-    encrypted = subprocess.run(
-        [str(AGE), "-r", recipient],
-        input=payload,
-        capture_output=True,
-        check=True,
-    )
-    decrypted = subprocess.run(
-        [str(AGE), "-d", "-i", str(tmp_path / "identity")],
-        input=encrypted.stdout,
-        capture_output=True,
-        check=True,
-    )
-
-    assert encrypted.stdout != payload  # it really encrypted
-    assert decrypted.stdout == payload

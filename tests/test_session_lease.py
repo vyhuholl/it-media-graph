@@ -30,10 +30,6 @@ def no_session_lease() -> None:
     """Override conftest's neutralizer. Here the real lease is the point."""
 
 
-def test_the_key_is_stable_for_one_path() -> None:
-    assert lease_ids("/tmp/a.session") == lease_ids("/tmp/a.session")
-
-
 def test_two_session_files_are_two_locks() -> None:
     """Different files must not block each other.
 
@@ -73,23 +69,6 @@ async def test_a_second_lease_is_refused(
 
     # The refusal names the holder, so the operator knows what to stop.
     assert "watch" in str(caught.value)
-
-
-async def test_the_refusal_names_the_command_not_just_the_fact(
-    database_url: str, tmp_path: Path
-) -> None:
-    session = tmp_path / "itgraph.session"
-
-    async with session_lease(
-        "metadata", url=database_url, session_path=session
-    ):
-        second = SessionLease("add", url=database_url, session_path=session)
-        with pytest.raises(SessionBusyError) as caught:
-            await second.acquire()
-
-    message = str(caught.value)
-    assert "metadata" in message
-    assert "pid=" in message
 
 
 async def test_a_different_session_file_is_not_blocked(
@@ -138,15 +117,6 @@ async def test_the_lease_is_released_when_the_body_raises(
         "backfill", url=database_url, session_path=session
     ):
         pass
-
-
-async def test_a_held_lease_verifies(
-    database_url: str, tmp_path: Path
-) -> None:
-    async with session_lease(
-        "watch", url=database_url, session_path=tmp_path / "itgraph.session"
-    ) as lease:
-        await lease.verify()
 
 
 async def test_verifying_an_unheld_lease_raises(

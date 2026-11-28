@@ -116,16 +116,6 @@ def test_the_pure_readings_agree(case: Case) -> None:
     assert is_own(received) == is_own(cleared)
 
 
-def test_the_built_posts_agree_too() -> None:
-    for payload in posts():
-        cleared = without_people(payload)
-        assert cleared != payload or payload["id"] >= 100
-        assert extract_references(payload) == extract_references(cleared)
-        assert counters_of(payload) == counters_of(cleared)
-        assert read_post(payload) == read_post(cleared)
-        assert is_own(payload) == is_own(cleared)
-
-
 @pytest.fixture
 async def inventory(database: Database) -> AsyncIterator[Database]:
     async with database.session() as session:

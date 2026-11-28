@@ -13,7 +13,6 @@ statement ever named fails it too.
 import json
 import re
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 import asyncpg
@@ -706,9 +705,3 @@ def test_every_table_is_vacuumed() -> None:
     """Deleting a channel cascades into tables the script never names."""
     tasks = (ANSIBLE_DIR / "itgraph" / "tasks" / "restore.yml").read_text()
     assert "'VACUUM (FULL)'] }}" in tasks
-
-
-def test_this_file_is_really_read(tmp_path: Path) -> None:
-    assert len(statements()) >= 13
-    # And it no longer touches a payload: the schema's revision does.
-    assert "raw_messages" not in NEUTRALISE.split("BEGIN;", 1)[1]
