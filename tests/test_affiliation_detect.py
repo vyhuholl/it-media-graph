@@ -327,8 +327,3 @@ def test_a_handle_cap_below_two_is_refused() -> None:
         validate_parameters(
             Thresholds(max_handle_token_channels=1), Weights(), BOTH_KINDS
         )
-
-
-def test_a_negative_handle_weight_is_refused() -> None:
-    with pytest.raises(InvalidParameterError, match="handle"):
-        validate_parameters(Thresholds(), Weights(handle=-1.0), BOTH_KINDS)

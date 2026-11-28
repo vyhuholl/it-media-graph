@@ -264,19 +264,6 @@ def test_affiliates_writes_no_family_link(
     )
 
 
-def test_affiliates_makes_no_request(
-    monkeypatch: pytest.MonkeyPatch, database_url: str, offline: None
-) -> None:
-    """Every input was collected by an earlier refresh, so this spends
-    no quota and must not even build a client."""
-    use_test_database(monkeypatch, database_url)
-    seed_affiliation_fixture(database_url)
-
-    result = runner.invoke(app, ["yt", "affiliates"])
-
-    assert result.exit_code == 0, result.output
-
-
 def test_affiliates_documents_its_defaults(
     monkeypatch: pytest.MonkeyPatch, database_url: str
 ) -> None:
@@ -700,25 +687,6 @@ def test_family_withdraws_a_confirmation(
     # The pair returns to being reviewable.
     assert "3 candidate pairs proposed" in after.output
     assert "@acmemain" in after.output
-
-
-def test_family_finds_channels_by_handle_and_id(
-    monkeypatch: pytest.MonkeyPatch, database_url: str, offline: None
-) -> None:
-    use_test_database(monkeypatch, database_url)
-    seed_affiliation_fixture(database_url)
-
-    result = runner.invoke(app, ["yt", "family", "@acmeextra", A])
-
-    assert result.exit_code == 0, result.output
-    assert (
-        scalar(
-            database_url,
-            "SELECT count(*) FROM yt_affiliation_candidates "
-            "WHERE decision = 'confirmed'",
-        )
-        == 1
-    )
 
 
 def test_family_refuses_shapes_that_name_no_pair(

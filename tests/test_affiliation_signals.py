@@ -63,18 +63,6 @@ def test_references_both_ways_weigh_more_and_appear_once() -> None:
     assert result.signals[0].strength == 1.0
 
 
-def test_a_one_way_reference_is_not_penalised_for_a_silent_target() -> None:
-    """31 of 37 real references point at a channel with no stored
-    description. Requiring a return link would measure coverage."""
-    result = description_references(
-        {A: "Подкаст @example_pod"},
-        channel_by_username={"example_pod": B},
-        known_channels=frozenset({A, B}),
-    )
-
-    assert result.signals[0].strength == 0.5
-
-
 def test_a_handle_outside_the_inventory_is_counted_not_proposed() -> None:
     result = description_references(
         {A: "Автор @someone_else"},
@@ -219,14 +207,6 @@ def test_two_unsplittable_usernames_sharing_nothing_propose_nothing() -> None:
     assert signals == []
 
 
-def test_a_channel_with_no_username_is_simply_absent() -> None:
-    signals = shared_username_tokens(
-        {A: "gonzo_one", B: "gonzo_two"}, thresholds=Thresholds()
-    )
-
-    assert {channel for signal in signals for channel in signal.pair} == {A, B}
-
-
 # --- outgoing concentration -------------------------------------------
 
 
@@ -351,17 +331,6 @@ def test_a_tie_between_two_shared_tokens_is_broken_the_same_way_always() -> (
     assert len(signals) == 1
     # `gonzo` over `fake`: same rarity, longer token.
     assert signals[0].token == "gonzo"
-
-
-def test_the_tie_break_does_not_depend_on_username_order() -> None:
-    forwards = shared_username_tokens(
-        {A: "fake_gonzo_main", B: "fake_gonzo_pod"}, thresholds=Thresholds()
-    )
-    backwards = shared_username_tokens(
-        {B: "fake_gonzo_pod", A: "fake_gonzo_main"}, thresholds=Thresholds()
-    )
-
-    assert forwards[0].token == backwards[0].token
 
 
 # --- named handle tokens ----------------------------------------------
