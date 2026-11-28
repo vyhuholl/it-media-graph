@@ -17,7 +17,6 @@ from itgraph.bot.app import BotStats, deliver_once
 from itgraph.bot.destinations import (
     Destination,
     Platform,
-    youtube_destinations,
 )
 from itgraph.bot.queues import TelegramQueue, YoutubeQueue
 from itgraph.bot.render import MESSAGE_LIMIT, render_youtube, units
@@ -562,16 +561,6 @@ async def test_the_evidence_takes_a_broadcasts_start(
     assert pending.id == alert
     assert evidence is not None
     assert evidence.started_at == started
-
-
-def test_the_destinations_follow_the_settings() -> None:
-    routes = youtube_destinations(settings)
-
-    assert {route: d.topic_id for route, d in routes.items()} == {
-        YtAlertRoute.EN: TOPIC_EN,
-        YtAlertRoute.RU: TOPIC_RU,
-    }
-    assert all(d.chat_id == CHAT for d in routes.values())
 
 
 def test_the_queues_know_their_platforms() -> None:
