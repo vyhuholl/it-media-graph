@@ -22,10 +22,9 @@ from itgraph.db.alerts import (
     mark_failed,
     outstanding_alerts,
     raise_cascades,
-    raised_bands,
     settle_folds,
 )
-from itgraph.db.models import AlertDelivery, AlertKind
+from itgraph.db.models import AlertDelivery
 from itgraph.db.session import Database
 
 NOW = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
@@ -581,23 +580,6 @@ async def test_an_alert_that_keeps_failing_goes_behind_fresh_ones(
         (first,) = await claim_undelivered(session, limit=1)
 
     assert first.id != older.id
-
-
-async def test_raised_bands_reports_what_exists(database: Database) -> None:
-    await seed(database, reposters=2)
-    async with database.session() as session:
-        await raise_cascades(
-            session, [Cascade(post_key=(PUBLISHER, POST), band=2, value=2)]
-        )
-
-    async with database.session() as session:
-        raised = await raised_bands(
-            session,
-            kind=AlertKind.REPOST_CASCADE,
-            since=NOW - timedelta(days=1),
-        )
-
-    assert raised == {(PUBLISHER, POST): {2}}
 
 
 def test_a_digest_is_due_once_a_day() -> None:

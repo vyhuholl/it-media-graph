@@ -48,7 +48,6 @@ __all__ = [
     "outstanding_alerts",
     "raise_cascades",
     "raise_spikes",
-    "raised_bands",
     "raised_spikes",
     "settle_folds",
 ]
@@ -86,28 +85,6 @@ def _pending(alert: Alert) -> PendingAlert:
         observed=alert.observed,
         expected=alert.expected,
     )
-
-
-async def raised_bands(
-    session: AsyncSession, *, kind: AlertKind, since: datetime
-) -> dict[tuple[int, int], set[int]]:
-    """Which bands have already been raised for each recent post.
-
-    An optimisation handed to the detection, never a correctness
-    mechanism — the unique constraint is what actually prevents a second
-    alert. Bounded by ``since`` for the same reason the detection window
-    is bounded: a query that scanned every alert ever raised would grow
-    without limit to save inserts that Postgres discards in microseconds.
-    """
-    rows = await session.execute(
-        select(Alert.channel_id, Alert.msg_id, Alert.band).where(
-            Alert.kind == kind, Alert.raised_at >= since
-        )
-    )
-    raised: dict[tuple[int, int], set[int]] = {}
-    for channel_id, msg_id, band in rows:
-        raised.setdefault((channel_id, msg_id), set()).add(band)
-    return raised
 
 
 async def raise_cascades(

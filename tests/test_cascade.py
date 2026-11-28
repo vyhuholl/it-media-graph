@@ -126,31 +126,19 @@ def test_a_post_below_every_band_crosses_nothing() -> None:
     assert found == []
 
 
-def test_an_already_raised_band_is_not_offered_again() -> None:
-    """An optimisation, not the correctness mechanism.
-
-    The unique constraint is what actually prevents a second alert; this
-    only avoids asking the database to reject rows it has rejected before.
-    """
-    found = crossings(
-        [repost(10), repost(20)],
-        bands=(2, 3),
-        now=PUBLISHED + WINDOW,
-        window=WINDOW,
-        already_raised={POST: {2}},
-    )
-    assert found == []
-
-
-def test_a_higher_band_is_still_offered_after_the_lower_one() -> None:
+def test_every_band_a_post_reaches_is_crossed() -> None:
+    """No memory of what was raised: a re-run of an active cascade reads
+    as crossings without new alerts, the constraint discards its rows."""
     found = crossings(
         [repost(10), repost(20), repost(30)],
         bands=(2, 3),
         now=PUBLISHED + WINDOW,
         window=WINDOW,
-        already_raised={POST: {2}},
     )
-    assert found == [Cascade(post_key=POST, band=3, value=3)]
+    assert found == [
+        Cascade(post_key=POST, band=2, value=3),
+        Cascade(post_key=POST, band=3, value=3),
+    ]
 
 
 def test_the_value_is_what_was_measured_not_the_band() -> None:

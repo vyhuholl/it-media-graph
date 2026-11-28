@@ -23,9 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from itgraph.alerts.cascade import RepostEdge, crossings
 from itgraph.config import settings
 from itgraph.db.affiliation import family_keys, family_of
-from itgraph.db.alerts import raise_cascades, raised_bands
+from itgraph.db.alerts import raise_cascades
 from itgraph.db.models import (
-    AlertKind,
     Channel,
     ChannelStatus,
     Edge,
@@ -256,17 +255,8 @@ async def run_cascades(
     async with database.session() as session:
         edges, newest = await _load(session, since=since)
         derived, collected = await _pipeline_freshness(session)
-        seen = await raised_bands(
-            session, kind=AlertKind.REPOST_CASCADE, since=since
-        )
 
-    found = crossings(
-        edges,
-        bands=tiers,
-        now=moment,
-        window=span,
-        already_raised=seen,
-    )
+    found = crossings(edges, bands=tiers, now=moment, window=span)
 
     async with database.session() as session:
         written = await raise_cascades(session, found)

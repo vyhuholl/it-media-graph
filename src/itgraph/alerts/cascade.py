@@ -29,7 +29,7 @@ bands stop at three: a fourth would be a line in a config file that
 never fires and misleads whoever reads it next.
 """
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -136,34 +136,31 @@ def crossings(
     bands: Sequence[int],
     now: datetime,
     window: timedelta,
-    already_raised: Mapping[tuple[int, int], set[int]] | None = None,
 ) -> list[Cascade]:
-    """Every (post, band) pair that has been reached and not yet raised.
+    """Every (post, band) pair that has been reached.
 
     Returns one entry per band a post satisfies, not one per post. A post
     that reaches four families crosses both configured bands and is
     entitled to both alerts — the second is what tells the operator it is
     still going, and skipping straight to the highest would lose that.
 
-    ``already_raised`` is an optimisation and never a correctness
-    mechanism: the unique constraint on ``tg_alerts`` is what actually
-    prevents a second alert, and this only avoids asking the database to
-    reject rows it has rejected before. A caller that omits it gets the
-    same alerts and a few more discarded inserts.
+    What has been raised is the unique constraint on ``tg_alerts``'s
+    business, not this function's: a re-run's crossings are its rows
+    discarded by that constraint, and the summary's ``crossed`` says so —
+    an active cascade that has already raised reads as crossings without
+    new alerts, which a silent pass would not.
 
     Sorted by post and band so a run's output is stable, which is what
     makes its report readable and its tests writable without sorting at
     every assertion.
     """
-    seen = already_raised or {}
     carried = family_counts(edges, now=now, window=window)
 
     found: list[Cascade] = []
     for post_key, families in carried.items():
         value = len(families)
-        raised: frozenset[int] | set[int] = seen.get(post_key, frozenset())
         for band in bands:
-            if value >= band and band not in raised:
+            if value >= band:
                 found.append(
                     Cascade(post_key=post_key, band=band, value=value)
                 )
