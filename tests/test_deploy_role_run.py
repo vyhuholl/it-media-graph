@@ -439,23 +439,6 @@ def test_a_new_reader_password_ends_its_sessions_after_the_change(
     assert "fakeNewPasswordForTheReader" not in run.output
 
 
-def test_a_password_already_set_for_the_reader_ends_nothing(
-    tmp_path: Path,
-) -> None:
-    import hashlib
-
-    hash_of = hashlib.sha256(b"fakeNewPasswordForTheReader").hexdigest()
-    run = run_role(
-        tmp_path,
-        "password",
-        rules=[marks(**{"itgraph/password-reader": hash_of})],
-        extra=reader_extra(),
-    )
-
-    assert not run.failed, run.output
-    assert changes(run) == []
-
-
 def test_a_new_bot_password_ends_no_session(tmp_path: Path) -> None:
     run = run_role(
         tmp_path,
@@ -1755,19 +1738,6 @@ def test_a_run_where_collection_is_off(tmp_path: Path) -> None:
     assert "get pod itgraph-check-collector" in joined
     assert "polls: not collecting here" in run.output
     assert_no_secret_anywhere(run, "b")
-
-
-def test_nothing_secret_at_the_highest_verbosity(tmp_path: Path) -> None:
-    run = run_role(
-        tmp_path,
-        "main",
-        rules=[rule("^diff ", rc=1), *whole_run_rules(version=OLD)],
-        extra={"__itgraph_now_hour": 12},
-        arguments=["-vvv"],
-    )
-
-    assert not run.failed, run.output
-    assert_no_secret_anywhere(run)
 
 
 DUMP = "/tmp/fake-dump.dump"

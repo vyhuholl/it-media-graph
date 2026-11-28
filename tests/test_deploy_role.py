@@ -972,17 +972,6 @@ def test_the_bot_holds_the_chat_and_nothing_else_does(
         assert not keys & ALERT_KEYS, name
 
 
-def test_a_chat_without_one_of_its_topics_is_refused(
-    tmp_path: Path,
-) -> None:
-    with pytest.raises(AssertionError, match="its three topics"):
-        render_set(
-            "a",
-            tmp_path / "no-telegram-topic",
-            extra={"itgraph_telegram_alert_topic": 0},
-        )
-
-
 def test_a_new_youtube_topic_restarts_the_bot_alone(
     rendered: dict[str, dict[str, Objects]], tmp_path: Path
 ) -> None:

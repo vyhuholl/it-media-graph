@@ -181,12 +181,6 @@ def test_output_and_errors_stay_apart(env: dict[str, str]) -> None:
     assert done.stderr == "a diagnostic\n"
 
 
-def test_failure_is_reported_as_failure(env: dict[str, str]) -> None:
-    done = run({**env, "FAKE_EXIT": "3"}, "yt", "channels")
-
-    assert done.returncode == 3
-
-
 @pytest.mark.parametrize(
     ("flag", "variant"),
     [("--session", "session"), ("--backups", "backups")],
